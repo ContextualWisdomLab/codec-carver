@@ -615,6 +615,7 @@ def convert_file(
     silence_noise: str = DEFAULT_SILENCE_NOISE,
     silence_min_duration_seconds: float = DEFAULT_SILENCE_MIN_DURATION_SECONDS,
     protected_sources: Iterable[Path] = (),
+    resolved_protected_sources: frozenset[Path] | None = None,
 ) -> list[ConversionResult]:
     """Convert one file and return generated segment results without deleting the source."""
 
@@ -642,6 +643,11 @@ def convert_file(
         max_segment_duration_seconds=max_segment_duration_seconds,
         silence_intervals=silence_intervals,
     )
+
+    resolved_sources = resolved_protected_sources
+    if resolved_sources is None:
+        resolved_sources = frozenset(Path(item).resolve() for item in protected_sources)
+
     return [
         _convert_segment(
             source,
@@ -657,7 +663,7 @@ def convert_file(
             ffmpeg_threads=ffmpeg_threads,
             overwrite=overwrite,
             max_segment_duration_seconds=max_segment_duration_seconds,
-            protected_sources=protected_sources,
+            protected_sources=resolved_sources,
         )
         for segment in segments
     ]
@@ -687,7 +693,7 @@ def _convert_segment(
     ffmpeg_threads: int | None,
     overwrite: bool,
     max_segment_duration_seconds: float,
-    protected_sources: Iterable[Path] = (),
+    protected_sources: frozenset[Path] = frozenset(),
 ) -> ConversionResult:
     resolved_protected_sources = _resolved_protected_sources(source, protected_sources)
     existing_suffixes = (".flac", ".opus")
@@ -847,7 +853,7 @@ def _remove_invalid_legacy_outputs(
     target_bytes: int,
     ffprobe_path: str,
     max_segment_duration_seconds: float,
-    protected_sources: Iterable[Path],
+    protected_sources: frozenset[Path],
 ) -> None:
     """Remove invalid stem-only outputs created by earlier tool versions."""
 
@@ -963,6 +969,8 @@ def main(argv: list[str] | None = None) -> int:
     workers = choose_worker_count(args.workers)
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
 
+    resolved_candidates = frozenset(Path(item).resolve() for item in candidates)
+
     def process_candidate(candidate: Path) -> list[ConversionResult]:
         try:
             return convert_file(
@@ -981,6 +989,7 @@ def main(argv: list[str] | None = None) -> int:
                 silence_noise=args.silence_noise,
                 silence_min_duration_seconds=args.silence_min_duration_seconds,
                 protected_sources=candidates,
+                resolved_protected_sources=resolved_candidates,
             )
         except Exception as exc:  # noqa: BLE001 - batch processing records per-file failures.
             return [
@@ -1034,7 +1043,7 @@ def _discard_invalid_generated_output(
     *,
     status: str,
     message: str,
-    protected_sources: Iterable[Path] = (),
+    protected_sources: frozenset[Path] = frozenset(),
 ) -> ConversionResult:
     _remove_generated_output(source, output_path, protected_sources=protected_sources)
     invalid_fields = dict(common_fields)
@@ -1046,22 +1055,22 @@ def _remove_generated_output(
     source: Path,
     output_path: Path,
     *,
-    protected_sources: Iterable[Path] = (),
+    protected_sources: frozenset[Path] = frozenset(),
 ) -> None:
     _ensure_not_source_path(source, output_path)
     _ensure_not_protected_source_path(protected_sources, output_path)
     output_path.unlink(missing_ok=True)
 
 
-def _resolved_protected_sources(source: Path, protected_sources: Iterable[Path]) -> tuple[Path, ...]:
+def _resolved_protected_sources(source: Path, protected_sources: frozenset[Path]) -> frozenset[Path]:
     protected = {source.resolve()}
-    protected.update(Path(item).resolve() for item in protected_sources)
-    return tuple(protected)
+    protected.update(protected_sources)
+    return frozenset(protected)
 
 
-def _ensure_not_protected_source_path(protected_sources: Iterable[Path], output: Path) -> None:
+def _ensure_not_protected_source_path(protected_sources: frozenset[Path], output: Path) -> None:
     resolved_output = output.resolve()
-    if any(resolved_output == Path(source).resolve() for source in protected_sources):
+    if resolved_output in protected_sources:
         raise MediaShrinkerError(f"Refusing to use protected source path as generated output: {output}")
 
 
@@ -1163,7 +1172,7 @@ def _execute_plan(
     *,
     ffmpeg_path: str,
     overwrite: bool,
-    protected_sources: Iterable[Path] = (),
+    protected_sources: frozenset[Path] = frozenset(),
 ) -> Path:
     _ensure_not_protected_source_path(protected_sources, final_output)
     _ensure_not_source_path(source, final_output)
