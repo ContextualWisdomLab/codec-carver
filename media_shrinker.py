@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -419,6 +420,9 @@ def build_silencedetect_command(
     silence_min_duration_seconds: float = DEFAULT_SILENCE_MIN_DURATION_SECONDS,
 ) -> list[str]:
     """Build an ffmpeg command that detects long silence intervals."""
+
+    if not re.match(r"^[+-]?[0-9]+(\.[0-9]+)?(?:dB)?$", silence_noise):
+        raise MediaShrinkerError(f"Invalid silence_noise value: {silence_noise}")
 
     return [
         ffmpeg_path,
@@ -1168,22 +1172,31 @@ def _execute_plan(
     _ensure_not_protected_source_path(protected_sources, final_output)
     _ensure_not_source_path(source, final_output)
     final_output.parent.mkdir(parents=True, exist_ok=True)
-    temp_output = final_output.with_name(f".{final_output.name}.tmp{final_output.suffix}")
+
+    fd, temp_output_str = tempfile.mkstemp(
+        suffix=final_output.suffix,
+        prefix=f".{final_output.stem}.",
+        dir=final_output.parent
+    )
+    os.close(fd)
+    temp_output = Path(temp_output_str)
+
     _ensure_not_protected_source_path(protected_sources, temp_output)
     _ensure_not_source_path(source, temp_output)
-    temp_output.unlink(missing_ok=True)
 
-    command = plan.command(ffmpeg_path=ffmpeg_path, input_path=source, output_path=temp_output, overwrite=True)
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
-    if completed.returncode != 0:
+    try:
+        command = plan.command(ffmpeg_path=ffmpeg_path, input_path=source, output_path=temp_output, overwrite=True)
+        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        if completed.returncode != 0:
+            raise MediaShrinkerError(f"ffmpeg failed for {source}: {completed.stderr.strip()}")
+
+        if final_output.exists() and not overwrite:
+            raise FileExistsError(f"Output already exists: {final_output}")
+
+        temp_output.replace(final_output)
+    finally:
         temp_output.unlink(missing_ok=True)
-        raise MediaShrinkerError(f"ffmpeg failed for {source}: {completed.stderr.strip()}")
 
-    if final_output.exists() and not overwrite:
-        temp_output.unlink(missing_ok=True)
-        raise FileExistsError(f"Output already exists: {final_output}")
-
-    temp_output.replace(final_output)
     return final_output
 
 
