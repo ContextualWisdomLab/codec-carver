@@ -201,12 +201,15 @@ def find_candidates(
         relative_parts = path.relative_to(root).parts
         if any(part.casefold().startswith(prefix) for part in relative_parts[:-1] for prefix in excluded_prefixes):
             continue
-        resolved_path = path.resolve()
-        if any(resolved_path == excluded_path or resolved_path.is_relative_to(excluded_path) for excluded_path in excluded):
-            continue
+        # Cheap checks: exclude non-files and unsupported extensions early
         if path.is_symlink() or not path.is_file():
             continue
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
+
+        # Expensive check: resolve path to check against excluded directories
+        resolved_path = path.resolve()
+        if any(resolved_path == excluded_path or resolved_path.is_relative_to(excluded_path) for excluded_path in excluded):
             continue
         try:
             size = path.stat().st_size
