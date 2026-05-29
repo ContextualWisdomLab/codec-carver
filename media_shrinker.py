@@ -198,6 +198,9 @@ def find_candidates(
     excluded_prefixes = tuple(prefix.casefold() for prefix in exclude_dir_prefixes)
     candidates: list[Path] = []
     for path in root.rglob("*"):
+        # Check suffix first to avoid expensive stat calls and path manipulations on irrelevant files.
+        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
         relative_parts = path.relative_to(root).parts
         if any(part.casefold().startswith(prefix) for part in relative_parts[:-1] for prefix in excluded_prefixes):
             continue
@@ -205,8 +208,6 @@ def find_candidates(
         if any(resolved_path == excluded_path or resolved_path.is_relative_to(excluded_path) for excluded_path in excluded):
             continue
         if path.is_symlink() or not path.is_file():
-            continue
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
         try:
             size = path.stat().st_size
