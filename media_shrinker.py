@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -584,7 +585,7 @@ def preserve_file_attributes(source: Path, dest: Path, *, setfile_path: str | No
     source_stat = source.stat()
 
     try:
-        shutil.copymode(source, dest)
+        os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o777)
     except OSError:
         pass
 
