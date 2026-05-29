@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -18,6 +19,7 @@ from media_shrinker import (
     find_existing_valid_output,
     find_candidates,
     parse_silencedetect_intervals,
+    write_report,
     preserve_file_attributes,
     _execute_plan,
 )
@@ -690,6 +692,48 @@ class ParallelismTests(unittest.TestCase):
 
 
 class ReportingTests(unittest.TestCase):
+
+    def test_write_report(self) -> None:
+        result1 = media_shrinker.ConversionResult(
+            source_path=Path("/scan/source1.wav"),
+            output_path=Path("/scan/source1.wav.flac"),
+            status="converted",
+            original_size_bytes=100,
+            output_size_bytes=50,
+            strategy="flac-lossless",
+        )
+        result2 = media_shrinker.ConversionResult(
+            source_path=Path("/scan/source2.wav"),
+            output_path=None,
+            status="skipped",
+            original_size_bytes=200,
+            strategy=None,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "report.json"
+            write_report([result1, result2], report_path)
+
+            self.assertTrue(report_path.exists())
+
+            with open(report_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+
+            self.assertEqual(len(payload), 2)
+            self.assertEqual(payload[0]["source_path"], "/scan/source1.wav")
+            self.assertEqual(payload[0]["output_path"], "/scan/source1.wav.flac")
+            self.assertEqual(payload[0]["status"], "converted")
+            self.assertEqual(payload[0]["strategy"], "flac-lossless")
+            self.assertEqual(payload[0]["original_size_bytes"], 100)
+            self.assertEqual(payload[0]["output_size_bytes"], 50)
+
+            self.assertEqual(payload[1]["source_path"], "/scan/source2.wav")
+            self.assertIsNone(payload[1]["output_path"])
+            self.assertEqual(payload[1]["status"], "skipped")
+            self.assertIsNone(payload[1]["strategy"])
+            self.assertEqual(payload[1]["original_size_bytes"], 200)
+            self.assertIsNone(payload[1]["output_size_bytes"])
+
     def test_format_result_handles_output_path_outside_scan_root(self) -> None:
         result = media_shrinker.ConversionResult(
             source_path=Path("/scan/source.wav"),
