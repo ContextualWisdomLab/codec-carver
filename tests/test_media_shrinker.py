@@ -20,6 +20,7 @@ from media_shrinker import (
     parse_silencedetect_intervals,
     preserve_file_attributes,
     _execute_plan,
+    _first_float,
 )
 
 
@@ -705,6 +706,21 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("source.wav", line)
         self.assertIn("/external-output/source.wav.flac", line)
 
+
+class FirstFloatTests(unittest.TestCase):
+    def test_first_float_returns_first_valid_number(self) -> None:
+        self.assertEqual(_first_float(1.5, "2.0"), 1.5)
+        self.assertEqual(_first_float(None, 2.0, 3.0), 2.0)
+        self.assertEqual(_first_float("N/A", "1.1"), 1.1)
+
+    def test_first_float_ignores_type_error_and_value_error(self) -> None:
+        self.assertEqual(_first_float({}, "not-a-float", 3.14), 3.14)
+        self.assertEqual(_first_float([], None, "bad", 42.0), 42.0)
+
+    def test_first_float_returns_zero_on_all_failures(self) -> None:
+        self.assertEqual(_first_float(), 0.0)
+        self.assertEqual(_first_float(None, "N/A"), 0.0)
+        self.assertEqual(_first_float({}, "bad"), 0.0)
 
 if __name__ == "__main__":
     unittest.main()
