@@ -20,6 +20,7 @@ from media_shrinker import (
     parse_silencedetect_intervals,
     preserve_file_attributes,
     _execute_plan,
+    _first_int,
 )
 
 
@@ -705,6 +706,17 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("source.wav", line)
         self.assertIn("/external-output/source.wav.flac", line)
 
+
+class FirstIntTests(unittest.TestCase):
+    def test_first_int_handles_uncastable_types(self) -> None:
+        self.assertIsNone(_first_int("not a number"))  # ValueError
+        self.assertIsNone(_first_int([1, 2]))  # TypeError
+        self.assertIsNone(_first_int({"a": 1}))  # TypeError
+
+        self.assertEqual(_first_int("not a number", "10", 20), 10)
+        self.assertEqual(_first_int([1], 20), 20)
+        self.assertEqual(_first_int(None, "N/A", "1.5"), 1)
+        self.assertIsNone(_first_int(None, "N/A"))
 
 if __name__ == "__main__":
     unittest.main()
