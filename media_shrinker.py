@@ -194,30 +194,49 @@ def find_candidates(
     excluded = tuple(Path(item).resolve() for item in exclude_paths)
     excluded_prefixes = tuple(prefix.casefold() for prefix in exclude_dir_prefixes)
     candidates: list[tuple[Path, int]] = []
-    for path in root.rglob("*"):
-        # Check suffix first to avoid expensive stat calls and path manipulations on irrelevant files.
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            continue
-        relative_parts = path.relative_to(root).parts
-        if any(part.casefold().startswith(prefix) for part in relative_parts[:-1] for prefix in excluded_prefixes):
-            continue
-        # Cheap checks: exclude non-files and unsupported extensions early
-        if path.is_symlink() or not path.is_file():
-            continue
-        resolved_path = path.resolve()
-        if any(resolved_path == excluded_path or resolved_path.is_relative_to(excluded_path) for excluded_path in excluded):
-            continue
 
-        # Expensive check: resolve path to check against excluded directories
-        resolved_path = path.resolve()
-        if any(resolved_path == excluded_path or resolved_path.is_relative_to(excluded_path) for excluded_path in excluded):
-            continue
-        try:
-            size = path.stat().st_size
-        except OSError:
-            continue
-        if include_under_limit or size > size_limit_bytes:
-            candidates.append((path, size))
+    for dirpath, dirnames, filenames in os.walk(root):
+        current_dir = Path(dirpath)
+
+        # Prune excluded directories
+        valid_dirs = []
+        for d in dirnames:
+            if any(d.casefold().startswith(prefix) for prefix in excluded_prefixes):
+                continue
+            d_path = current_dir / d
+            try:
+                resolved_d = d_path.resolve()
+                if any(resolved_d == excluded_path or resolved_d.is_relative_to(excluded_path) for excluded_path in excluded):
+                    continue
+            except OSError:
+                pass
+            valid_dirs.append(d)
+        dirnames[:] = valid_dirs
+
+        for f in filenames:
+            file_path = current_dir / f
+
+            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                continue
+            if file_path.is_symlink() or not file_path.is_file():
+                continue
+
+            try:
+                resolved_file = file_path.resolve()
+                if any(resolved_file == excluded_path or resolved_file.is_relative_to(excluded_path) for excluded_path in excluded):
+                    continue
+            except OSError:
+                pass
+
+            try:
+                size = file_path.stat().st_size
+            except OSError:
+                continue
+
+            if include_under_limit or size > size_limit_bytes:
+                candidates.append((file_path, size))
+
+    return sorted(candidates, key=lambda item: item[0].relative_to(root).as_posix().casefold())
 
     return sorted(candidates, key=lambda item: item[0].relative_to(root).as_posix().casefold())
 
