@@ -44,7 +44,7 @@ class FindCandidateTests(unittest.TestCase):
             unsupported.write_bytes(b"0" * 99)
 
             candidates = [
-                p.relative_to(root)
+                p[0].relative_to(root)
                 for p in find_candidates(root, size_limit_bytes=10, include_under_limit=False)
             ]
 
@@ -56,7 +56,7 @@ class FindCandidateTests(unittest.TestCase):
             small_mp3 = root / "small.mp3"
             small_mp3.write_bytes(b"0" * 4)
 
-            candidates = [p.relative_to(root) for p in find_candidates(root, size_limit_bytes=10)]
+            candidates = [p[0].relative_to(root) for p in find_candidates(root, size_limit_bytes=10)]
 
             self.assertEqual(candidates, [Path("small.mp3")])
 
@@ -70,7 +70,7 @@ class FindCandidateTests(unittest.TestCase):
             output.write_bytes(b"0" * 4)
 
             candidates = [
-                p.relative_to(root)
+                p[0].relative_to(root)
                 for p in find_candidates(
                     root,
                     size_limit_bytes=10,
@@ -91,7 +91,7 @@ class FindCandidateTests(unittest.TestCase):
             split.write_bytes(b"0" * 4)
 
             candidates = [
-                p.relative_to(root)
+                p[0].relative_to(root)
                 for p in find_candidates(
                     root,
                     include_under_limit=True,
