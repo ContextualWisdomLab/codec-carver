@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -588,7 +589,7 @@ def preserve_file_attributes(source: Path, dest: Path, *, setfile_path: str | No
     source_stat = source.stat()
 
     try:
-        shutil.copymode(source, dest)
+        os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o777)
     except OSError:
         pass
 
@@ -622,7 +623,6 @@ def convert_file(
     resolved_protected_sources: frozenset[Path] | None = None,
     original_size: int | None = None,
 ) -> list[ConversionResult]:
-    """Convert one file and return generated segment results without deleting the source."""
     """Convert one file and return generated segment results without deleting the source."""
 
     source = Path(source)
