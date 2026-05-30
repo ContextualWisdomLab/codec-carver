@@ -619,6 +619,7 @@ def convert_file(
     original_size: int | None = None,
 ) -> list[ConversionResult]:
     """Convert one file and return generated segment results without deleting the source."""
+    """Convert one file and return generated segment results without deleting the source."""
 
     source = Path(source)
     root = Path(root)
@@ -961,8 +962,8 @@ def main(argv: list[str] | None = None) -> int:
         exclude_dir_prefixes=args.exclude_dir_prefix,
     )
     if not args.execute:
-        for candidate in candidates:
-            print(f"DRY-RUN\t{candidate.stat().st_size}\t{candidate.relative_to(root)}")
+        for candidate, size in candidates:
+            print(f"DRY-RUN\t{size}\t{candidate.relative_to(root)}")
         print(f"TOTAL_SELECTED={len(candidates)}")
         return 0
 
@@ -971,6 +972,7 @@ def main(argv: list[str] | None = None) -> int:
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
 
     resolved_candidates = frozenset(Path(item[0]).resolve() for item in candidates)
+    protected_sources = [c[0] for c in candidates]
 
     def process_candidate(candidate_tuple: tuple[Path, int]) -> list[ConversionResult]:
         candidate, size = candidate_tuple
@@ -990,7 +992,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_segment_duration_seconds=args.max_duration_seconds,
                 silence_noise=args.silence_noise,
                 silence_min_duration_seconds=args.silence_min_duration_seconds,
-                protected_sources=[c[0] for c in candidates],
+                protected_sources=protected_sources,
                 resolved_protected_sources=resolved_candidates,
                 original_size=size,
             )
@@ -1023,10 +1025,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _is_lossless_probe(probe: MediaProbe) -> bool:
+    """Return True if the probed codec is considered lossless."""
     return (probe.audio_codec or "").lower() in LOSSLESS_AUDIO_CODECS
 
 
 def _probe_output_duration(output_path: Path, *, ffprobe_path: str) -> float:
+    """Return the duration of a generated output file."""
     return probe_media(output_path, ffprobe_path=ffprobe_path).duration_seconds
 
 
@@ -1036,6 +1040,7 @@ def _duration_matches_expected(
     *,
     tolerance_seconds: float = DURATION_TOLERANCE_SECONDS,
 ) -> bool:
+    """Return True if actual duration is close enough to expected duration."""
     return abs(actual_seconds - expected_seconds) <= tolerance_seconds
 
 
@@ -1048,6 +1053,7 @@ def _discard_invalid_generated_output(
     message: str,
     protected_sources: frozenset[Path] = frozenset(),
 ) -> ConversionResult:
+    """Delete an invalid output and return a failure ConversionResult."""
     _remove_generated_output(source, output_path, protected_sources=protected_sources)
     invalid_fields = dict(common_fields)
     invalid_fields["output_path"] = None
@@ -1060,18 +1066,21 @@ def _remove_generated_output(
     *,
     protected_sources: frozenset[Path] = frozenset(),
 ) -> None:
+    """Safely remove a generated file without touching protected sources."""
     _ensure_not_source_path(source, output_path)
     _ensure_not_protected_source_path(protected_sources, output_path)
     output_path.unlink(missing_ok=True)
 
 
-def _resolved_protected_sources(source: Path, protected_sources: frozenset[Path]) -> frozenset[Path]:
+def _resolved_protected_sources(source: Path, protected_sources: Iterable[Path]) -> frozenset[Path]:
+    """Return a set of resolved paths that must not be overwritten or deleted."""
     protected = {source.resolve()}
-    protected.update(protected_sources)
+    protected.update(p.resolve() for p in protected_sources)
     return frozenset(protected)
 
 
 def _ensure_not_protected_source_path(protected_sources: frozenset[Path], output: Path) -> None:
+    """Raise MediaShrinkerError if output would overwrite a protected source."""
     resolved_output = output.resolve()
     if resolved_output in protected_sources:
         raise MediaShrinkerError(f"Refusing to use protected source path as generated output: {output}")
@@ -1082,6 +1091,7 @@ def _choose_silence_split_point(
     window_end: float,
     silence_intervals: Iterable[SilenceInterval],
 ) -> float | None:
+    """Return the latest safe split point inside a silence interval."""
     latest_safe_end = window_end - HARD_SPLIT_EPSILON_SECONDS
     candidates = [
         min(interval.end_seconds, latest_safe_end)
@@ -1094,23 +1104,27 @@ def _choose_silence_split_point(
 
 
 def _segment_source_path(source_path: Path, segment: MediaSegment | None) -> Path:
+    """Return the output filename for a specific segment part."""
     if segment is None or segment.total_segments <= 1:
         return source_path
     return source_path.with_name(f"{source_path.name}.part{segment.index:04d}")
 
 
 def _segment_input_args(segment: MediaSegment | None) -> list[str]:
+    """Return ffmpeg -ss and -t arguments for a segment if applicable."""
     if segment is None or segment.total_segments <= 1:
         return []
     return ["-ss", _format_seconds(segment.start_seconds), "-t", _format_seconds(segment.duration_seconds)]
 
 
 def _format_seconds(value: float) -> str:
+    """Format a second value for ffmpeg arguments with three decimals."""
     truncated = int(value * 1000) / 1000
     return f"{truncated:.3f}".rstrip("0").rstrip(".") or "0"
 
 
 def _planned_output_path(source_path: Path, output_dir: Path, suffix: str) -> Path:
+    """Return the canonical output path for a source and suffix."""
     relative_source = Path(source_path.name) if source_path.is_absolute() else source_path
     return output_dir / relative_source.with_name(f"{relative_source.name}{suffix}")
 
@@ -1124,6 +1138,7 @@ def _with_ffmpeg_threads(args: list[str], ffmpeg_threads: int | None) -> list[st
 
 
 def _parse_probe_payload(payload: dict[str, Any], source_path: Path) -> MediaProbe:
+    """Parse raw ffprobe JSON payload into a MediaProbe object."""
     streams = payload.get("streams", [])
     audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
     if audio_stream is None:
@@ -1147,6 +1162,7 @@ def _parse_probe_payload(payload: dict[str, Any], source_path: Path) -> MediaPro
 
 
 def _first_float(*values: Any) -> float:
+    """Return the first non-null float from a list of values."""
     for value in values:
         if value is None or value == "N/A":
             continue
@@ -1158,6 +1174,7 @@ def _first_float(*values: Any) -> float:
 
 
 def _first_int(*values: Any) -> int | None:
+    """Return the first non-null int from a list of values."""
     for value in values:
         if value is None or value == "N/A":
             continue
@@ -1186,7 +1203,12 @@ def _execute_plan(
     temp_output.unlink(missing_ok=True)
 
     command = plan.command(ffmpeg_path=ffmpeg_path, input_path=source, output_path=temp_output, overwrite=True)
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    try:
+        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        temp_output.unlink(missing_ok=True)
+        raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
+
     if completed.returncode != 0:
         temp_output.unlink(missing_ok=True)
         raise MediaShrinkerError(f"ffmpeg failed for {source}: {completed.stderr.strip()}")
@@ -1207,6 +1229,7 @@ def _ensure_not_source_path(source: Path, output: Path) -> None:
 
 
 def _resolve_collision(path: Path, *, overwrite: bool) -> Path:
+    """Return path or a numbered variant if path already exists."""
     if overwrite or not path.exists():
         return path
     for index in range(1, 10_000):
@@ -1217,6 +1240,7 @@ def _resolve_collision(path: Path, *, overwrite: bool) -> Path:
 
 
 def _copy_extended_attributes(source: Path, dest: Path) -> None:
+    """Copy extended attributes from source to dest if supported by OS."""
     if not all(hasattr(os, attr) for attr in ("listxattr", "getxattr", "setxattr")):
         return
 
@@ -1234,6 +1258,7 @@ def _copy_extended_attributes(source: Path, dest: Path) -> None:
 
 
 def _copy_macos_creation_time(source_stat: os.stat_result, dest: Path, setfile_path: str) -> None:
+    """Copy macOS creation time using SetFile if available."""
     birthtime = getattr(source_stat, "st_birthtime", None)
     if birthtime is None:
         return
@@ -1242,6 +1267,7 @@ def _copy_macos_creation_time(source_stat: os.stat_result, dest: Path, setfile_p
 
 
 def _format_result(root: Path, result: ConversionResult) -> str:
+    """Format a single conversion result for CLI output."""
     source = _display_path(root, result.source_path)
     output = "" if result.output_path is None else str(_display_path(root, result.output_path))
     return (
@@ -1251,6 +1277,7 @@ def _format_result(root: Path, result: ConversionResult) -> str:
 
 
 def _display_path(root: Path, path: Path) -> Path:
+    """Return path relative to root if possible, otherwise absolute."""
     return path.relative_to(root) if path.is_relative_to(root) else path
 
 
