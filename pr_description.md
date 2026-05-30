@@ -1,0 +1,3 @@
+🎯 **What:** Added tests for the `_first_int` helper function in `media_shrinker.py` which was missing exception handling coverage.
+📊 **Coverage:** The new tests cover uncastable types that throw `TypeError` (lists, dictionaries) and `ValueError` (non-numeric strings). It also verifies proper return behavior for valid floats/strings, fallback mechanisms across multiple arguments, and returning `None` when no arguments are castable.
+✨ **Result:** Enhanced test suite reliability by ensuring `_first_int` accurately filters out invalid values and avoids crashes when parsing metadata like bit rates.

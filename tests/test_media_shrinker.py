@@ -1019,6 +1019,13 @@ class FirstIntTests(unittest.TestCase):
         self.assertEqual(_first_int(10.5), 10)
         self.assertIsNone(_first_int())
 
+    def test_first_int_more_cases(self) -> None:
+        self.assertIsNone(_first_int("not a number"))
+        self.assertIsNone(_first_int([1, 2]))
+        self.assertIsNone(_first_int({"a": 1}))
+        self.assertEqual(_first_int("not a number", "10", 20), 10)
+        self.assertEqual(_first_int(None, "N/A", "1.5"), 1)
+
 
 class FormatSecondsTests(unittest.TestCase):
     def test_format_seconds_truncates_to_three_decimals(self) -> None:
