@@ -9,6 +9,7 @@ metadata on generated files.
 
 
 import argparse
+import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
@@ -568,6 +569,11 @@ def choose_worker_count(requested_workers: int, *, cpu_count: int | None = None)
     return max(1, min(4, cores // 2))
 
 
+@functools.cache
+def _get_setfile_path() -> str | None:
+    return shutil.which("SetFile")
+
+
 def preserve_file_attributes(source: Path, dest: Path, *, setfile_path: str | None = None) -> None:
     """Best-effort copy of filesystem metadata from source to dest.
 
@@ -590,7 +596,7 @@ def preserve_file_attributes(source: Path, dest: Path, *, setfile_path: str | No
 
     os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
 
-    resolved_setfile = setfile_path if setfile_path is not None else shutil.which("SetFile")
+    resolved_setfile = setfile_path if setfile_path is not None else _get_setfile_path()
     if resolved_setfile:
         _copy_macos_creation_time(source_stat, dest, resolved_setfile)
         os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
