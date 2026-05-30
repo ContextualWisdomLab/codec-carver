@@ -572,6 +572,7 @@ def choose_worker_count(requested_workers: int, *, cpu_count: int | None = None)
 
 @functools.cache
 def _get_setfile_path() -> str | None:
+    """Return the path to the SetFile executable, cached for efficiency."""
     return shutil.which("SetFile")
 
 
@@ -684,37 +685,20 @@ def safe_source_size(source: Path) -> int:
         return 0
 
 
-def _convert_segment(
+def _find_valid_existing_output(
     source: Path,
     *,
-    rel_source: Path,
-    probe: MediaProbe,
+    segment_rel_source: Path,
     segment: MediaSegment,
     output_dir: Path,
     target_bytes: int,
     original_size: int,
-    ffmpeg_path: str,
     ffprobe_path: str,
-    prefer_flac: bool,
-    ffmpeg_threads: int | None,
-    overwrite: bool,
     max_segment_duration_seconds: float,
-    protected_sources: frozenset[Path] = frozenset(),
-) -> ConversionResult:
-    resolved_protected_sources = _resolved_protected_sources(source, protected_sources)
-    existing_suffixes = (".flac", ".opus")
-    segment_rel_source = _segment_source_path(rel_source, segment)
-    _remove_invalid_legacy_outputs(
-        source,
-        rel_source=rel_source,
-        probe=probe,
-        output_dir=output_dir,
-        suffixes=existing_suffixes,
-        target_bytes=target_bytes,
-        ffprobe_path=ffprobe_path,
-        max_segment_duration_seconds=max_segment_duration_seconds,
-        protected_sources=resolved_protected_sources,
-    )
+    resolved_protected_sources: frozenset[Path],
+    existing_suffixes: tuple[str, ...],
+) -> ConversionResult | None:
+    """Return a ConversionResult if a valid output already exists on disk."""
     existing_output: Path | None = None
     existing_duration: float | None = None
     for suffix in existing_suffixes:
@@ -754,7 +738,27 @@ def _convert_segment(
             start_seconds=segment.start_seconds,
             duration_seconds=existing_duration,
         )
+    return None
 
+
+def _execute_segment_conversion(
+    source: Path,
+    *,
+    rel_source: Path,
+    probe: MediaProbe,
+    segment: MediaSegment,
+    output_dir: Path,
+    target_bytes: int,
+    original_size: int,
+    ffmpeg_path: str,
+    ffprobe_path: str,
+    prefer_flac: bool,
+    ffmpeg_threads: int | None,
+    overwrite: bool,
+    max_segment_duration_seconds: float,
+    resolved_protected_sources: frozenset[Path],
+) -> ConversionResult:
+    """Execute the conversion plan(s) for a single segment."""
     plan = build_audio_plan(
         rel_source,
         probe,
@@ -847,6 +851,72 @@ def _convert_segment(
         )
 
     return ConversionResult(**common_fields, status="converted")
+
+
+def _convert_segment(
+    source: Path,
+    *,
+    rel_source: Path,
+    probe: MediaProbe,
+    segment: MediaSegment,
+    output_dir: Path,
+    target_bytes: int,
+    original_size: int,
+    ffmpeg_path: str,
+    ffprobe_path: str,
+    prefer_flac: bool,
+    ffmpeg_threads: int | None,
+    overwrite: bool,
+    max_segment_duration_seconds: float,
+    protected_sources: frozenset[Path] = frozenset(),
+) -> ConversionResult:
+    """Convert one media segment fitting the target size limit."""
+    resolved_protected_sources = _resolved_protected_sources(source, protected_sources)
+    existing_suffixes = (".flac", ".opus")
+    segment_rel_source = _segment_source_path(rel_source, segment)
+    _remove_invalid_legacy_outputs(
+        source,
+        rel_source=rel_source,
+        probe=probe,
+        output_dir=output_dir,
+        suffixes=existing_suffixes,
+        target_bytes=target_bytes,
+        ffprobe_path=ffprobe_path,
+        max_segment_duration_seconds=max_segment_duration_seconds,
+        protected_sources=resolved_protected_sources,
+    )
+
+    existing_result = _find_valid_existing_output(
+        source,
+        segment_rel_source=segment_rel_source,
+        segment=segment,
+        output_dir=output_dir,
+        target_bytes=target_bytes,
+        original_size=original_size,
+        ffprobe_path=ffprobe_path,
+        max_segment_duration_seconds=max_segment_duration_seconds,
+        resolved_protected_sources=resolved_protected_sources,
+        existing_suffixes=existing_suffixes,
+    )
+    if existing_result is not None:
+        return existing_result
+
+    return _execute_segment_conversion(
+        source,
+        rel_source=rel_source,
+        probe=probe,
+        segment=segment,
+        output_dir=output_dir,
+        target_bytes=target_bytes,
+        original_size=original_size,
+        ffmpeg_path=ffmpeg_path,
+        ffprobe_path=ffprobe_path,
+        prefer_flac=prefer_flac,
+        ffmpeg_threads=ffmpeg_threads,
+        overwrite=overwrite,
+        max_segment_duration_seconds=max_segment_duration_seconds,
+        resolved_protected_sources=resolved_protected_sources,
+    )
 
 
 def _remove_invalid_legacy_outputs(
@@ -1198,6 +1268,7 @@ def _execute_plan(
     overwrite: bool,
     protected_sources: frozenset[Path] = frozenset(),
 ) -> Path:
+    """Execute a conversion plan using ffmpeg."""
     _ensure_not_protected_source_path(protected_sources, final_output)
     _ensure_not_source_path(source, final_output)
     final_output.parent.mkdir(parents=True, exist_ok=True)
