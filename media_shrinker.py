@@ -162,11 +162,6 @@ class SilenceInterval:
     start_seconds: float
     end_seconds: float
 
-    @property
-    def midpoint_seconds(self) -> float:
-        """Return the midpoint of the silence interval."""
-
-        return (self.start_seconds + self.end_seconds) / 2
 
 
 @dataclass(frozen=True)
