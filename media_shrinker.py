@@ -7,7 +7,6 @@ high-bitrate Opus when required by size constraints, and restores filesystem
 metadata on generated files.
 """
 
-from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
