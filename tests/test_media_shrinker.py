@@ -1,18 +1,32 @@
+import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
 from pathlib import Path
-from unittest.mock import patch
 
 import media_shrinker
-from media_shrinker import (ConversionPlan, MediaProbe, MediaSegment,
-                            MediaShrinkerError, SilenceInterval, _execute_plan,
-                            build_audio_plan, build_icloud_download_command,
-                            build_segments, calculate_audio_bitrate,
-                            choose_worker_count, find_candidates,
-                            find_existing_valid_output,
-                            parse_silencedetect_intervals,
-                            preserve_file_attributes)
+from media_shrinker import (
+    ConversionPlan,
+    MediaSegment,
+    MediaShrinkerError,
+    detect_silence_intervals,
+    MediaProbe,
+    SilenceInterval,
+    build_audio_plan,
+    build_icloud_download_command,
+    build_segments,
+    calculate_audio_bitrate,
+    choose_worker_count,
+    find_existing_valid_output,
+    find_candidates,
+    parse_silencedetect_intervals,
+    write_report,
+    preserve_file_attributes,
+    probe_media,
+    _execute_plan,
+    _first_float,
+)
 
 
 class FindCandidateTests(unittest.TestCase):
@@ -33,10 +47,8 @@ class FindCandidateTests(unittest.TestCase):
             unsupported.write_bytes(b"0" * 99)
 
             candidates = [
-                p.relative_to(root)
-                for p in find_candidates(
-                    root, size_limit_bytes=10, include_under_limit=False
-                )
+                p[0].relative_to(root)
+                for p in find_candidates(root, size_limit_bytes=10, include_under_limit=False)
             ]
 
             self.assertEqual(candidates, [Path("A.WAV"), Path("nested/B.m4a")])
@@ -49,9 +61,7 @@ class FindCandidateTests(unittest.TestCase):
             small_mp3 = root / "small.mp3"
             small_mp3.write_bytes(b"0" * 4)
 
-            candidates = [
-                p.relative_to(root) for p in find_candidates(root, size_limit_bytes=10)
-            ]
+            candidates = [p[0].relative_to(root) for p in find_candidates(root, size_limit_bytes=10)]
 
             self.assertEqual(candidates, [Path("small.mp3")])
 
@@ -67,7 +77,7 @@ class FindCandidateTests(unittest.TestCase):
             output.write_bytes(b"0" * 4)
 
             candidates = [
-                p.relative_to(root)
+                p[0].relative_to(root)
                 for p in find_candidates(
                     root,
                     size_limit_bytes=10,
@@ -90,7 +100,7 @@ class FindCandidateTests(unittest.TestCase):
             split.write_bytes(b"0" * 4)
 
             candidates = [
-                p.relative_to(root)
+                p[0].relative_to(root)
                 for p in find_candidates(
                     root,
                     include_under_limit=True,
@@ -99,6 +109,21 @@ class FindCandidateTests(unittest.TestCase):
             ]
 
             self.assertEqual(candidates, [Path("source.wav")])
+
+
+
+class ProbeMediaTests(unittest.TestCase):
+    @patch('media_shrinker.subprocess.run')
+    def test_probe_media_raises_error_on_invalid_json(self, mock_run: MagicMock) -> None:
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        mock_completed.stdout = 'invalid json'
+        mock_run.return_value = mock_completed
+
+        with self.assertRaises(MediaShrinkerError) as cm:
+            probe_media(Path('test.wav'))
+
+        self.assertIn("ffprobe returned invalid JSON for test.wav", str(cm.exception))
 
 
 class PlanningTests(unittest.TestCase):
@@ -780,6 +805,50 @@ class PlanningTests(unittest.TestCase):
         )
 
 
+class SilenceDetectionTests(unittest.TestCase):
+    @patch("media_shrinker.subprocess.run")
+    def test_detect_silence_intervals_success(self, mock_run: MagicMock) -> None:
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        mock_completed.stderr = """
+        [silencedetect @ 0x1] silence_start: 14200.125
+        [silencedetect @ 0x1] silence_end: 14260.375 | silence_duration: 60.25
+        """
+        mock_run.return_value = mock_completed
+
+        intervals = detect_silence_intervals(
+            Path("source.wav"),
+            ffmpeg_path="custom-ffmpeg",
+            silence_noise="-40dB",
+            silence_min_duration_seconds=5.0,
+        )
+
+        self.assertEqual(intervals, [SilenceInterval(start_seconds=14_200.125, end_seconds=14_260.375)])
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        command = args[0]
+
+        self.assertEqual(command[0], "custom-ffmpeg")
+        self.assertIn("source.wav", str(command))
+        self.assertIn("silencedetect=noise=-40dB:d=5", str(command))
+
+        self.assertEqual(kwargs.get("check"), False)
+        self.assertEqual(kwargs.get("capture_output"), True)
+        self.assertEqual(kwargs.get("text"), True)
+
+    @patch("media_shrinker.subprocess.run")
+    def test_detect_silence_intervals_failure_raises_error(self, mock_run: MagicMock) -> None:
+        mock_completed = MagicMock()
+        mock_completed.returncode = 1
+
+
+        mock_completed.stderr = "ffmpeg error message"
+        mock_run.return_value = mock_completed
+
+        with self.assertRaisesRegex(MediaShrinkerError, "silencedetect failed for source.wav: ffmpeg error message"):
+            detect_silence_intervals(Path("source.wav"))
+
 class MetadataPreservationTests(unittest.TestCase):
 
     @patch("os.setxattr", create=True)
@@ -867,6 +936,48 @@ class ParallelismTests(unittest.TestCase):
 
 
 class ReportingTests(unittest.TestCase):
+
+    def test_write_report(self) -> None:
+        result1 = media_shrinker.ConversionResult(
+            source_path=Path("/scan/source1.wav"),
+            output_path=Path("/scan/source1.wav.flac"),
+            status="converted",
+            original_size_bytes=100,
+            output_size_bytes=50,
+            strategy="flac-lossless",
+        )
+        result2 = media_shrinker.ConversionResult(
+            source_path=Path("/scan/source2.wav"),
+            output_path=None,
+            status="skipped",
+            original_size_bytes=200,
+            strategy=None,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "report.json"
+            write_report([result1, result2], report_path)
+
+            self.assertTrue(report_path.exists())
+
+            with open(report_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+
+            self.assertEqual(len(payload), 2)
+            self.assertEqual(payload[0]["source_path"], "/scan/source1.wav")
+            self.assertEqual(payload[0]["output_path"], "/scan/source1.wav.flac")
+            self.assertEqual(payload[0]["status"], "converted")
+            self.assertEqual(payload[0]["strategy"], "flac-lossless")
+            self.assertEqual(payload[0]["original_size_bytes"], 100)
+            self.assertEqual(payload[0]["output_size_bytes"], 50)
+
+            self.assertEqual(payload[1]["source_path"], "/scan/source2.wav")
+            self.assertIsNone(payload[1]["output_path"])
+            self.assertEqual(payload[1]["status"], "skipped")
+            self.assertIsNone(payload[1]["strategy"])
+            self.assertEqual(payload[1]["original_size_bytes"], 200)
+            self.assertIsNone(payload[1]["output_size_bytes"])
+
     def test_format_result_handles_output_path_outside_scan_root(self) -> None:
         result = media_shrinker.ConversionResult(
             source_path=Path("/scan/source.wav"),
@@ -881,6 +992,31 @@ class ReportingTests(unittest.TestCase):
 
         self.assertIn("source.wav", line)
         self.assertIn("/external-output/source.wav.flac", line)
+
+
+class FirstFloatTests(unittest.TestCase):
+    def test_first_float_returns_first_valid_number(self) -> None:
+        self.assertEqual(_first_float(1.5, "2.0"), 1.5)
+        self.assertEqual(_first_float(None, 2.0, 3.0), 2.0)
+        self.assertEqual(_first_float("N/A", "1.1"), 1.1)
+
+    def test_first_float_ignores_type_error_and_value_error(self) -> None:
+        self.assertEqual(_first_float({}, "not-a-float", 3.14), 3.14)
+        self.assertEqual(_first_float([], None, "bad", 42.0), 42.0)
+
+    def test_first_float_returns_zero_on_all_failures(self) -> None:
+        self.assertEqual(_first_float(), 0.0)
+        self.assertEqual(_first_float(None, "N/A"), 0.0)
+        self.assertEqual(_first_float({}, "bad"), 0.0)
+
+
+class FormatSecondsTests(unittest.TestCase):
+    def test_format_seconds_truncates_to_three_decimals(self) -> None:
+        from media_shrinker import _format_seconds
+        self.assertEqual(_format_seconds(1.23456), "1.234")
+        self.assertEqual(_format_seconds(10.0), "10")
+        self.assertEqual(_format_seconds(0.0001), "0")
+        self.assertEqual(_format_seconds(14400.0), "14400")
 
 
 if __name__ == "__main__":
