@@ -1019,5 +1019,27 @@ class FormatSecondsTests(unittest.TestCase):
         self.assertEqual(_format_seconds(14400.0), "14400")
 
 
+class CollisionResolutionTests(unittest.TestCase):
+    def test_resolve_collision_returns_original_if_no_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "new.flac"
+            resolved = media_shrinker._resolve_collision(path, overwrite=False)
+            self.assertEqual(resolved, path)
+
+    def test_resolve_collision_returns_numbered_variant_if_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "existing.flac"
+            path.write_bytes(b"data")
+            resolved = media_shrinker._resolve_collision(path, overwrite=False)
+            self.assertEqual(resolved, Path(tmp) / "existing-1.flac")
+
+    def test_resolve_collision_returns_original_if_overwrite_is_true(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "existing.flac"
+            path.write_bytes(b"data")
+            resolved = media_shrinker._resolve_collision(path, overwrite=True)
+            self.assertEqual(resolved, path)
+
+
 if __name__ == "__main__":
     unittest.main()
