@@ -26,6 +26,7 @@ from media_shrinker import (
     probe_media,
     _execute_plan,
     _first_float,
+    _first_int,
 )
 
 
@@ -1008,6 +1009,15 @@ class FirstFloatTests(unittest.TestCase):
         self.assertEqual(_first_float(), 0.0)
         self.assertEqual(_first_float(None, "N/A"), 0.0)
         self.assertEqual(_first_float({}, "bad"), 0.0)
+
+
+class FirstIntTests(unittest.TestCase):
+    def test_first_int_handles_uncastable_types(self) -> None:
+        self.assertEqual(_first_int("invalid", "N/A", None, "12"), 12)
+        self.assertIsNone(_first_int("invalid", object(), []))
+        self.assertEqual(_first_int(10), 10)
+        self.assertEqual(_first_int(10.5), 10)
+        self.assertIsNone(_first_int())
 
 
 class FormatSecondsTests(unittest.TestCase):
