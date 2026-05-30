@@ -977,8 +977,8 @@ def write_report(results: Iterable[ConversionResult], report_path: Path) -> None
     report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint."""
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments."""
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", default=".", type=Path, help="Folder to scan")
@@ -990,7 +990,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--ffprobe", default="ffprobe")
     parser.add_argument("--brctl", default="brctl")
-    parser.add_argument("--download-icloud", action="store_true", help="Run 'brctl download' before reading each file")
+    parser.add_argument(
+        "--download-icloud",
+        action="store_true",
+        help="Run 'brctl download' before reading each file",
+    )
     parser.set_defaults(include_under_limit=True)
     parser.add_argument(
         "--include-under-limit",
@@ -1022,25 +1026,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--execute", action="store_true", help="Actually convert files. Omit for a dry run.")
     parser.add_argument("--overwrite", action="store_true", help="Allow overwriting generated output paths")
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
 
-    root = args.root.resolve()
-    output_dir = args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
-    report_path = args.report if args.report.is_absolute() else root / args.report
 
-    candidates = find_candidates(
-        root,
-        size_limit_bytes=args.size_limit_bytes,
-        include_under_limit=args.include_under_limit,
-        exclude_paths=[output_dir],
-        exclude_dir_prefixes=args.exclude_dir_prefix,
-    )
-    if not args.execute:
-        for candidate, size in candidates:
-            print(f"DRY-RUN\t{size}\t{candidate.relative_to(root)}")
-        print(f"TOTAL_SELECTED={len(candidates)}")
-        return 0
-
+def _execute_conversions(
+    candidates: list[tuple[Path, int]], args: argparse.Namespace, root: Path, output_dir: Path
+) -> list[ConversionResult]:
+    """Execute conversions in parallel."""
     results: list[ConversionResult] = []
     workers = choose_worker_count(args.workers)
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
@@ -1089,6 +1081,32 @@ def main(argv: list[str] | None = None) -> int:
             results.extend(candidate_results)
             for result in candidate_results:
                 print(_format_result(root, result), flush=True)
+
+    return results
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint."""
+
+    args = parse_args(argv)
+    root = args.root.resolve()
+    output_dir = args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
+    report_path = args.report if args.report.is_absolute() else root / args.report
+
+    candidates = find_candidates(
+        root,
+        size_limit_bytes=args.size_limit_bytes,
+        include_under_limit=args.include_under_limit,
+        exclude_paths=[output_dir],
+        exclude_dir_prefixes=args.exclude_dir_prefix,
+    )
+    if not args.execute:
+        for candidate, size in candidates:
+            print(f"DRY-RUN\t{size}\t{candidate.relative_to(root)}")
+        print(f"TOTAL_SELECTED={len(candidates)}")
+        return 0
+
+    results = _execute_conversions(candidates, args, root, output_dir)
 
     results.sort(key=lambda result: result.source_path.relative_to(root).as_posix().casefold())
     write_report(results, report_path)
