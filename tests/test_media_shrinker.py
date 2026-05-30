@@ -702,7 +702,7 @@ class PlanningTests(unittest.TestCase):
                     ffmpeg_threads=None,
                     overwrite=False,
                     max_segment_duration_seconds=14_400.0,
-                    protected_sources={source, other_source},
+                    protected_sources={source.resolve(), other_source.resolve()},
                 )
 
             self.assertEqual(other_source.read_bytes(), b"do-not-delete")

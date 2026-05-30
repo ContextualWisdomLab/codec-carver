@@ -1171,11 +1171,6 @@ def _remove_generated_output(
     output_path.unlink(missing_ok=True)
 
 
-def _resolved_protected_sources(source: Path, protected_sources: Iterable[Path]) -> frozenset[Path]:
-    """Return a set of resolved paths that must not be overwritten or deleted."""
-    protected = {source.resolve()}
-    protected.update(p.resolve() for p in protected_sources)
-    return frozenset(protected)
 
 
 def _ensure_not_protected_source_path(protected_sources: frozenset[Path], output: Path) -> None:
