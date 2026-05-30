@@ -13,3 +13,6 @@
 ## 2026-05-30 - [Optimize file size discovery to prevent redundant disk I/O]
 **Learning:** Calling `stat()` multiple times per file for file size in a large directory tree is inefficient. Passing down the size determined during the candidate gathering phase skips redundant I/O operations and speeds up the entire media shrinking run when evaluating thousands of files.
 **Action:** When walking directory trees and checking file sizes to filter out targets, capture and propagate these sizes in memory if downstream functions need them, instead of statting files a second time.
+## 2024-05-15 - Unsafe Path Resolution Optimization
+**Learning:** `Path.is_symlink()` only checks if the final path component is a symlink, missing symlinks in parent directories. Using it to conditionally skip `Path.resolve()` is dangerous and can break collision detection logic.
+**Action:** Always prefer resolving paths fully or rely on caller-provided pre-resolved data structures rather than trying to build conditional bypasses for `Path.resolve()`.
