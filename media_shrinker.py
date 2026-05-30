@@ -7,9 +7,9 @@ high-bitrate Opus when required by size constraints, and restores filesystem
 metadata on generated files.
 """
 
-from __future__ import annotations
 
 import argparse
+import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -162,11 +163,6 @@ class SilenceInterval:
     start_seconds: float
     end_seconds: float
 
-    @property
-    def midpoint_seconds(self) -> float:
-        """Return the midpoint of the silence interval."""
-
-        return (self.start_seconds + self.end_seconds) / 2
 
 
 @dataclass(frozen=True)
@@ -420,6 +416,9 @@ def build_silencedetect_command(
 ) -> list[str]:
     """Build an ffmpeg command that detects long silence intervals."""
 
+    if not re.match(r"^[+-]?[0-9]+(\.[0-9]+)?(?:dB)?$", silence_noise):
+        raise MediaShrinkerError(f"Invalid silence_noise value: {silence_noise}")
+
     return [
         ffmpeg_path,
         "-nostdin",
@@ -570,6 +569,11 @@ def choose_worker_count(requested_workers: int, *, cpu_count: int | None = None)
     return max(1, min(4, cores // 2))
 
 
+@functools.cache
+def _get_setfile_path() -> str | None:
+    return shutil.which("SetFile")
+
+
 def preserve_file_attributes(source: Path, dest: Path, *, setfile_path: str | None = None) -> None:
     """Best-effort copy of filesystem metadata from source to dest.
 
@@ -592,7 +596,7 @@ def preserve_file_attributes(source: Path, dest: Path, *, setfile_path: str | No
 
     os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
 
-    resolved_setfile = setfile_path if setfile_path is not None else shutil.which("SetFile")
+    resolved_setfile = setfile_path if setfile_path is not None else _get_setfile_path()
     if resolved_setfile:
         _copy_macos_creation_time(source_stat, dest, resolved_setfile)
         os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
@@ -1197,27 +1201,35 @@ def _execute_plan(
     _ensure_not_protected_source_path(protected_sources, final_output)
     _ensure_not_source_path(source, final_output)
     final_output.parent.mkdir(parents=True, exist_ok=True)
-    temp_output = final_output.with_name(f".{final_output.name}.tmp{final_output.suffix}")
+
+    fd, temp_output_str = tempfile.mkstemp(
+        suffix=final_output.suffix,
+        prefix=f".{final_output.stem}.",
+        dir=final_output.parent
+    )
+    os.close(fd)
+    temp_output = Path(temp_output_str)
+
     _ensure_not_protected_source_path(protected_sources, temp_output)
     _ensure_not_source_path(source, temp_output)
-    temp_output.unlink(missing_ok=True)
 
-    command = plan.command(ffmpeg_path=ffmpeg_path, input_path=source, output_path=temp_output, overwrite=True)
     try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
-    except FileNotFoundError as exc:
-        temp_output.unlink(missing_ok=True)
-        raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
+        command = plan.command(ffmpeg_path=ffmpeg_path, input_path=source, output_path=temp_output, overwrite=True)
+        try:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        except FileNotFoundError as exc:
+            raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
 
-    if completed.returncode != 0:
-        temp_output.unlink(missing_ok=True)
-        raise MediaShrinkerError(f"ffmpeg failed for {source}: {completed.stderr.strip()}")
+        if completed.returncode != 0:
+            raise MediaShrinkerError(f"ffmpeg failed for {source}: {completed.stderr.strip()}")
 
-    if final_output.exists() and not overwrite:
-        temp_output.unlink(missing_ok=True)
-        raise FileExistsError(f"Output already exists: {final_output}")
+        if final_output.exists() and not overwrite:
+            raise FileExistsError(f"Output already exists: {final_output}")
 
-    temp_output.replace(final_output)
+        temp_output.replace(final_output)
+    finally:
+        temp_output.unlink(missing_ok=True)
+
     return final_output
 
 

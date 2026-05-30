@@ -1,6 +1,8 @@
+import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 import media_shrinker
@@ -18,8 +20,11 @@ from media_shrinker import (
     find_existing_valid_output,
     find_candidates,
     parse_silencedetect_intervals,
+    write_report,
     preserve_file_attributes,
+    probe_media,
     _execute_plan,
+    _first_float,
 )
 
 
@@ -95,6 +100,21 @@ class FindCandidateTests(unittest.TestCase):
             ]
 
             self.assertEqual(candidates, [Path("source.wav")])
+
+
+
+class ProbeMediaTests(unittest.TestCase):
+    @patch('media_shrinker.subprocess.run')
+    def test_probe_media_raises_error_on_invalid_json(self, mock_run: MagicMock) -> None:
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        mock_completed.stdout = 'invalid json'
+        mock_run.return_value = mock_completed
+
+        with self.assertRaises(MediaShrinkerError) as cm:
+            probe_media(Path('test.wav'))
+
+        self.assertIn("ffprobe returned invalid JSON for test.wav", str(cm.exception))
 
 
 class PlanningTests(unittest.TestCase):
@@ -690,6 +710,48 @@ class ParallelismTests(unittest.TestCase):
 
 
 class ReportingTests(unittest.TestCase):
+
+    def test_write_report(self) -> None:
+        result1 = media_shrinker.ConversionResult(
+            source_path=Path("/scan/source1.wav"),
+            output_path=Path("/scan/source1.wav.flac"),
+            status="converted",
+            original_size_bytes=100,
+            output_size_bytes=50,
+            strategy="flac-lossless",
+        )
+        result2 = media_shrinker.ConversionResult(
+            source_path=Path("/scan/source2.wav"),
+            output_path=None,
+            status="skipped",
+            original_size_bytes=200,
+            strategy=None,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "report.json"
+            write_report([result1, result2], report_path)
+
+            self.assertTrue(report_path.exists())
+
+            with open(report_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+
+            self.assertEqual(len(payload), 2)
+            self.assertEqual(payload[0]["source_path"], "/scan/source1.wav")
+            self.assertEqual(payload[0]["output_path"], "/scan/source1.wav.flac")
+            self.assertEqual(payload[0]["status"], "converted")
+            self.assertEqual(payload[0]["strategy"], "flac-lossless")
+            self.assertEqual(payload[0]["original_size_bytes"], 100)
+            self.assertEqual(payload[0]["output_size_bytes"], 50)
+
+            self.assertEqual(payload[1]["source_path"], "/scan/source2.wav")
+            self.assertIsNone(payload[1]["output_path"])
+            self.assertEqual(payload[1]["status"], "skipped")
+            self.assertIsNone(payload[1]["strategy"])
+            self.assertEqual(payload[1]["original_size_bytes"], 200)
+            self.assertIsNone(payload[1]["output_size_bytes"])
+
     def test_format_result_handles_output_path_outside_scan_root(self) -> None:
         result = media_shrinker.ConversionResult(
             source_path=Path("/scan/source.wav"),
@@ -705,6 +767,21 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("source.wav", line)
         self.assertIn("/external-output/source.wav.flac", line)
 
+
+class FirstFloatTests(unittest.TestCase):
+    def test_first_float_returns_first_valid_number(self) -> None:
+        self.assertEqual(_first_float(1.5, "2.0"), 1.5)
+        self.assertEqual(_first_float(None, 2.0, 3.0), 2.0)
+        self.assertEqual(_first_float("N/A", "1.1"), 1.1)
+
+    def test_first_float_ignores_type_error_and_value_error(self) -> None:
+        self.assertEqual(_first_float({}, "not-a-float", 3.14), 3.14)
+        self.assertEqual(_first_float([], None, "bad", 42.0), 42.0)
+
+    def test_first_float_returns_zero_on_all_failures(self) -> None:
+        self.assertEqual(_first_float(), 0.0)
+        self.assertEqual(_first_float(None, "N/A"), 0.0)
+        self.assertEqual(_first_float({}, "bad"), 0.0)
 
 if __name__ == "__main__":
     unittest.main()
