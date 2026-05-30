@@ -13,3 +13,7 @@
 ## 2026-05-30 - [Optimize file size discovery to prevent redundant disk I/O]
 **Learning:** Calling `stat()` multiple times per file for file size in a large directory tree is inefficient. Passing down the size determined during the candidate gathering phase skips redundant I/O operations and speeds up the entire media shrinking run when evaluating thousands of files.
 **Action:** When walking directory trees and checking file sizes to filter out targets, capture and propagate these sizes in memory if downstream functions need them, instead of statting files a second time.
+
+## 2024-05-30 - Converting CLI tool to MCP and SaaS Web Service
+**Learning:** When building FastAPI apps that wrap heavy, blocking synchronous tasks (like audio/video conversion using subprocesses), do NOT use `async def` for the endpoint function. Using a synchronous `def` allows FastAPI to run the blocking task in a threadpool, preventing the event loop from stalling. Also, handle file uploads cleanly with streaming (`shutil.copyfileobj(file.file, f)`) instead of `await file.read()` to avoid OOM issues on large media files.
+**Action:** Always evaluate whether wrapped library functions block I/O. If they do, expose them via synchronous `def` route handlers in FastAPI. Use `shutil.copyfileobj` for large file uploads.
