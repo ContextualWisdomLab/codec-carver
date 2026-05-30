@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 import media_shrinker
@@ -21,6 +22,7 @@ from media_shrinker import (
     parse_silencedetect_intervals,
     write_report,
     preserve_file_attributes,
+    probe_media,
     _execute_plan,
 )
 
@@ -97,6 +99,21 @@ class FindCandidateTests(unittest.TestCase):
             ]
 
             self.assertEqual(candidates, [Path("source.wav")])
+
+
+
+class ProbeMediaTests(unittest.TestCase):
+    @patch('media_shrinker.subprocess.run')
+    def test_probe_media_raises_error_on_invalid_json(self, mock_run: MagicMock) -> None:
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        mock_completed.stdout = 'invalid json'
+        mock_run.return_value = mock_completed
+
+        with self.assertRaises(MediaShrinkerError) as cm:
+            probe_media(Path('test.wav'))
+
+        self.assertIn("ffprobe returned invalid JSON for test.wav", str(cm.exception))
 
 
 class PlanningTests(unittest.TestCase):
