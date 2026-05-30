@@ -186,7 +186,7 @@ def find_candidates(
     include_under_limit: bool = True,
     exclude_paths: Iterable[Path] = (),
     exclude_dir_prefixes: Iterable[str] = (),
-) -> list[Path]:
+) -> list[tuple[Path, int]]:
     """Return supported media files under root selected for conversion.
 
     The returned paths are absolute when root is absolute and are ordered by
@@ -196,7 +196,7 @@ def find_candidates(
     root = Path(root)
     excluded = tuple(Path(item).resolve() for item in exclude_paths)
     excluded_prefixes = tuple(prefix.casefold() for prefix in exclude_dir_prefixes)
-    candidates: list[Path] = []
+    candidates: list[tuple[Path, int]] = []
     for path in root.rglob("*"):
         relative_parts = path.relative_to(root).parts
         if any(part.casefold().startswith(prefix) for part in relative_parts[:-1] for prefix in excluded_prefixes):
@@ -213,9 +213,9 @@ def find_candidates(
         except OSError:
             continue
         if include_under_limit or size > size_limit_bytes:
-            candidates.append(path)
+            candidates.append((path, size))
 
-    return sorted(candidates, key=lambda item: item.relative_to(root).as_posix().casefold())
+    return sorted(candidates, key=lambda item: item[0].relative_to(root).as_posix().casefold())
 
 
 def find_existing_valid_output(
@@ -616,13 +616,14 @@ def convert_file(
     silence_min_duration_seconds: float = DEFAULT_SILENCE_MIN_DURATION_SECONDS,
     protected_sources: Iterable[Path] = (),
     resolved_protected_sources: frozenset[Path] | None = None,
+    original_size: int | None = None,
 ) -> list[ConversionResult]:
     """Convert one file and return generated segment results without deleting the source."""
 
     source = Path(source)
     root = Path(root)
     output_dir = Path(output_dir)
-    original_size = safe_source_size(source)
+    original_size = original_size if original_size is not None else safe_source_size(source)
 
     rel_source = source.relative_to(root)
     if download_icloud:
@@ -969,9 +970,10 @@ def main(argv: list[str] | None = None) -> int:
     workers = choose_worker_count(args.workers)
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
 
-    resolved_candidates = frozenset(Path(item).resolve() for item in candidates)
+    resolved_candidates = frozenset(Path(item[0]).resolve() for item in candidates)
 
-    def process_candidate(candidate: Path) -> list[ConversionResult]:
+    def process_candidate(candidate_tuple: tuple[Path, int]) -> list[ConversionResult]:
+        candidate, size = candidate_tuple
         try:
             return convert_file(
                 candidate,
@@ -988,8 +990,9 @@ def main(argv: list[str] | None = None) -> int:
                 max_segment_duration_seconds=args.max_duration_seconds,
                 silence_noise=args.silence_noise,
                 silence_min_duration_seconds=args.silence_min_duration_seconds,
-                protected_sources=candidates,
+                protected_sources=[c[0] for c in candidates],
                 resolved_protected_sources=resolved_candidates,
+                original_size=size,
             )
         except Exception as exc:  # noqa: BLE001 - batch processing records per-file failures.
             return [
