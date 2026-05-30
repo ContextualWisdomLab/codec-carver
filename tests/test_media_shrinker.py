@@ -18,7 +18,6 @@ from media_shrinker import (
     build_segments,
     calculate_audio_bitrate,
     choose_worker_count,
-    find_existing_valid_output,
     find_candidates,
     parse_silencedetect_intervals,
     write_report,
@@ -246,36 +245,6 @@ class PlanningTests(unittest.TestCase):
 
         self.assertEqual(wav_plan.output_path, Path("out/clip.wav.flac"))
         self.assertEqual(m4a_plan.output_path, Path("out/clip.m4a.flac"))
-
-    def test_find_existing_valid_output_detects_completed_canonical_flac_to_avoid_duplicate_work(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp)
-            completed = output_dir / "FOLDER01" / "meeting.wav.flac"
-            completed.parent.mkdir()
-            completed.write_bytes(b"0" * 9)
-
-            existing = find_existing_valid_output(
-                Path("FOLDER01/meeting.wav"), output_dir, target_bytes=10
-            )
-
-            self.assertEqual(existing, completed)
-
-    def test_find_existing_valid_output_does_not_trust_ambiguous_legacy_stem_output(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp)
-            stale = output_dir / "FOLDER01" / "meeting.flac"
-            stale.parent.mkdir()
-            stale.write_bytes(b"0" * 9)
-
-            existing = find_existing_valid_output(
-                Path("FOLDER01/meeting.m4a"), output_dir, target_bytes=10
-            )
-
-            self.assertIsNone(existing)
 
     def test_execute_plan_refuses_to_replace_source_path_even_with_overwrite(
         self,

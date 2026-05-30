@@ -238,27 +238,6 @@ def find_candidates(
 
     return sorted(candidates, key=lambda item: item[0].relative_to(root).as_posix().casefold())
 
-    return sorted(candidates, key=lambda item: item[0].relative_to(root).as_posix().casefold())
-
-
-def find_existing_valid_output(
-    rel_source: Path,
-    output_dir: Path,
-    *,
-    target_bytes: int,
-    suffixes: tuple[str, ...] = (".flac", ".opus"),
-) -> Path | None:
-    """Return a completed output for rel_source if it is already under target."""
-
-    for suffix in suffixes:
-        candidate = _planned_output_path(rel_source, output_dir, suffix)
-        try:
-            if candidate.is_file() and candidate.stat().st_size <= target_bytes:
-                return candidate
-        except OSError:
-            continue
-    return None
-
 
 def calculate_audio_bitrate(
     duration_seconds: float,
