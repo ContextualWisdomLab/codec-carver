@@ -10,6 +10,7 @@ from media_shrinker import (
     ConversionPlan,
     MediaSegment,
     MediaShrinkerError,
+    detect_silence_intervals,
     MediaProbe,
     SilenceInterval,
     build_audio_plan,
@@ -660,6 +661,50 @@ class PlanningTests(unittest.TestCase):
             ],
         )
 
+
+class SilenceDetectionTests(unittest.TestCase):
+    @patch("media_shrinker.subprocess.run")
+    def test_detect_silence_intervals_success(self, mock_run: MagicMock) -> None:
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        mock_completed.stderr = """
+        [silencedetect @ 0x1] silence_start: 14200.125
+        [silencedetect @ 0x1] silence_end: 14260.375 | silence_duration: 60.25
+        """
+        mock_run.return_value = mock_completed
+
+        intervals = detect_silence_intervals(
+            Path("source.wav"),
+            ffmpeg_path="custom-ffmpeg",
+            silence_noise="-40dB",
+            silence_min_duration_seconds=5.0,
+        )
+
+        self.assertEqual(intervals, [SilenceInterval(start_seconds=14_200.125, end_seconds=14_260.375)])
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        command = args[0]
+
+        self.assertEqual(command[0], "custom-ffmpeg")
+        self.assertIn("source.wav", str(command))
+        self.assertIn("silencedetect=noise=-40dB:d=5", str(command))
+
+        self.assertEqual(kwargs.get("check"), False)
+        self.assertEqual(kwargs.get("capture_output"), True)
+        self.assertEqual(kwargs.get("text"), True)
+
+    @patch("media_shrinker.subprocess.run")
+    def test_detect_silence_intervals_failure_raises_error(self, mock_run: MagicMock) -> None:
+        mock_completed = MagicMock()
+        mock_completed.returncode = 1
+
+
+        mock_completed.stderr = "ffmpeg error message"
+        mock_run.return_value = mock_completed
+
+        with self.assertRaisesRegex(MediaShrinkerError, "silencedetect failed for source.wav: ffmpeg error message"):
+            detect_silence_intervals(Path("source.wav"))
 
 class MetadataPreservationTests(unittest.TestCase):
     def test_preserve_file_attributes_copies_times_and_extended_attributes_when_supported(self) -> None:
