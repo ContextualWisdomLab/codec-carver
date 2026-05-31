@@ -198,18 +198,28 @@ def find_candidates(
     for dirpath, dirnames, filenames in os.walk(root):
         current_dir = Path(dirpath)
 
+        try:
+            resolved_current_dir = current_dir.resolve()
+        except OSError:
+            resolved_current_dir = current_dir
+
         # Prune excluded directories
         valid_dirs = []
         for d in dirnames:
             if any(d.casefold().startswith(prefix) for prefix in excluded_prefixes):
                 continue
             d_path = current_dir / d
-            try:
-                resolved_d = d_path.resolve()
-                if any(resolved_d == excluded_path or resolved_d.is_relative_to(excluded_path) for excluded_path in excluded):
-                    continue
-            except OSError:
-                pass
+
+            if not d_path.is_symlink():
+                resolved_d = resolved_current_dir / d
+            else:
+                try:
+                    resolved_d = d_path.resolve()
+                except OSError:
+                    resolved_d = d_path
+
+            if any(resolved_d == excluded_path or resolved_d.is_relative_to(excluded_path) for excluded_path in excluded):
+                continue
             valid_dirs.append(d)
         dirnames[:] = valid_dirs
 
@@ -221,12 +231,9 @@ def find_candidates(
             if file_path.is_symlink() or not file_path.is_file():
                 continue
 
-            try:
-                resolved_file = file_path.resolve()
-                if any(resolved_file == excluded_path or resolved_file.is_relative_to(excluded_path) for excluded_path in excluded):
-                    continue
-            except OSError:
-                pass
+            resolved_file = resolved_current_dir / f
+            if any(resolved_file == excluded_path or resolved_file.is_relative_to(excluded_path) for excluded_path in excluded):
+                continue
 
             try:
                 size = file_path.stat().st_size
