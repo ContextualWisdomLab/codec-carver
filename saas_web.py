@@ -58,21 +58,24 @@ def shrink_media(
     temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
     temp_dir_path = Path(temp_dir)
 
-    # Setup paths
-    input_dir = temp_dir_path / "input"
-    output_dir = temp_dir_path / "output"
-    input_dir.mkdir()
-    output_dir.mkdir()
-
-    # Save the uploaded file
-    safe_filename = Path(file.filename).name
-    source_path = input_dir / safe_filename
-    import shutil
-    with open(source_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    # Process the file using media_shrinker
     try:
+        # Setup paths
+        input_dir = temp_dir_path / "input"
+        output_dir = temp_dir_path / "output"
+        input_dir.mkdir()
+        output_dir.mkdir()
+
+        # Save the uploaded file
+        safe_filename = Path(file.filename or "upload.tmp").name
+        if not safe_filename or safe_filename in (".", ".."):
+            safe_filename = "upload.tmp"
+
+        source_path = input_dir / safe_filename
+        import shutil
+        with open(source_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        # Process the file using media_shrinker
         results = media_shrinker.convert_file(
             source=source_path,
             root=input_dir,
