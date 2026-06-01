@@ -213,6 +213,11 @@ def find_candidates(
             valid_dirs.append(d)
         dirnames[:] = valid_dirs
 
+        try:
+            resolved_current_dir = current_dir.resolve()
+        except OSError:
+            resolved_current_dir = current_dir
+
         for f in filenames:
             file_path = current_dir / f
 
@@ -222,7 +227,7 @@ def find_candidates(
                 continue
 
             try:
-                resolved_file = file_path.resolve()
+                resolved_file = resolved_current_dir / f
                 if any(resolved_file == excluded_path or resolved_file.is_relative_to(excluded_path) for excluded_path in excluded):
                     continue
             except OSError:

@@ -21,3 +21,7 @@
 ## 2024-05-30 - Converting CLI tool to MCP and SaaS Web Service
 **Learning:** When building FastAPI apps that wrap heavy, blocking synchronous tasks (like audio/video conversion using subprocesses), do NOT use `async def` for the endpoint function. Using a synchronous `def` allows FastAPI to run the blocking task in a threadpool, preventing the event loop from stalling. Also, handle file uploads cleanly with streaming (`shutil.copyfileobj(file.file, f)`) instead of `await file.read()` to avoid OOM issues on large media files.
 **Action:** Always evaluate whether wrapped library functions block I/O. If they do, expose them via synchronous `def` route handlers in FastAPI. Use `shutil.copyfileobj` for large file uploads.
+
+## 2024-05-19 - Fast Path Resolution for Path Walking
+**Learning:** `Path.resolve()` is extremely expensive when called inside tight loops for every file, doing repeated IO for the whole parent directory structure. Since `media_shrinker.py` skips symlink files and only analyzes regular files, `Path(directory).resolve() / filename` calculates the exact same resulting path as `Path(file).resolve()` while avoiding redundant system calls per file.
+**Action:** When processing directories and handling non-symlink files, cache the resolution of the parent directory once and reconstruct the absolute resolved file path via appending the filename.
