@@ -36,9 +36,11 @@ HTML_TEMPLATE = """
 </html>
 """
 
+
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
     import shutil
+
     if temp_dir_path.exists():
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
@@ -48,12 +50,23 @@ async def get_ui():
     return HTML_TEMPLATE
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 @app.post("/shrink")
 def shrink_media(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    target_bytes: int = Form(2_000_000_000)
+    target_bytes: int = Form(2_000_000_000),
 ):
+    if target_bytes <= 0:
+        return {"error": "Invalid target_bytes value. Must be greater than 0."}
+
+    if not file.filename:
+        return {"error": "No file uploaded or filename missing"}
+
     # Create a temporary directory that will hold the input and output
     temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
     temp_dir_path = Path(temp_dir)
@@ -68,6 +81,7 @@ def shrink_media(
     safe_filename = Path(file.filename).name
     source_path = input_dir / safe_filename
     import shutil
+
     with open(source_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -84,22 +98,28 @@ def shrink_media(
         # For simplicity, returning the first output file found.
         # Handling multiple outputs (e.g. from splitting) would require zipping in a real scenario.
         if results and results[0].output_path and results[0].output_path.exists():
-             output_file_path = results[0].output_path
-             # Schedule cleanup after response
-             background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
-             return FileResponse(
-                 path=output_file_path,
-                 filename=output_file_path.name,
-                 media_type="application/octet-stream"
-             )
+            output_file_path = results[0].output_path
+            # Schedule cleanup after response
+            background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+            return FileResponse(
+                path=output_file_path,
+                filename=output_file_path.name,
+                media_type="application/octet-stream",
+            )
         else:
             background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
-            return {"error": "Processing failed or no output generated", "details": str(results)}
+            return {
+                "error": "Processing failed or no output generated",
+                "details": str(results),
+            }
 
     except Exception as e:
         cleanup_temp_dir(temp_dir_path)
-        return {"error": str(e)}
+        logger.error("Media processing failed", exc_info=True)
+        return {"error": "An internal error occurred during processing."}
+
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
