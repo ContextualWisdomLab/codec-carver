@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  saas-web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: uvicorn saas_web:app --host 0.0.0.0 --port 8000 --reload
+
+  # Optional MCP client runner could be added here later

@@ -47,3 +47,26 @@ Outputs are written under `../under_2gb/`. Existing generated output directories
 python3 -m unittest discover -s tests
 python3 -m py_compile media_shrinker.py
 ```
+
+## SaaS & MCP Deployment
+
+This repository includes a SaaS Web interface and an MCP Driver built on top of the `media_shrinker` core logic.
+
+### Running the SaaS via Docker
+
+To start the SaaS web server locally using Docker Compose, which automatically includes system dependencies like `ffmpeg`:
+
+```bash
+docker-compose up --build
+```
+
+Access the UI at: `http://localhost:8000/`
+
+### Running the MCP Server
+
+The MCP driver exposes the shrinking logic as a tool for LLMs.
+To start the MCP server locally using FastMCP:
+
+```bash
+fastmcp run mcp_driver:mcp
+```

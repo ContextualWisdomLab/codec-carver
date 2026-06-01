@@ -1,9 +1,8 @@
-# MCP Driver and SaaS Web Integration
+# Docker Deployment Support for SaaS
 
-This PR introduces an MCP Driver and a Web SaaS interface for the `media_shrinker.py` core logic, as requested by the user.
+This PR introduces containerization support to easily orchestrate the `media_shrinker` SaaS web server and MCP driver.
 
 ### Features Added
-1. **MCP Driver (`mcp_driver.py`)**: Utilizes `mcp.server.fastmcp.FastMCP` to wrap the `convert_file` function into a tool named `shrink_media`, enabling AI LLMs via MCP clients to interact with the media shrinking logic seamlessly.
-2. **SaaS Web UI (`saas_web.py`)**: Built with FastAPI. It features a root endpoint returning an HTML UI for end-users to upload files, specify target byte constraints, and download the shrunk file directly via the browser. Safe file handling features are included (e.g. `shutil.copyfileobj` for large files without OOM issues and synchronous route handlers for CPU-bound tasks).
-3. **Dependencies**: Added `requirements.txt` tracking `fastapi`, `uvicorn`, `python-multipart`, `mcp`, `aiofiles`, and `httpx`.
-4. **Testing**: Integrated new test suites for both components (`tests/test_saas_web.py` and `tests/test_mcp_driver.py`) which use mocks to ensure proper internal logic handling.
+1. **Dockerfile**: A container definition based on `python:3.12-slim` that handles installing necessary system dependencies (like `ffmpeg`), Python dependencies, and starts the FastAPI web server.
+2. **docker-compose.yml**: A Compose configuration to easily spin up the web server on port `8000` with local volume mapping.
+3. **README Documentation**: Updated instructions on how to start the SaaS locally using `docker-compose` and how to run the MCP server using `fastmcp`.
