@@ -64,15 +64,18 @@ def shrink_media(
     input_dir.mkdir()
     output_dir.mkdir()
 
-    # Save the uploaded file
-    safe_filename = Path(file.filename).name
-    source_path = input_dir / safe_filename
-    import shutil
-    with open(source_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
     # Process the file using media_shrinker
     try:
+        # Save the uploaded file
+        safe_filename = Path(file.filename).name
+        if not safe_filename or safe_filename in {".", ".."}:
+            safe_filename = "upload.bin"
+
+        source_path = input_dir / safe_filename
+        import shutil
+        with open(source_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
         results = media_shrinker.convert_file(
             source=source_path,
             root=input_dir,
@@ -98,7 +101,8 @@ def shrink_media(
 
     except Exception as e:
         cleanup_temp_dir(temp_dir_path)
-        return {"error": str(e)}
+        # Sentinel: Do not expose internal error details (e.g., stack traces, paths) to the user
+        return {"error": "An error occurred during processing."}
 
 if __name__ == "__main__":
     import uvicorn
