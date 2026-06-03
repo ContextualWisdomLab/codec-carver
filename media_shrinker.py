@@ -203,35 +203,42 @@ def find_candidates(
         for d in dirnames:
             if any(d.casefold().startswith(prefix) for prefix in excluded_prefixes):
                 continue
-            d_path = current_dir / d
-            try:
-                resolved_d = d_path.resolve()
-                if any(resolved_d == excluded_path or resolved_d.is_relative_to(excluded_path) for excluded_path in excluded):
-                    continue
-            except OSError:
-                pass
+
+            if excluded:
+                d_path = current_dir / d
+                try:
+                    resolved_d = d_path.resolve()
+                    if any(resolved_d == excluded_path or resolved_d.is_relative_to(excluded_path) for excluded_path in excluded):
+                        continue
+                except OSError:
+                    pass
             valid_dirs.append(d)
         dirnames[:] = valid_dirs
 
         for f in filenames:
+            _, ext = os.path.splitext(f)
+            if ext.lower() not in SUPPORTED_EXTENSIONS:
+                continue
+
             file_path = current_dir / f
 
-            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
-            if file_path.is_symlink() or not file_path.is_file():
-                continue
-
             try:
-                resolved_file = file_path.resolve()
-                if any(resolved_file == excluded_path or resolved_file.is_relative_to(excluded_path) for excluded_path in excluded):
-                    continue
-            except OSError:
-                pass
-
-            try:
-                size = file_path.stat().st_size
+                st = os.lstat(file_path)
             except OSError:
                 continue
+
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                continue
+
+            if excluded:
+                try:
+                    resolved_file = file_path.resolve()
+                    if any(resolved_file == excluded_path or resolved_file.is_relative_to(excluded_path) for excluded_path in excluded):
+                        continue
+                except OSError:
+                    pass
+
+            size = st.st_size
 
             if include_under_limit or size > size_limit_bytes:
                 candidates.append((file_path, size))
