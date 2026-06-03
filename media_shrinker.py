@@ -987,16 +987,16 @@ def write_report(results: Iterable[ConversionResult], report_path: Path) -> None
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("root", nargs="?", default=".", type=Path, help="Folder to scan")
-    parser.add_argument("--size-limit-bytes", type=int, default=DEFAULT_SIZE_LIMIT_BYTES)
-    parser.add_argument("--target-bytes", type=int, default=DEFAULT_TARGET_BYTES)
-    parser.add_argument("--max-duration-seconds", type=float, default=DEFAULT_MAX_SEGMENT_DURATION_SECONDS)
-    parser.add_argument("--output-dir", type=Path, default=Path("under_2gb"))
-    parser.add_argument("--report", type=Path, default=Path("under_2gb/conversion_report.json"))
-    parser.add_argument("--ffmpeg", default="ffmpeg")
-    parser.add_argument("--ffprobe", default="ffprobe")
-    parser.add_argument("--brctl", default="brctl")
+    parser.add_argument("--size-limit-bytes", type=int, default=DEFAULT_SIZE_LIMIT_BYTES, help="Size limit in bytes; files below this limit are converted unless --over-limit-only is passed")
+    parser.add_argument("--target-bytes", type=int, default=DEFAULT_TARGET_BYTES, help="Target size limit in bytes for the output file")
+    parser.add_argument("--max-duration-seconds", type=float, default=DEFAULT_MAX_SEGMENT_DURATION_SECONDS, help="Maximum duration limit in seconds for a split media segment")
+    parser.add_argument("--output-dir", type=Path, default=Path("under_2gb"), help="Directory where all generated outputs will be written")
+    parser.add_argument("--report", type=Path, default=Path("under_2gb/conversion_report.json"), help="Output path for the machine-readable conversion JSON report")
+    parser.add_argument("--ffmpeg", default="ffmpeg", help="Path to the ffmpeg executable")
+    parser.add_argument("--ffprobe", default="ffprobe", help="Path to the ffprobe executable")
+    parser.add_argument("--brctl", default="brctl", help="Path to the macOS brctl executable used for iCloud downloads")
     parser.add_argument(
         "--download-icloud",
         action="store_true",

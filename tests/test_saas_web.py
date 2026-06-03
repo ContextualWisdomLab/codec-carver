@@ -30,7 +30,6 @@ class TestSaasWeb(unittest.TestCase):
     def test_shrink_media_endpoint(self, mock_convert_file):
         # Create a dummy output file for the FileResponse
         import tempfile
-        import os
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_output = Path(temp_dir) / "output.flac"
