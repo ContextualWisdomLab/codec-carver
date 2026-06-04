@@ -300,6 +300,8 @@ def build_audio_plan(
         args.extend(_segment_input_args(segment))
         args.extend(
             [
+                "-protocol_whitelist",
+                "file,crypto,data",
                 "-i",
                 str(source_path),
                 "-map",
@@ -356,6 +358,8 @@ def build_opus_plan(
     args.extend(_segment_input_args(segment))
     args.extend(
         [
+            "-protocol_whitelist",
+            "file,crypto,data",
             "-i",
             str(source_path),
             "-map",
@@ -399,6 +403,8 @@ def probe_media(source_path: Path, *, ffprobe_path: str = "ffprobe") -> MediaPro
         "json",
         "-show_format",
         "-show_streams",
+        "-protocol_whitelist",
+        "file,crypto,data",
         str(source_path),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -429,6 +435,8 @@ def build_silencedetect_command(
         ffmpeg_path,
         "-nostdin",
         "-hide_banner",
+        "-protocol_whitelist",
+        "file,crypto,data",
         "-i",
         str(source_path),
         "-af",
