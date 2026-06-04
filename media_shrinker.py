@@ -55,6 +55,8 @@ SUPPORTED_EXTENSIONS = {
     ".webm",
 }
 
+SUPPORTED_EXTS_TUPLE = tuple(SUPPORTED_EXTENSIONS)
+
 LOSSLESS_AUDIO_CODECS = {
     "alac",
     "flac",
@@ -214,10 +216,10 @@ def find_candidates(
         dirnames[:] = valid_dirs
 
         for f in filenames:
+            if not f.lower().endswith(SUPPORTED_EXTS_TUPLE):
+                continue
             file_path = current_dir / f
 
-            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
             if file_path.is_symlink() or not file_path.is_file():
                 continue
 
