@@ -987,16 +987,19 @@ def write_report(results: Iterable[ConversionResult], report_path: Path) -> None
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("root", nargs="?", default=".", type=Path, help="Folder to scan")
-    parser.add_argument("--size-limit-bytes", type=int, default=DEFAULT_SIZE_LIMIT_BYTES)
-    parser.add_argument("--target-bytes", type=int, default=DEFAULT_TARGET_BYTES)
-    parser.add_argument("--max-duration-seconds", type=float, default=DEFAULT_MAX_SEGMENT_DURATION_SECONDS)
-    parser.add_argument("--output-dir", type=Path, default=Path("under_2gb"))
-    parser.add_argument("--report", type=Path, default=Path("under_2gb/conversion_report.json"))
-    parser.add_argument("--ffmpeg", default="ffmpeg")
-    parser.add_argument("--ffprobe", default="ffprobe")
-    parser.add_argument("--brctl", default="brctl")
+    parser.add_argument("--size-limit-bytes", type=int, default=DEFAULT_SIZE_LIMIT_BYTES, help="Size limit in bytes for source files")
+    parser.add_argument("--target-bytes", type=int, default=DEFAULT_TARGET_BYTES, help="Target max size in bytes for each output")
+    parser.add_argument("--max-duration-seconds", type=float, default=DEFAULT_MAX_SEGMENT_DURATION_SECONDS, help="Max duration in seconds per output")
+    parser.add_argument("--output-dir", type=Path, default=Path("under_2gb"), help="Directory for generated output files")
+    parser.add_argument("--report", type=Path, default=Path("under_2gb/conversion_report.json"), help="Path to write the JSON report")
+    parser.add_argument("--ffmpeg", default="ffmpeg", help="Path to ffmpeg executable")
+    parser.add_argument("--ffprobe", default="ffprobe", help="Path to ffprobe executable")
+    parser.add_argument("--brctl", default="brctl", help="Path to brctl executable")
     parser.add_argument(
         "--download-icloud",
         action="store_true",
