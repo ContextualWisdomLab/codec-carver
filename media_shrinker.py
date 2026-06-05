@@ -987,7 +987,10 @@ def write_report(results: Iterable[ConversionResult], report_path: Path) -> None
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("root", nargs="?", default=".", type=Path, help="Folder to scan")
     parser.add_argument("--size-limit-bytes", type=int, default=DEFAULT_SIZE_LIMIT_BYTES)
     parser.add_argument("--target-bytes", type=int, default=DEFAULT_TARGET_BYTES)
