@@ -195,6 +195,7 @@ def find_candidates(
     excluded_prefixes = tuple(prefix.casefold() for prefix in exclude_dir_prefixes)
     candidates: list[tuple[Path, int]] = []
 
+    supported_extensions_tuple = tuple(SUPPORTED_EXTENSIONS)
     for dirpath, dirnames, filenames in os.walk(root):
         current_dir = Path(dirpath)
 
@@ -214,10 +215,13 @@ def find_candidates(
         dirnames[:] = valid_dirs
 
         for f in filenames:
+            # ⚡ Bolt: Fast string pre-filtering avoids instantiating Path objects
+            # for the thousands of non-media files typically found in large scans.
+            if not f.lower().endswith(supported_extensions_tuple):
+                continue
+
             file_path = current_dir / f
 
-            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
             if file_path.is_symlink() or not file_path.is_file():
                 continue
 
