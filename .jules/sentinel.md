@@ -7,3 +7,8 @@
 **Vulnerability:** Use of `shutil.copymode(source, dest)` preserves potentially dangerous permission bits (setuid, setgid, sticky).
 **Learning:** Utilities that copy file metadata (like `shutil.copymode`) can inadvertently transfer elevated execution privileges from an untrusted source to a generated output. This can lead to privilege escalation if the destination file is later executed.
 **Prevention:** Explicitly mask file permissions when restoring metadata. Use `os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o777)` to ensure only standard read/write/execute permissions are copied, dropping the setuid, setgid, and sticky bits.
+
+## 2026-06-03 - [Sentinel: SSRF & LFI in FFmpeg/FFprobe]
+**Vulnerability:** Invoking `ffmpeg` or `ffprobe` without restricting protocols allows Server-Side Request Forgery (SSRF) and Local File Inclusion (LFI). A malicious playlist (.m3u8) or crafted media file could tell ffmpeg to read sensitive local files and exfiltrate them.
+**Learning:** Default configurations for powerful media CLI tools will happily evaluate protocols like `http://` or read absolute paths specified within the input file, creating an unauthenticated data exfiltration vector when processing user uploads.
+**Prevention:** Always prefix the `-i` or source argument in `ffmpeg` and `ffprobe` with `"-protocol_whitelist", "file,crypto,data"` to restrict the allowed protocols strictly to local data and harmless processing formats.
