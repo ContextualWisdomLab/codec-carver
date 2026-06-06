@@ -195,6 +195,8 @@ def find_candidates(
     excluded_prefixes = tuple(prefix.casefold() for prefix in exclude_dir_prefixes)
     candidates: list[tuple[Path, int]] = []
 
+    supported_ext_tuple = tuple(SUPPORTED_EXTENSIONS)
+
     for dirpath, dirnames, filenames in os.walk(root):
         current_dir = Path(dirpath)
 
@@ -214,10 +216,11 @@ def find_candidates(
         dirnames[:] = valid_dirs
 
         for f in filenames:
+            if not f.lower().endswith(supported_ext_tuple):
+                continue
+
             file_path = current_dir / f
 
-            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
             if file_path.is_symlink() or not file_path.is_file():
                 continue
 
