@@ -23,11 +23,12 @@ HTML_TEMPLATE = """
         <h2>Shrink Media File</h2>
         <form action="/shrink" method="post" enctype="multipart/form-data">
             <p>
-                <input type="file" name="file" required>
+                <label for="file">Media File:</label><br>
+                <input type="file" id="file" name="file" required>
             </p>
             <p>
-                <label>Target Bytes:</label><br>
-                <input type="number" name="target_bytes" value="2000000000" required>
+                <label for="target_bytes">Target Bytes:</label><br>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" required>
             </p>
             <button type="submit">Upload and Shrink</button>
         </form>
