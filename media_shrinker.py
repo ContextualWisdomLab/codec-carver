@@ -214,10 +214,12 @@ def find_candidates(
         dirnames[:] = valid_dirs
 
         for f in filenames:
+            _, ext = os.path.splitext(f)
+            if ext.lower() not in SUPPORTED_EXTENSIONS:
+                continue
+
             file_path = current_dir / f
 
-            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
             if file_path.is_symlink() or not file_path.is_file():
                 continue
 
