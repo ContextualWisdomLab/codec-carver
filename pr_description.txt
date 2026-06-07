@@ -1,11 +1,5 @@
-💡 **What:** Caches the result of `shutil.which('SetFile')` using `@functools.cache` to avoid repeated filesystem lookups.
-
-🎯 **Why:** Inside the `preserve_file_attributes` function, `shutil.which('SetFile')` is called for every processed file. `shutil.which` traverses the system `PATH` making multiple stat calls, which is an unnecessary overhead given that the executable path won't change during the process's lifetime.
-
-📊 **Measured Improvement:**
-A quick benchmark using timeit for 10,000 iterations:
-- **Baseline (`shutil.which`):** ~1.77 seconds
-- **Optimized (`@functools.cache`):** ~0.001 seconds
-This provides ~1,000x speedup for this specific check, yielding a measurable localized reduction in I/O and syscall overhead.
-
-@coderabbitai review
+🚨 Severity: CRITICAL
+💡 Vulnerability: Server-Side Request Forgery (SSRF) and Local File Inclusion (LFI). The application executed `ffmpeg` and `ffprobe` on user-supplied media files without any protocol restrictions. Malicious media files, such as crafted HLS playlists (`.m3u8`), could contain embedded URIs using protocols like `http`, `https`, or `tcp`, allowing an attacker to exfiltrate local files or scan internal services when the application attempts to process or probe the media.
+🎯 Impact: Attackers could read sensitive local files, interact with internal APIs, or use the server as a proxy to attack other systems, potentially leading to full server compromise.
+🔧 Fix: Explicitly added `"-protocol_whitelist", "file,crypto,data"` to all `ffmpeg` and `ffprobe` commands in `media_shrinker.py` (`probe_media`, `build_audio_plan`, `build_opus_plan`, `build_silencedetect_command`) before the `-i` input flag. This restricts FFmpeg to only processing safe, necessary local protocols.
+✅ Verification: Ensure the test suite passes (`python3 -m unittest discover -s tests`). Run the CLI against a local media file and verify it still converts correctly.
