@@ -21,3 +21,7 @@
 ## 2024-05-30 - Converting CLI tool to MCP and SaaS Web Service
 **Learning:** When building FastAPI apps that wrap heavy, blocking synchronous tasks (like audio/video conversion using subprocesses), do NOT use `async def` for the endpoint function. Using a synchronous `def` allows FastAPI to run the blocking task in a threadpool, preventing the event loop from stalling. Also, handle file uploads cleanly with streaming (`shutil.copyfileobj(file.file, f)`) instead of `await file.read()` to avoid OOM issues on large media files.
 **Action:** Always evaluate whether wrapped library functions block I/O. If they do, expose them via synchronous `def` route handlers in FastAPI. Use `shutil.copyfileobj` for large file uploads.
+
+## 2024-05-31 - [Avoid instantiating pathlib.Path in tight traversal loops]
+**Learning:** `pathlib.Path` instantiation is relatively slow due to the internal magic and operations performed (even for simple paths). When walking large directory trees (like with `os.walk`), instantiating a `Path` for every file simply to check its suffix leads to significant overhead (often 40-50% of the traversal time).
+**Action:** When filtering files by extension during discovery, use string methods like `filename.lower().endswith(tuple_of_extensions)` or `os.path.splitext` before creating the `Path` object. Only create `Path` objects for files that pass the initial string filter.
