@@ -108,9 +108,9 @@ def shrink_media(
             )
         else:
             background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+            logger.error("Processing produced no output: %r", results)
             return {
                 "error": "Processing failed or no output generated",
-                "details": str(results),
             }
 
     except Exception as e:
