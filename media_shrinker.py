@@ -937,7 +937,9 @@ def _convert_segment(
     protected_sources: frozenset[Path] = frozenset(),
 ) -> ConversionResult:
     """Convert one media segment fitting the target size limit."""
-    resolved_protected_sources = _resolved_protected_sources(source, protected_sources)
+    # protected_sources is passed from convert_file where it is already fully resolved.
+    # We only need to resolve the source itself.
+    resolved_protected_sources = frozenset(protected_sources | {source.resolve()})
     existing_suffixes = (".flac", ".opus")
     segment_rel_source = _segment_source_path(rel_source, segment)
     _remove_invalid_legacy_outputs(
@@ -1311,15 +1313,6 @@ def _remove_generated_output(
     _ensure_not_source_path(source, output_path)
     _ensure_not_protected_source_path(protected_sources, output_path)
     output_path.unlink(missing_ok=True)
-
-
-def _resolved_protected_sources(
-    source: Path, protected_sources: Iterable[Path]
-) -> frozenset[Path]:
-    """Return a set of resolved paths that must not be overwritten or deleted."""
-    protected = {source.resolve()}
-    protected.update(p.resolve() for p in protected_sources)
-    return frozenset(protected)
 
 
 def _ensure_not_protected_source_path(
