@@ -200,22 +200,37 @@ def find_candidates(
     for dirpath, dirnames, filenames in os.walk(root):
         current_dir = Path(dirpath)
 
+        try:
+            resolved_current_dir = current_dir.resolve()
+        except OSError:
+            continue
+
         # Prune excluded directories
         valid_dirs = []
         for d in dirnames:
             if any(d.casefold().startswith(prefix) for prefix in excluded_prefixes):
                 continue
             d_path = current_dir / d
+
             try:
-                resolved_d = d_path.resolve()
-                if any(
-                    resolved_d == excluded_path
-                    or resolved_d.is_relative_to(excluded_path)
-                    for excluded_path in excluded
-                ):
-                    continue
+                is_symlink = d_path.is_symlink()
             except OSError:
-                pass
+                continue
+
+            if not is_symlink:
+                resolved_d = resolved_current_dir / d
+            else:
+                try:
+                    resolved_d = d_path.resolve()
+                except OSError:
+                    continue
+
+            if any(
+                resolved_d == excluded_path
+                or resolved_d.is_relative_to(excluded_path)
+                for excluded_path in excluded
+            ):
+                continue
             valid_dirs.append(d)
         dirnames[:] = valid_dirs
 
@@ -224,19 +239,22 @@ def find_candidates(
                 continue
             file_path = current_dir / f
 
-            if file_path.is_symlink() or not file_path.is_file():
+            try:
+                is_symlink = file_path.is_symlink()
+                is_file = file_path.is_file()
+            except OSError:
                 continue
 
-            try:
-                resolved_file = file_path.resolve()
-                if any(
-                    resolved_file == excluded_path
-                    or resolved_file.is_relative_to(excluded_path)
-                    for excluded_path in excluded
-                ):
-                    continue
-            except OSError:
-                pass
+            if is_symlink or not is_file:
+                continue
+
+            resolved_file = resolved_current_dir / f
+            if any(
+                resolved_file == excluded_path
+                or resolved_file.is_relative_to(excluded_path)
+                for excluded_path in excluded
+            ):
+                continue
 
             try:
                 size = file_path.stat().st_size
@@ -316,6 +334,8 @@ def build_audio_plan(
         args.extend(_segment_input_args(segment))
         args.extend(
             [
+                "-protocol_whitelist",
+                "file,crypto,data",
                 "-i",
                 str(source_path),
                 "-map",
@@ -378,6 +398,8 @@ def build_opus_plan(
     args.extend(_segment_input_args(segment))
     args.extend(
         [
+            "-protocol_whitelist",
+            "file,crypto,data",
             "-i",
             str(source_path),
             "-map",
@@ -421,6 +443,8 @@ def probe_media(source_path: Path, *, ffprobe_path: str = "ffprobe") -> MediaPro
         "json",
         "-show_format",
         "-show_streams",
+        "-protocol_whitelist",
+        "file,crypto,data",
         str(source_path),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -455,6 +479,8 @@ def build_silencedetect_command(
         ffmpeg_path,
         "-nostdin",
         "-hide_banner",
+        "-protocol_whitelist",
+        "file,crypto,data",
         "-i",
         str(source_path),
         "-af",

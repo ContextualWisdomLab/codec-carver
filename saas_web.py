@@ -26,11 +26,12 @@ HTML_TEMPLATE = """
         <h2>Shrink Media File</h2>
         <form action="/shrink" method="post" enctype="multipart/form-data">
             <p>
-                <input type="file" name="file" required>
+                <label for="file">Media File:</label><br>
+                <input type="file" id="file" name="file" required>
             </p>
             <p>
-                <label>Target Bytes:</label><br>
-                <input type="number" name="target_bytes" value="2000000000" required>
+                <label for="target_bytes">Target Bytes:</label><br>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" required>
             </p>
             <button type="submit">Upload and Shrink</button>
         </form>
@@ -56,6 +57,12 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
+    if target_bytes <= 0:
+        return {"error": "Invalid target_bytes value. Must be greater than 0."}
+
+    if not file.filename:
+        return {"error": "No file uploaded or filename missing"}
+
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -72,7 +79,7 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
-        safe_filename = Path(file.filename or "upload.tmp").name
+        safe_filename = Path(file.filename).name
         if not safe_filename or safe_filename in (".", ".."):
             safe_filename = "upload.tmp"
 
