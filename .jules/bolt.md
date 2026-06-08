@@ -25,3 +25,6 @@
 ## 2024-05-31 - [Avoid instantiating pathlib.Path in tight traversal loops]
 **Learning:** `pathlib.Path` instantiation is relatively slow due to the internal magic and operations performed (even for simple paths). When walking large directory trees (like with `os.walk`), instantiating a `Path` for every file simply to check its suffix leads to significant overhead (often 40-50% of the traversal time).
 **Action:** When filtering files by extension during discovery, use string methods like `filename.lower().endswith(tuple_of_extensions)` or `os.path.splitext` before creating the `Path` object. Only create `Path` objects for files that pass the initial string filter.
+## 2026-06-08 - [Avoid excessive Path instantiation in hot loops]
+**Learning:** Using `pathlib.Path` objects inside heavy directory traversal loops (like `os.walk`) causes massive performance overhead due to repeated object instantiation and system call abstraction. Even seemingly innocent methods like `is_symlink()` or `stat()` inside `Path` add up over thousands of files.
+**Action:** When scanning large directories for thousands of items, prefer raw string manipulation with `os.path.join()` and direct system calls like `os.lstat()` or `os.walk(str(root))`. Convert to `Path` objects only at the very edges of the API, returning to callers.

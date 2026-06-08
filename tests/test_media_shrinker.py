@@ -151,14 +151,16 @@ class FindCandidateTests(unittest.TestCase):
             bad_file.write_bytes(b"0" * 4)
             nested.write_bytes(b"0" * 4)
 
-            original_is_symlink = Path.is_symlink
+            import os
+            original_lstat = os.lstat
 
-            def flaky_is_symlink(path: Path) -> bool:
-                if path.name in {"bad.mp3", "bad_dir"}:
+            def flaky_lstat(path):
+                name = os.path.basename(str(path))
+                if name in {"bad.mp3", "bad_dir"}:
                     raise OSError("cannot inspect symlink state")
-                return original_is_symlink(path)
+                return original_lstat(path)
 
-            with patch.object(Path, "is_symlink", flaky_is_symlink):
+            with patch("os.lstat", flaky_lstat):
                 candidates = [
                     p[0].relative_to(root)
                     for p in find_candidates(root, include_under_limit=True)

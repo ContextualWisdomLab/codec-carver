@@ -197,72 +197,81 @@ def find_candidates(
     excluded_prefixes = tuple(prefix.casefold() for prefix in exclude_dir_prefixes)
     candidates: list[tuple[Path, int]] = []
 
-    for dirpath, dirnames, filenames in os.walk(root):
-        current_dir = Path(dirpath)
+    excluded_exact_strs = tuple(str(p) for p in excluded)
+    excluded_prefix_strs = tuple(s + os.sep for s in excluded_exact_strs)
+
+    for dirpath_str, dirnames, filenames in os.walk(str(root)):
+        current_dir = Path(dirpath_str)
 
         try:
             resolved_current_dir = current_dir.resolve()
+            resolved_dir_str = str(resolved_current_dir)
         except OSError:
             continue
+
+        if excluded_exact_strs:
+            if any(
+                resolved_dir_str == ex_exact or resolved_dir_str.startswith(ex_pref)
+                for ex_exact, ex_pref in zip(excluded_exact_strs, excluded_prefix_strs)
+            ):
+                dirnames[:] = []
+                continue
 
         # Prune excluded directories
         valid_dirs = []
         for d in dirnames:
             if any(d.casefold().startswith(prefix) for prefix in excluded_prefixes):
                 continue
-            d_path = current_dir / d
+
+            d_path_str = os.path.join(dirpath_str, d)
 
             try:
-                is_symlink = d_path.is_symlink()
+                d_stat = os.lstat(d_path_str)
+                is_symlink = stat.S_ISLNK(d_stat.st_mode)
             except OSError:
                 continue
 
             if not is_symlink:
-                resolved_d = resolved_current_dir / d
+                resolved_d_str = os.path.join(resolved_dir_str, d)
             else:
                 try:
-                    resolved_d = d_path.resolve()
+                    resolved_d_str = str(Path(d_path_str).resolve())
                 except OSError:
                     continue
 
-            if any(
-                resolved_d == excluded_path
-                or resolved_d.is_relative_to(excluded_path)
-                for excluded_path in excluded
-            ):
-                continue
+            if excluded_exact_strs:
+                if any(
+                    resolved_d_str == ex_exact or resolved_d_str.startswith(ex_pref)
+                    for ex_exact, ex_pref in zip(excluded_exact_strs, excluded_prefix_strs)
+                ):
+                    continue
             valid_dirs.append(d)
         dirnames[:] = valid_dirs
 
         for f in filenames:
             if not f.lower().endswith(SUPPORTED_EXTS_TUPLE):
                 continue
-            file_path = current_dir / f
+
+            file_path_str = os.path.join(dirpath_str, f)
 
             try:
-                is_symlink = file_path.is_symlink()
-                is_file = file_path.is_file()
+                st = os.lstat(file_path_str)
+                if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                    continue
+                size = st.st_size
             except OSError:
                 continue
 
-            if is_symlink or not is_file:
-                continue
-
-            resolved_file = resolved_current_dir / f
-            if any(
-                resolved_file == excluded_path
-                or resolved_file.is_relative_to(excluded_path)
-                for excluded_path in excluded
-            ):
-                continue
-
-            try:
-                size = file_path.stat().st_size
-            except OSError:
-                continue
+            if excluded_exact_strs:
+                resolved_file_str = os.path.join(resolved_dir_str, f)
+                if any(
+                    resolved_file_str == ex_exact or resolved_file_str.startswith(ex_pref)
+                    for ex_exact, ex_pref in zip(excluded_exact_strs, excluded_prefix_strs)
+                ):
+                    continue
 
             if include_under_limit or size > size_limit_bytes:
-                candidates.append((file_path, size))
+                candidates.append((Path(file_path_str), size))
 
     return sorted(
         candidates, key=lambda item: item[0].relative_to(root).as_posix().casefold()
