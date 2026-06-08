@@ -110,6 +110,62 @@ class FindCandidateTests(unittest.TestCase):
 
             self.assertEqual(candidates, [Path("source.wav")])
 
+    def test_find_candidates_skips_directory_when_current_dir_cannot_resolve(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            good = root / "good.mp3"
+            broken = root / "broken"
+            broken_media = broken / "hidden.mp3"
+
+            broken.mkdir()
+            good.write_bytes(b"0" * 4)
+            broken_media.write_bytes(b"0" * 4)
+
+            original_resolve = Path.resolve
+
+            def flaky_resolve(path: Path, *args: object, **kwargs: object) -> Path:
+                if path == broken:
+                    raise OSError("cannot resolve directory")
+                return original_resolve(path, *args, **kwargs)
+
+            with patch.object(Path, "resolve", flaky_resolve):
+                candidates = [
+                    p[0].relative_to(root)
+                    for p in find_candidates(root, include_under_limit=True)
+                ]
+
+            self.assertEqual(candidates, [Path("good.mp3")])
+
+    def test_find_candidates_skips_entries_when_symlink_check_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            good = root / "good.mp3"
+            bad_file = root / "bad.mp3"
+            bad_dir = root / "bad_dir"
+            nested = bad_dir / "nested.mp3"
+
+            bad_dir.mkdir()
+            good.write_bytes(b"0" * 4)
+            bad_file.write_bytes(b"0" * 4)
+            nested.write_bytes(b"0" * 4)
+
+            original_is_symlink = Path.is_symlink
+
+            def flaky_is_symlink(path: Path) -> bool:
+                if path.name in {"bad.mp3", "bad_dir"}:
+                    raise OSError("cannot inspect symlink state")
+                return original_is_symlink(path)
+
+            with patch.object(Path, "is_symlink", flaky_is_symlink):
+                candidates = [
+                    p[0].relative_to(root)
+                    for p in find_candidates(root, include_under_limit=True)
+                ]
+
+            self.assertEqual(candidates, [Path("good.mp3")])
+
 
 
 class ProbeMediaTests(unittest.TestCase):

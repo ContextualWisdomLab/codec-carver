@@ -201,7 +201,7 @@ def find_candidates(
         try:
             resolved_current_dir = current_dir.resolve()
         except OSError:
-            resolved_current_dir = current_dir
+            continue
 
         # Prune excluded directories
         valid_dirs = []
@@ -210,13 +210,18 @@ def find_candidates(
                 continue
             d_path = current_dir / d
 
-            if not d_path.is_symlink():
+            try:
+                is_symlink = d_path.is_symlink()
+            except OSError:
+                continue
+
+            if not is_symlink:
                 resolved_d = resolved_current_dir / d
             else:
                 try:
                     resolved_d = d_path.resolve()
                 except OSError:
-                    resolved_d = d_path
+                    continue
 
             if any(resolved_d == excluded_path or resolved_d.is_relative_to(excluded_path) for excluded_path in excluded):
                 continue
@@ -228,7 +233,13 @@ def find_candidates(
 
             if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 continue
-            if file_path.is_symlink() or not file_path.is_file():
+            try:
+                is_symlink = file_path.is_symlink()
+                is_file = file_path.is_file()
+            except OSError:
+                continue
+
+            if is_symlink or not is_file:
                 continue
 
             resolved_file = resolved_current_dir / f
