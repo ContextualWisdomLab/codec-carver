@@ -77,6 +77,28 @@ class TestSaasWeb(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200) # Returns 200 with JSON error dict currently
             self.assertIn(b"error", response.content)
+            self.assertNotIn("details", response.json())
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_exception_does_not_expose_internal_path(self, mock_convert_file):
+        mock_convert_file.side_effect = RuntimeError("/tmp/codec_carver_secret/input.wav")
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("input.wav", f, "audio/wav")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload, {"error": "Upload processing failed"})
+            self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
 if __name__ == '__main__':
     unittest.main()

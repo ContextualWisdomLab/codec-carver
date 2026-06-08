@@ -1,10 +1,13 @@
 import tempfile
+import logging
+import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form
 from fastapi.responses import HTMLResponse, FileResponse
 import media_shrinker
 
 app = FastAPI(title="Codec Carver SaaS")
+logger = logging.getLogger(__name__)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -38,7 +41,6 @@ HTML_TEMPLATE = """
 
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
-    import shutil
     if temp_dir_path.exists():
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
@@ -55,21 +57,32 @@ def shrink_media(
     target_bytes: int = Form(2_000_000_000)
 ):
     # Create a temporary directory that will hold the input and output
-    temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
-    temp_dir_path = Path(temp_dir)
+    try:
+        temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
+        temp_dir_path = Path(temp_dir)
+    except Exception:
+        logger.exception("Failed to create upload workspace")
+        return {"error": "Upload processing failed"}
 
-    # Setup paths
-    input_dir = temp_dir_path / "input"
-    output_dir = temp_dir_path / "output"
-    input_dir.mkdir()
-    output_dir.mkdir()
+    try:
+        # Setup paths
+        input_dir = temp_dir_path / "input"
+        output_dir = temp_dir_path / "output"
+        input_dir.mkdir()
+        output_dir.mkdir()
 
-    # Save the uploaded file
-    safe_filename = Path(file.filename).name
-    source_path = input_dir / safe_filename
-    import shutil
-    with open(source_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+        # Save the uploaded file
+        safe_filename = Path(file.filename or "upload.tmp").name
+        if not safe_filename or safe_filename in (".", ".."):
+            safe_filename = "upload.tmp"
+
+        source_path = input_dir / safe_filename
+        with open(source_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception:
+        cleanup_temp_dir(temp_dir_path)
+        logger.exception("Failed to prepare uploaded media")
+        return {"error": "Upload processing failed"}
 
     # Process the file using media_shrinker
     try:
@@ -94,11 +107,13 @@ def shrink_media(
              )
         else:
             background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
-            return {"error": "Processing failed or no output generated", "details": str(results)}
+            logger.error("Processing produced no output: %r", results)
+            return {"error": "Processing failed or no output generated"}
 
-    except Exception as e:
+    except Exception:
         cleanup_temp_dir(temp_dir_path)
-        return {"error": str(e)}
+        logger.exception("Media processing failed")
+        return {"error": "Upload processing failed"}
 
 if __name__ == "__main__":
     import uvicorn
