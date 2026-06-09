@@ -454,6 +454,7 @@ def probe_media(source_path: Path, *, ffprobe_path: str = "ffprobe") -> MediaPro
         "-show_streams",
         "-protocol_whitelist",
         "file,crypto,data",
+        "-i",
         str(source_path),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
