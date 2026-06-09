@@ -21,6 +21,7 @@ HTML_TEMPLATE = """
         button:hover:not(:disabled) { background-color: #0056b3; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
         button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
+        .help-text { display: block; font-size: 0.85em; color: #6c757d; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -29,11 +30,13 @@ HTML_TEMPLATE = """
         <form action="/shrink" method="post" enctype="multipart/form-data" onsubmit="const btn = document.getElementById('submit-btn'); setTimeout(() => { btn.disabled = true; btn.innerText = 'Processing...'; }, 10);">
             <p>
                 <label for="file">Media File:</label><br>
-                <input type="file" id="file" name="file" required>
+                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file-help" required>
+                <span id="file-help" class="help-text">Select an audio or video file to shrink.</span>
             </p>
             <p>
                 <label for="target_bytes">Target Bytes:</label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" required>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="bytes-help" required>
+                <span id="bytes-help" class="help-text">Maximum size of the output file in bytes (e.g., 2000000000 for 2GB).</span>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
