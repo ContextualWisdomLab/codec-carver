@@ -21,6 +21,8 @@ HTML_TEMPLATE = """
         button:hover:not(:disabled) { background-color: #0056b3; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
         button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
+        .required-star { color: #dc3545; }
+        .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -28,12 +30,13 @@ HTML_TEMPLATE = """
         <h2>Shrink Media File</h2>
         <form action="/shrink" method="post" enctype="multipart/form-data" onsubmit="const btn = document.getElementById('submit-btn'); setTimeout(() => { btn.disabled = true; btn.innerText = 'Processing...'; }, 10);">
             <p>
-                <label for="file">Media File:</label><br>
+                <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="file" name="file" required>
             </p>
             <p>
-                <label for="target_bytes">Target Bytes:</label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" required>
+                <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help" required>
+                <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~2GB)</span>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
