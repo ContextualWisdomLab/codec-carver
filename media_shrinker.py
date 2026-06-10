@@ -199,6 +199,7 @@ def find_candidates(
 
     excluded_exact_strs = tuple(str(p) for p in excluded)
     excluded_prefix_strs = tuple(s + os.sep for s in excluded_exact_strs)
+    excluded_exact_set = frozenset(excluded_exact_strs)
 
     for dirpath_str, dirnames, filenames in os.walk(str(root)):
         current_dir = Path(dirpath_str)
@@ -210,17 +211,14 @@ def find_candidates(
             continue
 
         if excluded_exact_strs:
-            if any(
-                resolved_dir_str == ex_exact or resolved_dir_str.startswith(ex_pref)
-                for ex_exact, ex_pref in zip(excluded_exact_strs, excluded_prefix_strs)
-            ):
+            if resolved_dir_str in excluded_exact_set or resolved_dir_str.startswith(excluded_prefix_strs):
                 dirnames[:] = []
                 continue
 
         # Prune excluded directories
         valid_dirs = []
         for d in dirnames:
-            if any(d.casefold().startswith(prefix) for prefix in excluded_prefixes):
+            if d.casefold().startswith(excluded_prefixes):
                 continue
 
             d_path_str = os.path.join(dirpath_str, d)
@@ -240,10 +238,7 @@ def find_candidates(
                     continue
 
             if excluded_exact_strs:
-                if any(
-                    resolved_d_str == ex_exact or resolved_d_str.startswith(ex_pref)
-                    for ex_exact, ex_pref in zip(excluded_exact_strs, excluded_prefix_strs)
-                ):
+                if resolved_d_str in excluded_exact_set or resolved_d_str.startswith(excluded_prefix_strs):
                     continue
             valid_dirs.append(d)
         dirnames[:] = valid_dirs
@@ -264,10 +259,7 @@ def find_candidates(
 
             if excluded_exact_strs:
                 resolved_file_str = os.path.join(resolved_dir_str, f)
-                if any(
-                    resolved_file_str == ex_exact or resolved_file_str.startswith(ex_pref)
-                    for ex_exact, ex_pref in zip(excluded_exact_strs, excluded_prefix_strs)
-                ):
+                if resolved_file_str in excluded_exact_set or resolved_file_str.startswith(excluded_prefix_strs):
                     continue
 
             if include_under_limit or size > size_limit_bytes:
