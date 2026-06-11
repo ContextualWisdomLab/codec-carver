@@ -148,14 +148,15 @@ class FindCandidateTests(unittest.TestCase):
             good.write_bytes(b"0" * 4)
             broken_media.write_bytes(b"0" * 4)
 
-            original_resolve = Path.resolve
+            import os
+            original_realpath = os.path.realpath
 
-            def flaky_resolve(path: Path, *args: object, **kwargs: object) -> Path:
-                if path == broken:
+            def flaky_realpath(path: str, *args: object, **kwargs: object) -> str:
+                if path == str(broken):
                     raise OSError("cannot resolve directory")
-                return original_resolve(path, *args, **kwargs)
+                return original_realpath(path, *args, **kwargs)
 
-            with patch.object(Path, "resolve", flaky_resolve):
+            with patch("os.path.realpath", flaky_realpath):
                 candidates = [
                     p[0].relative_to(root)
                     for p in find_candidates(root, include_under_limit=True)
