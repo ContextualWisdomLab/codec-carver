@@ -31,7 +31,8 @@ HTML_TEMPLATE = """
         <form action="/shrink" method="post" enctype="multipart/form-data" onsubmit="const btn = document.getElementById('submit-btn'); setTimeout(() => { btn.disabled = true; btn.innerText = 'Processing...'; }, 10);">
             <p>
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="file" id="file" name="file" required>
+                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help" required>
+                <br><span id="file_help" class="help-text">Select an audio or video file to shrink.</span>
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
