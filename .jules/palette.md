@@ -8,3 +8,10 @@
 ## 2024-06-08 - Visual loading states and preventing double submission
 **Learning:** Web forms that process large files take time, leaving users wondering if their click registered. This lack of feedback causes double submissions and confusion.
 **Action:** Always provide immediate visual feedback upon form submission. Add an inline `onsubmit` handler to disable the submit button and change its text to "Processing...", and use `:disabled` and `:focus-visible` CSS pseudo-classes to ensure disabled states are styled and keyboard navigation is clear.
+## 2024-05-20 - Form Input Accessibility with helper text
+**Learning:** Adding helper text with `aria-describedby` combined with input constraints (`min`, `accept`) greatly improves form usability and prevents user errors before submission.
+**Action:** Always pair complex inputs (like raw byte values or file uploads) with clear, accessible helper text and native HTML validation constraints.
+
+## 2026-06-10 - Add inline form helpers and client-side validation
+**Learning:** Combining aria-describedby for helper text and aria-hidden on visual required indicators improves screen reader clarity while providing necessary visual cues to sighted users.
+**Action:** Always pair visible required markers with aria-hidden, relying on the native required attribute for semantics, and link helper text with aria-describedby.

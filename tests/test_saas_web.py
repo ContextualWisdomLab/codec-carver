@@ -15,6 +15,16 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
 
+    def test_get_ui_includes_accessible_file_input_helpers(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+
+        self.assertIn('accept="audio/*,video/*"', html)
+        self.assertIn('aria-describedby="file_help"', html)
+        self.assertIn('id="file_help"', html)
+        self.assertIn('class="required-star" aria-hidden="true"', html)
+
     @patch("saas_web.media_shrinker.convert_file")
     @patch("saas_web.tempfile.mkdtemp")
     def test_shrink_media_success(self, mock_mkdtemp, mock_convert_file):

@@ -28,6 +28,6 @@
 ## 2026-06-08 - [Avoid excessive Path instantiation in hot loops]
 **Learning:** Using `pathlib.Path` objects inside heavy directory traversal loops (like `os.walk`) causes massive performance overhead due to repeated object instantiation and system call abstraction. Even seemingly innocent methods like `is_symlink()` or `stat()` inside `Path` add up over thousands of files.
 **Action:** When scanning large directories for thousands of items, prefer raw string manipulation with `os.path.join()` and direct system calls like `os.lstat()` or `os.walk(str(root))`. Convert to `Path` objects only at the very edges of the API, returning to callers.
-## 2024-05-18 - Optimize Python os.walk path filtering
-**Learning:** During extensive directory traversals (e.g., using `os.walk`), using `any()` with generator expressions for prefix matching on excluded path lists causes significant performance overhead in Python. The C-optimized `str.startswith()` method can accept a tuple directly, which is substantially faster.
-**Action:** When filtering paths against multiple exact and prefix strings, use `frozenset` for O(1) exact match lookups and pass a tuple of strings directly to `str.startswith()` instead of iterating with `any()`.
+## 2024-06-09 - Optimize Path Exclusion Checks
+**Learning:** Using `any()` with generator expressions for prefix matching is slow. Python's `str.startswith()` can accept a tuple of strings directly, pushing the loop to optimized C code.
+**Action:** Use `str.startswith(tuple_of_prefixes)` and `frozenset` for O(1) exact matches instead of O(N) loops.
