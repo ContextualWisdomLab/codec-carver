@@ -218,7 +218,7 @@ def find_candidates(
         # Prune excluded directories
         valid_dirs = []
         for d in dirnames:
-            if any(d.casefold().startswith(prefix) for prefix in excluded_prefixes):
+            if d.casefold().startswith(excluded_prefixes):
                 continue
 
             d_path_str = os.path.join(dirpath_str, d)

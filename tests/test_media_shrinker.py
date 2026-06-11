@@ -88,6 +88,31 @@ class FindCandidateTests(unittest.TestCase):
 
             self.assertEqual(candidates, [Path("source.m4a")])
 
+    def test_find_candidates_skips_multiple_excluded_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            keep = root / "keep" / "source.wav"
+            excluded = root / "excluded" / "hidden.wav"
+            nested_excluded = root / "nested" / "output" / "hidden.wav"
+
+            keep.parent.mkdir()
+            excluded.parent.mkdir()
+            nested_excluded.parent.mkdir(parents=True)
+            keep.write_bytes(b"0" * 4)
+            excluded.write_bytes(b"0" * 4)
+            nested_excluded.write_bytes(b"0" * 4)
+
+            candidates = [
+                p[0].relative_to(root)
+                for p in find_candidates(
+                    root,
+                    include_under_limit=True,
+                    exclude_paths=[excluded.parent, nested_excluded.parent],
+                )
+            ]
+
+            self.assertEqual(candidates, [Path("keep/source.wav")])
+
     def test_find_candidates_can_skip_generated_split_directories_by_prefix(
         self,
     ) -> None:
