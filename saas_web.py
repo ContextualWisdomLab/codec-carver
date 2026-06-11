@@ -28,7 +28,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="box">
         <h2>Shrink Media File</h2>
-        <form action="/shrink" method="post" enctype="multipart/form-data" onsubmit="const btn = document.getElementById('submit-btn'); setTimeout(() => { btn.disabled = true; btn.innerText = 'Processing...'; }, 10);">
+        <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
             <p>
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help" required>
@@ -36,11 +36,22 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help" required>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required oninput="const val = parseInt(this.value, 10); const preview = document.getElementById('target_bytes_preview'); if (isNaN(val) || val <= 0) { preview.innerText = ''; } else if (val < 1000) { preview.innerText = val + ' B'; } else if (val < 1000000) { preview.innerText = (val / 1000).toFixed(2) + ' KB'; } else if (val < 1000000000) { preview.innerText = (val / 1000000).toFixed(2) + ' MB'; } else { preview.innerText = (val / 1000000000).toFixed(2) + ' GB'; }">
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~2GB)</span>
+                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #28a745;">2.00 GB</span>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
+        <script>
+            document.getElementById('shrink-form').addEventListener('submit', function() {
+                const btn = document.getElementById('submit-btn');
+                setTimeout(() => {
+                    btn.disabled = true;
+                    btn.innerText = 'Processing...';
+                    btn.setAttribute('aria-busy', 'true');
+                }, 10);
+            });
+        </script>
     </div>
 </body>
 </html>

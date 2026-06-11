@@ -15,3 +15,6 @@
 ## 2026-06-10 - Add inline form helpers and client-side validation
 **Learning:** Combining aria-describedby for helper text and aria-hidden on visual required indicators improves screen reader clarity while providing necessary visual cues to sighted users.
 **Action:** Always pair visible required markers with aria-hidden, relying on the native required attribute for semantics, and link helper text with aria-describedby.
+## 2024-05-24 - Dynamic Human-Readable File Size Preview
+**Learning:** Users often struggle to conceptualize large numbers in bytes (e.g., 2000000000), leading to magnitude errors. Providing a live, ARIA-announced preview in familiar units (MB, GB) right next to the input drastically improves confidence and prevents submission mistakes.
+**Action:** Always pair raw byte inputs with a dynamic, human-readable preview using an `aria-live` region.
