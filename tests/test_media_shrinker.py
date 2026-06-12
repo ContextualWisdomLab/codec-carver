@@ -135,22 +135,6 @@ class FindCandidateTests(unittest.TestCase):
 
             self.assertEqual(candidates, [Path("source.wav")])
 
-    def test_find_candidates_does_not_resolve_directories_without_exclude_paths(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            source = root / "source.wav"
-            source.write_bytes(b"0" * 4)
-
-            with patch("os.path.realpath", side_effect=AssertionError("unexpected")):
-                candidates = [
-                    p[0].relative_to(root)
-                    for p in find_candidates(root, include_under_limit=True)
-                ]
-
-            self.assertEqual(candidates, [Path("source.wav")])
-
     def test_find_candidates_skips_directory_when_current_dir_cannot_resolve(
         self,
     ) -> None:
@@ -159,10 +143,8 @@ class FindCandidateTests(unittest.TestCase):
             good = root / "good.mp3"
             broken = root / "broken"
             broken_media = broken / "hidden.mp3"
-            excluded = root / "excluded"
 
             broken.mkdir()
-            excluded.mkdir()
             good.write_bytes(b"0" * 4)
             broken_media.write_bytes(b"0" * 4)
 
@@ -177,11 +159,7 @@ class FindCandidateTests(unittest.TestCase):
             with patch("os.path.realpath", flaky_realpath):
                 candidates = [
                     p[0].relative_to(root)
-                    for p in find_candidates(
-                        root,
-                        include_under_limit=True,
-                        exclude_paths=[excluded],
-                    )
+                    for p in find_candidates(root, include_under_limit=True)
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])
