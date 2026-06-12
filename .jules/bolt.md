@@ -31,3 +31,6 @@
 ## 2024-06-09 - Optimize Path Exclusion Checks
 **Learning:** Using `any()` with generator expressions for prefix matching is slow. Python's `str.startswith()` can accept a tuple of strings directly, pushing the loop to optimized C code.
 **Action:** Use `str.startswith(tuple_of_prefixes)` and `frozenset` for O(1) exact matches instead of O(N) loops.
+## 2024-06-11 - [Optimize find_candidates batch gathering]
+**Learning:** During batch directory traversal (e.g. `os.walk` in `find_candidates`), attempting to resolve every directory with `Path.resolve()` introduces heavy filesystem access and instantiation overhead, especially when no directories are actually excluded (`exclude_paths=[]`).
+**Action:** Replaced `Path.resolve()` with `os.path.realpath` inside the hot loop which avoids object creation overhead, and guarded the entire directory exclusion check block with `if excluded_exact_strs:` so the fast path completely skips redundant realpath and stat calls when no `exclude_paths` are configured.
