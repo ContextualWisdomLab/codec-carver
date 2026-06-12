@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import json
 import subprocess
 import sys
+import time
 from typing import Any, Protocol
 
 
@@ -183,6 +184,55 @@ def decide(pr: PullRequest, unresolved_threads: int, *, require_approval: bool) 
     return Decision(should_merge=not reasons, reasons=reasons)
 
 
+def auto_approval_blockers(pr: PullRequest, unresolved_threads: int) -> list[str]:
+    reasons: list[str] = []
+    if pr.is_draft:
+        reasons.append("draft PR")
+    if unresolved_threads:
+        reasons.append(f"{unresolved_threads} unresolved review thread(s)")
+    if pr.merge_state not in MERGEABLE_STATES and not (
+        pr.merge_state == "BLOCKED" and pr.review_decision != "APPROVED"
+    ):
+        reasons.append(f"merge state is {pr.merge_state}")
+    reasons.extend(check_blockers(pr.status_rollup))
+    return reasons
+
+
+def approve_pr(runner: Runner, repo: str, pr: PullRequest) -> None:
+    runner.run(
+        [
+            "pr",
+            "review",
+            str(pr.number),
+            "--repo",
+            repo,
+            "--approve",
+            "--body",
+            (
+                "Automated approval: checks passed, review threads are resolved, "
+                "and the scheduled PR merge gate found no non-review blockers."
+            ),
+        ]
+    )
+
+
+def wait_for_pr_refresh(
+    runner: Runner,
+    repo: str,
+    number: int,
+    *,
+    attempts: int = 3,
+    delay_seconds: int = 2,
+) -> PullRequest:
+    pr = load_pr(runner, repo, number)
+    for _ in range(1, attempts):
+        if pr.review_decision == "APPROVED":
+            return pr
+        time.sleep(delay_seconds)
+        pr = load_pr(runner, repo, number)
+    return pr
+
+
 def merge_pr(runner: Runner, repo: str, pr: PullRequest) -> None:
     runner.run(
         [
@@ -204,6 +254,7 @@ def process_queue(
     *,
     merge: bool,
     require_approval: bool,
+    auto_approve: bool = False,
 ) -> int:
     numbers = list_open_pr_numbers(runner, repo)
     if not numbers:
@@ -214,6 +265,21 @@ def process_queue(
     for number in numbers:
         pr = load_pr(runner, repo, number)
         unresolved_threads = unresolved_review_thread_count(runner, repo, number)
+
+        if merge and auto_approve and require_approval and pr.review_decision != "APPROVED":
+            blockers = auto_approval_blockers(pr, unresolved_threads)
+            if blockers:
+                print(f"PR #{pr.number} not auto-approved: {', '.join(blockers)}")
+            else:
+                try:
+                    approve_pr(runner, repo, pr)
+                except subprocess.CalledProcessError as exc:
+                    detail = (exc.stderr or str(exc)).strip()
+                    print(f"PR #{pr.number} auto-approval failed: {detail}")
+                else:
+                    print(f"PR #{pr.number} approved at {pr.head_sha}.")
+                    pr = wait_for_pr_refresh(runner, repo, pr.number)
+
         decision = decide(pr, unresolved_threads, require_approval=require_approval)
 
         if not decision.should_merge:
@@ -240,6 +306,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Require reviewDecision=APPROVED before merging.",
     )
+    parser.add_argument(
+        "--auto-approve",
+        action="store_true",
+        help="Approve PRs that have no non-review blockers before merging.",
+    )
     return parser
 
 
@@ -252,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
             args.repo,
             merge=args.merge and not args.dry_run,
             require_approval=args.require_approval,
+            auto_approve=args.auto_approve,
         )
     except (subprocess.CalledProcessError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
