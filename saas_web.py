@@ -2,11 +2,21 @@ import tempfile
 import logging
 import shutil
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse
 import media_shrinker
 
 app = FastAPI(title="Codec Carver SaaS")
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    return response
 logger = logging.getLogger(__name__)
 
 HTML_TEMPLATE = """
