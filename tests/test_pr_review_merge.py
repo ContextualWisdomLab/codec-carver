@@ -97,6 +97,92 @@ class ReviewMergeTests(unittest.TestCase):
         self.assertEqual(merged, 0)
         self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
 
+    def test_process_queue_auto_approves_then_merges(self):
+        runner = FakeRunner()
+        runner.json_outputs = [
+            [{"number": 7}],
+            pr_payload(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED"),
+            threads_payload(),
+            pr_payload(reviewDecision="APPROVED", mergeStateStatus="CLEAN"),
+        ]
+
+        merged = pr_review_merge.process_queue(
+            runner,
+            "owner/repo",
+            merge=True,
+            require_approval=True,
+            auto_approve=True,
+        )
+
+        self.assertEqual(merged, 1)
+        self.assertIn(
+            ["pr", "review", "7", "--repo", "owner/repo", "--approve", "--body"],
+            [command[:7] for command in runner.commands],
+        )
+        self.assertIn(
+            [
+                "pr",
+                "merge",
+                "7",
+                "--repo",
+                "owner/repo",
+                "--merge",
+                "--match-head-commit",
+                "abc123",
+            ],
+            runner.commands,
+        )
+
+    def test_process_queue_does_not_auto_approve_failing_check(self):
+        runner = FakeRunner()
+        runner.json_outputs = [
+            [{"number": 7}],
+            pr_payload(
+                mergeStateStatus="BLOCKED",
+                reviewDecision="REVIEW_REQUIRED",
+                statusCheckRollup=[
+                    {
+                        "__typename": "StatusContext",
+                        "context": "CodeRabbit",
+                        "state": "FAILURE",
+                    }
+                ],
+            ),
+            threads_payload(),
+        ]
+
+        merged = pr_review_merge.process_queue(
+            runner,
+            "owner/repo",
+            merge=True,
+            require_approval=True,
+            auto_approve=True,
+        )
+
+        self.assertEqual(merged, 0)
+        self.assertFalse(any(command[:3] == ["pr", "review", "7"] for command in runner.commands))
+        self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
+
+    def test_process_queue_does_not_auto_approve_dry_run(self):
+        runner = FakeRunner()
+        runner.json_outputs = [
+            [{"number": 7}],
+            pr_payload(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED"),
+            threads_payload(),
+        ]
+
+        merged = pr_review_merge.process_queue(
+            runner,
+            "owner/repo",
+            merge=False,
+            require_approval=True,
+            auto_approve=True,
+        )
+
+        self.assertEqual(merged, 0)
+        self.assertFalse(any(command[:3] == ["pr", "review", "7"] for command in runner.commands))
+        self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
+
     def test_process_queue_skips_unresolved_review_threads(self):
         runner = FakeRunner()
         runner.json_outputs = [

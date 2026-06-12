@@ -15,6 +15,11 @@ on:
         required: false
         default: true
         type: boolean
+      auto_approve:
+        description: "Approve PRs with no non-review blockers before merging"
+        required: false
+        default: true
+        type: boolean
 
 concurrency:
   group: scheduled-pr-review-merge
@@ -32,12 +37,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Process approved pull requests
+      - name: Process review-ready pull requests
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           REQUIRE_APPROVAL: ${{ github.event_name != 'workflow_dispatch' || inputs.require_approval }}
+          AUTO_APPROVE: ${{ github.event_name != 'workflow_dispatch' || inputs.auto_approve }}
         run: |
           mode_flag="--merge"
           if [ "$DRY_RUN" = "true" ]; then
@@ -49,7 +55,13 @@ jobs:
             approval_flag=""
           fi
 
+          auto_approve_flag="--auto-approve"
+          if [ "$AUTO_APPROVE" = "false" ]; then
+            auto_approve_flag=""
+          fi
+
           python3 scripts/pr_review_merge.py \
             --repo "$REPOSITORY" \
             "$mode_flag" \
-            $approval_flag
+            $approval_flag \
+            $auto_approve_flag
