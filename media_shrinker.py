@@ -202,13 +202,16 @@ def find_candidates(
     excluded_exact_set = frozenset(excluded_exact_strs)
 
     for dirpath_str, dirnames, filenames in os.walk(str(root)):
-        try:
-            resolved_dir_str = os.path.realpath(dirpath_str)
-        except OSError:
-            continue
-
+        resolved_dir_str = ""
         if excluded_exact_strs:
-            if resolved_dir_str in excluded_exact_set or resolved_dir_str.startswith(excluded_prefix_strs):
+            try:
+                resolved_dir_str = os.path.realpath(dirpath_str)
+            except OSError:
+                continue
+
+            if resolved_dir_str in excluded_exact_set or resolved_dir_str.startswith(
+                excluded_prefix_strs
+            ):
                 dirnames[:] = []
                 continue
 
