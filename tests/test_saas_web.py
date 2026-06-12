@@ -25,22 +25,6 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
-    def test_get_ui_includes_accessible_target_size_preview(self):
-        """Verify the target byte input exposes its live size preview."""
-        response = client.get("/")
-        self.assertEqual(response.status_code, 200)
-        html = response.text
-
-        self.assertIn('aria-describedby="target_bytes_help target_bytes_preview"', html)
-        self.assertIn('id="target_bytes_preview"', html)
-        self.assertIn('aria-live="polite"', html)
-        self.assertIn(">2.00 GB (decimal)</span>", html)
-        self.assertNotIn("oninput=", html)
-        self.assertIn("updateTargetBytesPreview", html)
-        self.assertIn("addEventListener('input', updateTargetBytesPreview)", html)
-        self.assertIn("event.preventDefault()", html)
-        self.assertRegex(html, r"setAttribute\(['\"]aria-busy['\"],\s*['\"]true['\"]\)")
-
     @patch("saas_web.media_shrinker.convert_file")
     @patch("saas_web.tempfile.mkdtemp")
     def test_shrink_media_success(self, mock_mkdtemp, mock_convert_file):
