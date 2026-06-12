@@ -248,6 +248,30 @@ def merge_pr(runner: Runner, repo: str, pr: PullRequest) -> None:
     )
 
 
+def load_pr_merge_result(runner: Runner, repo: str, number: int) -> dict[str, Any]:
+    payload = runner.run_json(
+        [
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "state,mergedAt,mergeCommit",
+        ]
+    )
+    return payload or {}
+
+
+def merge_commit_oid(payload: dict[str, Any]) -> str:
+    merge_commit = payload.get("mergeCommit") or {}
+    return merge_commit.get("oid") or "unknown merge commit"
+
+
+def is_merged(payload: dict[str, Any]) -> bool:
+    return payload.get("state") == "MERGED" or bool(payload.get("mergedAt"))
+
+
 def process_queue(
     runner: Runner,
     repo: str,
@@ -287,8 +311,15 @@ def process_queue(
             continue
 
         if merge:
-            merge_pr(runner, repo, pr)
-            print(f"PR #{pr.number} merged at {pr.head_sha}.")
+            try:
+                merge_pr(runner, repo, pr)
+            except subprocess.CalledProcessError:
+                merge_result = load_pr_merge_result(runner, repo, pr.number)
+                if not is_merged(merge_result):
+                    raise
+                print(f"PR #{pr.number} already merged at {merge_commit_oid(merge_result)}.")
+            else:
+                print(f"PR #{pr.number} merged at {pr.head_sha}.")
             merged += 1
         else:
             print(f"PR #{pr.number} ready to merge at {pr.head_sha}.")

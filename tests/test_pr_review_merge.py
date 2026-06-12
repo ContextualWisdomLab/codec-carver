@@ -7,6 +7,7 @@ from scripts import pr_review_merge
 class FakeRunner:
     def __init__(self):
         self.json_outputs = []
+        self.run_outputs = []
         self.commands = []
 
     def run_json(self, args):
@@ -15,6 +16,11 @@ class FakeRunner:
 
     def run(self, args):
         self.commands.append(args)
+        if self.run_outputs:
+            output = self.run_outputs.pop(0)
+            if isinstance(output, BaseException):
+                raise output
+            return output
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
 
@@ -129,6 +135,47 @@ class ReviewMergeTests(unittest.TestCase):
                 "--merge",
                 "--match-head-commit",
                 "abc123",
+            ],
+            runner.commands,
+        )
+
+    def test_process_queue_treats_already_merged_race_as_success(self):
+        runner = FakeRunner()
+        runner.json_outputs = [
+            [{"number": 7}],
+            pr_payload(),
+            threads_payload(),
+            {
+                "state": "MERGED",
+                "mergedAt": "2026-06-12T07:02:31Z",
+                "mergeCommit": {"oid": "merge123"},
+            },
+        ]
+        runner.run_outputs = [
+            subprocess.CalledProcessError(
+                returncode=1,
+                cmd=["gh", "pr", "merge", "7"],
+                stderr="Pull request already merged",
+            )
+        ]
+
+        merged = pr_review_merge.process_queue(
+            runner,
+            "owner/repo",
+            merge=True,
+            require_approval=True,
+        )
+
+        self.assertEqual(merged, 1)
+        self.assertIn(
+            [
+                "pr",
+                "view",
+                "7",
+                "--repo",
+                "owner/repo",
+                "--json",
+                "state,mergedAt,mergeCommit",
             ],
             runner.commands,
         )
