@@ -25,6 +25,17 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
+    def test_get_ui_includes_accessible_target_size_preview(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+
+        self.assertIn('aria-describedby="target_bytes_help target_bytes_preview"', html)
+        self.assertIn('id="target_bytes_preview"', html)
+        self.assertIn('aria-live="polite"', html)
+        self.assertIn(">2.00 GB</span>", html)
+        self.assertIn("btn.setAttribute('aria-busy', 'true')", html)
+
     @patch("saas_web.media_shrinker.convert_file")
     @patch("saas_web.tempfile.mkdtemp")
     def test_shrink_media_success(self, mock_mkdtemp, mock_convert_file):
