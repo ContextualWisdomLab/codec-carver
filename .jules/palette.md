@@ -18,3 +18,7 @@
 ## 2024-05-24 - Dynamic Human-Readable File Size Preview
 **Learning:** Users often struggle to conceptualize large numbers in bytes (e.g., 2000000000), leading to magnitude errors. Providing a live, ARIA-announced preview in familiar units (MB, GB) right next to the input drastically improves confidence and prevents submission mistakes.
 **Action:** Always pair raw byte inputs with a dynamic, human-readable preview using an `aria-live` region.
+
+## 2024-06-12 - Baseline HTML Accessibility and Responsiveness
+**Learning:** Missing `lang="en"` causes screen readers to struggle with pronunciation, and missing viewport meta tags cause mobile devices to zoom out uncomfortably, breaking the responsive CSS.
+**Action:** Always include `<html lang="en">` and `<meta name="viewport" content="width=device-width, initial-scale=1.0">` in raw HTML templates for baseline a11y and mobile UX.
