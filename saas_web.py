@@ -36,20 +36,47 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required oninput="const val = parseInt(this.value, 10); const preview = document.getElementById('target_bytes_preview'); if (isNaN(val) || val <= 0) { preview.innerText = ''; } else if (val < 1000) { preview.innerText = val + ' B'; } else if (val < 1000000) { preview.innerText = (val / 1000).toFixed(2) + ' KB'; } else if (val < 1000000000) { preview.innerText = (val / 1000000).toFixed(2) + ' MB'; } else { preview.innerText = (val / 1000000000).toFixed(2) + ' GB'; }">
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~2GB)</span>
-                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #28a745;">2.00 GB</span>
+                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #28a745;">2.00 GB (decimal)</span>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
         <script>
-            document.getElementById('shrink-form').addEventListener('submit', function() {
+            function formatTargetBytes(value) {
+                if (Number.isNaN(value) || value <= 0) {
+                    return '';
+                }
+                if (value < 1000) {
+                    return value + ' B';
+                }
+                if (value < 1000000) {
+                    return (value / 1000).toFixed(2) + ' KB (decimal)';
+                }
+                if (value < 1000000000) {
+                    return (value / 1000000).toFixed(2) + ' MB (decimal)';
+                }
+                return (value / 1000000000).toFixed(2) + ' GB (decimal)';
+            }
+
+            function updateTargetBytesPreview() {
+                const input = document.getElementById('target_bytes');
+                const preview = document.getElementById('target_bytes_preview');
+                preview.innerText = formatTargetBytes(parseInt(input.value, 10));
+            }
+
+            document.getElementById('target_bytes').addEventListener('input', updateTargetBytesPreview);
+            updateTargetBytesPreview();
+
+            document.getElementById('shrink-form').addEventListener('submit', function(event) {
                 const btn = document.getElementById('submit-btn');
-                setTimeout(() => {
-                    btn.disabled = true;
-                    btn.innerText = 'Processing...';
-                    btn.setAttribute('aria-busy', 'true');
-                }, 10);
+                if (btn.disabled) {
+                    event.preventDefault();
+                    return;
+                }
+                btn.disabled = true;
+                btn.innerText = 'Processing...';
+                btn.setAttribute('aria-busy', 'true');
             });
         </script>
     </div>
