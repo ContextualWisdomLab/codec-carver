@@ -34,3 +34,9 @@
 ## 2024-06-11 - [Optimize find_candidates batch gathering]
 **Learning:** During batch directory traversal (e.g. `os.walk` in `find_candidates`), attempting to resolve every directory with `Path.resolve()` introduces heavy filesystem access and instantiation overhead, especially when no directories are actually excluded (`exclude_paths=[]`).
 **Action:** Replaced `Path.resolve()` with `os.path.realpath` inside the hot loop which avoids object creation overhead, and guarded the entire directory exclusion check block with `if excluded_exact_strs:` so the fast path completely skips redundant realpath and stat calls when no `exclude_paths` are configured.
+## 2026-06-12 - Fast Path for Regex Log Parsing
+**Learning:** Regex execution in Python, even when compiled, is slower than a simple substring  check. When parsing massive logs (like FFmpeg stderr) where 99% of lines are irrelevant progress updates, adding a fast-path substring check before the regex significantly boosts performance.
+**Action:** Use substring checks as a fast filter before executing regular expressions when processing large text streams where matches are infrequent.
+## 2026-06-12 - Fast Path for Regex Log Parsing
+**Learning:** Regex execution in Python, even when compiled, is slower than a simple substring `in` check. When parsing massive logs (like FFmpeg stderr) where 99% of lines are irrelevant progress updates, adding a fast-path substring check before the regex significantly boosts performance.
+**Action:** Use substring checks as a fast filter before executing regular expressions when processing large text streams where matches are infrequent.

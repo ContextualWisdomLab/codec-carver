@@ -523,6 +523,10 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
     intervals: list[SilenceInterval] = []
     current_start: float | None = None
     for line in stderr.splitlines():
+        # Fast path: Substring search is much faster than regex.
+        # Most lines are ffmpeg progress updates (e.g., 'frame=...')
+        if "silence" not in line:
+            continue
         start_match = SILENCE_START_RE.search(line)
         if start_match:
             current_start = float(start_match.group("value"))
