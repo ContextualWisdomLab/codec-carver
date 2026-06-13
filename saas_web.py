@@ -35,6 +35,8 @@ HTML_TEMPLATE = """
         button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
         .required-star { color: #dc3545; }
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
+        .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
+        @keyframes spinner-border { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -59,7 +61,7 @@ HTML_TEMPLATE = """
                 const btn = document.getElementById('submit-btn');
                 setTimeout(() => {
                     btn.disabled = true;
-                    btn.innerText = 'Processing...';
+                    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Processing...';
                     btn.setAttribute('aria-busy', 'true');
                 }, 10);
             });
