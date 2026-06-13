@@ -1,11 +1,12 @@
 💡 What
-Modified the `find_candidates` function in `media_shrinker.py` to check file extensions using a fast string operation (`f.lower().endswith(SUPPORTED_EXTS_TUPLE)`) before instantiating `pathlib.Path` objects.
+Added a CSS spinning loader animation to the form submission button and updated the javascript inline script to replace the button's content with an ARIA-hidden spinner alongside "Processing...".
 
 🎯 Why
-Instantiating `pathlib.Path` objects in a tight loop iterating over thousands of files is surprisingly slow in Python. By pre-filtering files with a fast string match, we skip expensive object creation for all non-media files, which significantly speeds up the initial scanning phase.
+When users submit the form (which processes large media files), the action may take significant time. Adding an immediate, visual spinning loading state reassures the user that their submission is actively being processed, preventing confusion and double submissions.
 
-📊 Impact
-Reduces file discovery time by nearly 50% in directories with a large number of non-media files (e.g., from ~1.9s to ~1.0s in tests checking 100k files).
+📸 Before/After
+Before: The button text simply changed to "Processing...".
+After: The button text changes to "Processing..." accompanied by a smoothly animating CSS spinner.
 
-🔬 Measurement
-Review the changes to `media_shrinker.py`. The time saved can be observed during the initial "scanning" phase of `media_shrinker.py` on directories with many non-media files. Verified via benchmark scripts prior to commit.
+♿ Accessibility
+The spinner span includes `aria-hidden="true"` so that screen readers do not attempt to announce the empty decorative element. Screen readers already receive the `aria-busy="true"` attribute (added previously) and the text update, so this visual addition improves the experience for sighted users without creating noise for non-visual users.

@@ -22,3 +22,7 @@
 ## 2024-06-12 - Baseline HTML Accessibility and Responsiveness
 **Learning:** Missing `lang="en"` causes screen readers to struggle with pronunciation, and missing viewport meta tags cause mobile devices to zoom out uncomfortably, breaking the responsive CSS.
 **Action:** Always include `<html lang="en">` and `<meta name="viewport" content="width=device-width, initial-scale=1.0">` in raw HTML templates for baseline a11y and mobile UX.
+
+## 2024-06-13 - Intercepting form submissions for testing visual loading states
+**Learning:** When using Playwright to verify UI changes involving form submissions that trigger file downloads or navigate away from the page context, the page context may close or hang before the screenshot can capture visual states (like loading spinners).
+**Action:** When using Playwright to verify UI changes involving form submissions that trigger file downloads or navigate away from the page context, explicitly inject a script to intercept the `submit` event and call `e.preventDefault()`. This prevents the browser from discarding the current DOM state or hanging on the download, allowing reliable capture of transitional states (e.g., loading spinners) and screenshots.
