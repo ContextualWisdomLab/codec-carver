@@ -21,7 +21,7 @@ class TestSaasWeb(unittest.TestCase):
         html = response.text
 
         self.assertIn('accept="audio/*,video/*"', html)
-        self.assertIn('aria-describedby="file_help"', html)
+        self.assertIn('aria-describedby="file_help file_size_preview"', html)
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
