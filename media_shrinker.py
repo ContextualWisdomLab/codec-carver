@@ -1433,7 +1433,15 @@ def _parse_probe_payload(payload: dict[str, Any], source_path: Path) -> MediaPro
     if duration <= 0:
         raise MediaShrinkerError(f"{source_path} has no usable duration")
 
-    source_size = source_path.stat().st_size
+    size_str = format_section.get("size")
+    if size_str is not None:
+        try:
+            source_size = int(size_str)
+        except ValueError:
+            source_size = source_path.stat().st_size
+    else:
+        source_size = source_path.stat().st_size
+
     audio_bit_rate = _first_int(
         audio_stream.get("bit_rate"), format_section.get("bit_rate")
     )
