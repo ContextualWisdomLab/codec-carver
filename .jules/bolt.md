@@ -40,3 +40,7 @@
 ## 2026-06-12 - Fast Path for Regex Log Parsing
 **Learning:** Regex execution in Python, even when compiled, is slower than a simple substring `in` check. When parsing massive logs (like FFmpeg stderr) where 99% of lines are irrelevant progress updates, adding a fast-path substring check before the regex significantly boosts performance.
 **Action:** Use substring checks as a fast filter before executing regular expressions when processing large text streams where matches are infrequent.
+
+## 2026-06-14 - FFprobe JSON Format Optimization
+**Learning:** When retrieving size during probe parsing, FFprobe includes `format.size` in the JSON payload. Relying on this avoids the heavy system calls introduced by `Path.stat()`.
+**Action:** Use size values provided by ffprobe JSON parsing directly before falling back to system stat calls.
