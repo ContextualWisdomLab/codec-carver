@@ -45,8 +45,9 @@ HTML_TEMPLATE = """
         <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
             <p>
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help" required>
+                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="const f = this.files[0]; const preview = document.getElementById('file_size_preview'); if(f) { const val = f.size; let text = ''; if (val < 1000) text = val + ' B'; else if (val < 1000000) text = (val / 1000).toFixed(2) + ' KB'; else if (val < 1000000000) text = (val / 1000000).toFixed(2) + ' MB'; else text = (val / 1000000000).toFixed(2) + ' GB'; preview.innerText = 'Selected file size: ' + text; } else { preview.innerText = ''; }">
                 <br><span id="file_help" class="help-text">Select an audio or video file to shrink.</span>
+                <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #17a2b8;"></span>
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>

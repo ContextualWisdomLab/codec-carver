@@ -26,3 +26,6 @@
 ## 2024-06-13 - Intercepting form submissions for testing visual loading states
 **Learning:** When using Playwright to verify UI changes involving form submissions that trigger file downloads or navigate away from the page context, the page context may close or hang before the screenshot can capture visual states (like loading spinners).
 **Action:** When using Playwright to verify UI changes involving form submissions that trigger file downloads or navigate away from the page context, explicitly inject a script to intercept the `submit` event and call `e.preventDefault()`. This prevents the browser from discarding the current DOM state or hanging on the download, allowing reliable capture of transitional states (e.g., loading spinners) and screenshots.
+## 2024-06-14 - Add dynamic human-readable file size preview to file upload
+**Learning:** In simple web forms without React/Vue, inline Javascript `onchange` events can provide essential dynamic accessibility feedback.
+**Action:** Always pair raw file upload inputs with a dynamic, human-readable file size preview using an `aria-live` region, accessible via `aria-describedby`.
