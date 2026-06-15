@@ -44,3 +44,7 @@
 ## 2026-06-14 - FFprobe JSON Format Optimization
 **Learning:** When retrieving size during probe parsing, FFprobe includes `format.size` in the JSON payload. Relying on this avoids the heavy system calls introduced by `Path.stat()`.
 **Action:** Use size values provided by ffprobe JSON parsing directly before falling back to system stat calls.
+
+## 2024-06-15 - Fast Path Sorting using removeprefix
+**Learning:** For performance-critical path sorting or manipulation of large lists in Python, using `Path.relative_to()` or `os.path.relpath()` inside `lambda`s/loops incurs heavy overhead. `Path.relative_to` creates new `Path` instances each time, and `os.path.relpath()` triggers `os.getcwd()` system calls if absolute paths aren't guaranteed.
+**Action:** Pre-compute the root path as a string (e.g., `root.as_posix()`) with a trailing slash if necessary, and use string operations like `item[0].as_posix().removeprefix(root_prefix).casefold()`. This avoids object instantiation and system calls during sorting, accelerating $O(N \log N)$ operations substantially.
