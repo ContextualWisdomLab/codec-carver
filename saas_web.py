@@ -116,8 +116,14 @@ def shrink_media(
             safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename
+        max_upload_bytes = 5 * 1024 * 1024 * 1024  # 5 GB limit
+        bytes_written = 0
         with open(source_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+            while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
+                bytes_written += len(chunk)
+                if bytes_written > max_upload_bytes:
+                    raise ValueError("File exceeds maximum allowed upload size")
+                f.write(chunk)
     except Exception:
         cleanup_temp_dir(temp_dir_path)
         logger.exception("Failed to prepare uploaded media")
