@@ -327,7 +327,9 @@ def process_queue(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser.add_argument("--repo", required=True, help="Repository in OWNER/NAME form.")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--merge", action="store_true", help="Merge ready PRs.")
