@@ -262,8 +262,15 @@ def find_candidates(
             if include_under_limit or size > size_limit_bytes:
                 candidates.append((Path(file_path_str), size))
 
+    # Fast path: Pre-compute the root string prefix to avoid slow Path.relative_to() instantiation in the sort loop
+    # We add a trailing slash to handle cases where root represents a directory structure.
+    root_prefix = root.as_posix()
+    if not root_prefix.endswith("/"):
+        root_prefix += "/"
+
     return sorted(
-        candidates, key=lambda item: item[0].relative_to(root).as_posix().casefold()
+        candidates,
+        key=lambda item: item[0].as_posix().removeprefix(root_prefix).casefold(),
     )
 
 
@@ -1282,8 +1289,15 @@ def main(argv: list[str] | None = None) -> int:
 
     results = _execute_conversions(candidates, args, root, output_dir)
 
+    # Fast path: Pre-compute the root string prefix to avoid slow Path.relative_to() instantiation in the sort loop
+    root_prefix = root.as_posix()
+    if not root_prefix.endswith("/"):
+        root_prefix += "/"
+
     results.sort(
-        key=lambda result: result.source_path.relative_to(root).as_posix().casefold()
+        key=lambda result: result.source_path.as_posix()
+        .removeprefix(root_prefix)
+        .casefold()
     )
     write_report(results, report_path)
     failed = [
