@@ -26,3 +26,8 @@
 **Vulnerability:** Uncontrolled Resource Consumption (CWE-400) / Missing input length limits via unbound file uploads.
 **Learning:** Using `shutil.copyfileobj` blindly copies an uploaded stream directly to disk without size constraints. An attacker could upload an infinitely large file or a file large enough to exhaust server storage space, causing a Denial of Service.
 **Prevention:** Do not use unbounded `shutil.copyfileobj` for web uploads. Implement chunked reads and track bytes written, raising an exception safely if a predefined strict maximum file size is exceeded.
+
+## 2026-06-25 - [Sentinel: Unsafe Subprocess Paths leading to Argument Injection]
+**Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
+**Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
+**Prevention:** Always convert file paths passed to `subprocess.run` to their absolute forms (e.g., `path.absolute()`) when a tool does not support an explicit input flag or `--` delimiter, to guarantee the argument begins with a directory separator.
