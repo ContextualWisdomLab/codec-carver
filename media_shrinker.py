@@ -134,7 +134,7 @@ class ConversionPlan:
                 ) from exc
             args[input_index] = str(input_path)
         if output_path is not None:
-            args[-1] = str(output_path)
+            args[-1] = str(output_path.absolute())
 
         if overwrite:
             args = ["-y" if arg == "-n" else arg for arg in args]
@@ -208,7 +208,9 @@ def find_candidates(
             continue
 
         if excluded_exact_strs:
-            if resolved_dir_str in excluded_exact_set or resolved_dir_str.startswith(excluded_prefix_strs):
+            if resolved_dir_str in excluded_exact_set or resolved_dir_str.startswith(
+                excluded_prefix_strs
+            ):
                 dirnames[:] = []
                 continue
 
@@ -235,7 +237,9 @@ def find_candidates(
                     except OSError:
                         continue
 
-                if resolved_d_str in excluded_exact_set or resolved_d_str.startswith(excluded_prefix_strs):
+                if resolved_d_str in excluded_exact_set or resolved_d_str.startswith(
+                    excluded_prefix_strs
+                ):
                     continue
             valid_dirs.append(d)
         dirnames[:] = valid_dirs
@@ -256,7 +260,10 @@ def find_candidates(
 
             if excluded_exact_strs:
                 resolved_file_str = os.path.join(resolved_dir_str, f)
-                if resolved_file_str in excluded_exact_set or resolved_file_str.startswith(excluded_prefix_strs):
+                if (
+                    resolved_file_str in excluded_exact_set
+                    or resolved_file_str.startswith(excluded_prefix_strs)
+                ):
                     continue
 
             if include_under_limit or size > size_limit_bytes:
@@ -614,7 +621,7 @@ def build_icloud_download_command(
 ) -> list[str]:
     """Build a safe iCloud download command for source_path."""
 
-    return [brctl_path, "download", str(source_path)]
+    return [brctl_path, "download", str(source_path.absolute())]
 
 
 def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> None:
@@ -1582,7 +1589,7 @@ def _copy_macos_creation_time(
         "%m/%d/%Y %H:%M:%S"
     )
     subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest)],
+        [setfile_path, "-d", creation_date, str(dest.absolute())],
         check=False,
         capture_output=True,
         text=True,
