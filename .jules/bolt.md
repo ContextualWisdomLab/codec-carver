@@ -48,3 +48,7 @@
 ## 2024-06-15 - Fast Path Sorting using removeprefix
 **Learning:** For performance-critical path sorting or manipulation of large lists in Python, using `Path.relative_to()` or `os.path.relpath()` inside `lambda`s/loops incurs heavy overhead. `Path.relative_to` creates new `Path` instances each time, and `os.path.relpath()` triggers `os.getcwd()` system calls if absolute paths aren't guaranteed.
 **Action:** Pre-compute the root path as a string (e.g., `root.as_posix()`) with a trailing slash if necessary, and use string operations like `item[0].as_posix().removeprefix(root_prefix).casefold()`. This avoids object instantiation and system calls during sorting, accelerating $O(N \log N)$ operations substantially.
+
+## 2024-06-16 - Avoid repeated frozenset union overhead in tight loops
+**Learning:** In batch processing code where a large `frozenset` is repeatedly augmented with a single item using `frozenset(large_set | {new_item})` inside a loop, it causes O(N^2) memory and CPU overhead. This is because every union creates a completely new `frozenset` object, copying all existing elements.
+**Action:** Pass the large `frozenset` unmodified into the loop or function. When collision checks are required for the single `new_item`, perform an explicit, independent equality check against it rather than forcing it into the large set.

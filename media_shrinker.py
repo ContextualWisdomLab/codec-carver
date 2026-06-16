@@ -802,6 +802,7 @@ def _find_valid_existing_output(
         candidate = _planned_output_path(segment_rel_source, output_dir, suffix)
         if not candidate.exists():
             continue
+        _ensure_not_source_path(source, candidate)
         _ensure_not_protected_source_path(resolved_protected_sources, candidate)
         try:
             candidate_size = candidate.stat().st_size
@@ -876,6 +877,7 @@ def _execute_segment_conversion(
     )
 
     final_output = _resolve_collision(plan.output_path, overwrite=overwrite)
+    _ensure_not_source_path(source, final_output)
     first_result = _execute_plan(
         plan,
         source,
@@ -900,6 +902,7 @@ def _execute_segment_conversion(
             segment=segment,
         )
         final_output = _resolve_collision(opus_plan.output_path, overwrite=overwrite)
+        _ensure_not_source_path(source, final_output)
         first_result = _execute_plan(
             opus_plan,
             source,
@@ -982,11 +985,11 @@ def _convert_segment(
     protected_sources: frozenset[Path] = frozenset(),
 ) -> ConversionResult:
     """Convert one media segment fitting the target size limit."""
-    # protected_sources is passed from convert_file where it is already fully resolved.
-    # We only need to resolve the source itself.
-    resolved_protected_sources = frozenset(protected_sources | {source.resolve()})
     existing_suffixes = (".flac", ".opus")
     segment_rel_source = _segment_source_path(rel_source, segment)
+
+    # We pass the protected sources explicitly. In the child functions we manually check
+    # _ensure_not_source_path(source, candidate) to protect the source.
     _remove_invalid_legacy_outputs(
         source,
         rel_source=rel_source,
@@ -996,7 +999,7 @@ def _convert_segment(
         target_bytes=target_bytes,
         ffprobe_path=ffprobe_path,
         max_segment_duration_seconds=max_segment_duration_seconds,
-        protected_sources=resolved_protected_sources,
+        protected_sources=protected_sources,
     )
 
     existing_result = _find_valid_existing_output(
@@ -1008,7 +1011,7 @@ def _convert_segment(
         original_size=original_size,
         ffprobe_path=ffprobe_path,
         max_segment_duration_seconds=max_segment_duration_seconds,
-        resolved_protected_sources=resolved_protected_sources,
+        resolved_protected_sources=protected_sources,
         existing_suffixes=existing_suffixes,
     )
     if existing_result is not None:
@@ -1028,7 +1031,7 @@ def _convert_segment(
         ffmpeg_threads=ffmpeg_threads,
         overwrite=overwrite,
         max_segment_duration_seconds=max_segment_duration_seconds,
-        resolved_protected_sources=resolved_protected_sources,
+        resolved_protected_sources=protected_sources,
     )
 
 
@@ -1051,6 +1054,7 @@ def _remove_invalid_legacy_outputs(
         canonical_output = _planned_output_path(rel_source, output_dir, suffix)
         if legacy_output == canonical_output or not legacy_output.exists():
             continue
+        _ensure_not_source_path(source, legacy_output)
         _ensure_not_protected_source_path(protected_sources, legacy_output)
         try:
             legacy_size = legacy_output.stat().st_size
