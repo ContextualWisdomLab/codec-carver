@@ -29,3 +29,6 @@
 ## 2024-06-14 - Add dynamic human-readable file size preview to file upload
 **Learning:** In simple web forms without React/Vue, inline Javascript `onchange` events can provide essential dynamic accessibility feedback.
 **Action:** Always pair raw file upload inputs with a dynamic, human-readable file size preview using an `aria-live` region, accessible via `aria-describedby`.
+## 2024-06-16 - Client-Side Validation for File Size
+**Learning:** In web forms with strict backend file size limits, failing to provide client-side validation results in poor UX where users wait for long uploads only to receive a server error.
+**Action:** Always mirror backend file size limits to frontend client-side validation (via `setCustomValidity`) combined with an `aria-live` preview region to provide immediate, accessible feedback and prevent slow user mistakes.
