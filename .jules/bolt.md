@@ -48,3 +48,6 @@
 ## 2024-06-15 - Fast Path Sorting using removeprefix
 **Learning:** For performance-critical path sorting or manipulation of large lists in Python, using `Path.relative_to()` or `os.path.relpath()` inside `lambda`s/loops incurs heavy overhead. `Path.relative_to` creates new `Path` instances each time, and `os.path.relpath()` triggers `os.getcwd()` system calls if absolute paths aren't guaranteed.
 **Action:** Pre-compute the root path as a string (e.g., `root.as_posix()`) with a trailing slash if necessary, and use string operations like `item[0].as_posix().removeprefix(root_prefix).casefold()`. This avoids object instantiation and system calls during sorting, accelerating $O(N \log N)$ operations substantially.
+## 2024-05-24 - Batch Processing Path Checks
+**Learning:** Instantiating `frozenset` objects via union operations (e.g., `frozenset(large_set | {item})`) inside tight inner loops causes severe O(N^2) overhead, especially when `large_set` contains thousands of path strings. Passing the original set unmodified and checking individual items independently is far more performant and requires only a constant time overhead per iteration.
+**Action:** When filtering or checking exclusions inside batch process loops, do not modify or clone large collections per iteration. Always use the base set directly and check item equality independently if needed.

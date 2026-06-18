@@ -983,8 +983,8 @@ def _convert_segment(
 ) -> ConversionResult:
     """Convert one media segment fitting the target size limit."""
     # protected_sources is passed from convert_file where it is already fully resolved.
-    # We only need to resolve the source itself.
-    resolved_protected_sources = frozenset(protected_sources | {source.resolve()})
+    # _ensure_not_source_path explicitly checks against the current source independently.
+    resolved_protected_sources = protected_sources
     existing_suffixes = (".flac", ".opus")
     segment_rel_source = _segment_source_path(rel_source, segment)
     _remove_invalid_legacy_outputs(
@@ -1302,9 +1302,9 @@ def main(argv: list[str] | None = None) -> int:
         root_prefix += "/"
 
     results.sort(
-        key=lambda result: result.source_path.as_posix()
-        .removeprefix(root_prefix)
-        .casefold()
+        key=lambda result: (
+            result.source_path.as_posix().removeprefix(root_prefix).casefold()
+        )
     )
     write_report(results, report_path)
     failed = [
