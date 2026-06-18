@@ -16,3 +16,8 @@
 **Vulnerability:** Local File Inclusion and Server-Side Request Forgery via unrestricted FFmpeg/FFprobe protocols.
 **Learning:** The application executed FFmpeg and FFprobe on user-supplied media files without protocol restrictions. Malicious files (like HLS playlists) could leverage protocols like `http` to exfiltrate data or access internal services.
 **Prevention:** Always enforce `"-protocol_whitelist", "file,crypto,data"` before the input flag when invoking FFmpeg/FFprobe to restrict processing to safe local protocols.
+
+## 2026-06-08 - Sentinel: Argument Injection in subprocess
+**Vulnerability:** Argument Injection via filenames starting with hyphens in `subprocess.run` (CWE-88).
+**Learning:** Even when avoiding `shell=True` and using argument lists for subprocesses, passing untrusted variables (like filenames) directly without an explicit argument flag (like `-i`) or delimiter (like `--`) allows those variables to be parsed as command-line options by the target utility if they begin with a hyphen (e.g., `-version`).
+**Prevention:** Always place the explicit input flag (e.g., `-i` for `ffmpeg`/`ffprobe`) immediately preceding any variable file paths passed into an argument list. If an explicit flag is unavailable, use `--` to indicate the end of options before passing file paths, or ensure the path is absolute (thus starting with a directory separator, not a hyphen).
