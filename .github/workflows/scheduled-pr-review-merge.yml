@@ -20,6 +20,11 @@ on:
         required: false
         default: true
         type: boolean
+      trigger_reviews:
+        description: "Dispatch OpenCode review for PR heads that lack one"
+        required: false
+        default: true
+        type: boolean
 
 concurrency:
   group: scheduled-pr-review-merge
@@ -111,6 +116,7 @@ jobs:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           REQUIRE_APPROVAL: ${{ github.event_name != 'workflow_dispatch' || inputs.require_approval }}
           AUTO_APPROVE: ${{ github.event_name != 'workflow_dispatch' || inputs.auto_approve }}
+          TRIGGER_REVIEWS: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_reviews }}
         run: |
           mode_flag="--merge"
           if [ "$DRY_RUN" = "true" ]; then
@@ -127,8 +133,14 @@ jobs:
             auto_approve_flag=""
           fi
 
+          trigger_reviews_flag="--trigger-reviews"
+          if [ "$TRIGGER_REVIEWS" = "false" ]; then
+            trigger_reviews_flag=""
+          fi
+
           python3 scripts/pr_review_merge.py \
             --repo "$REPOSITORY" \
             "$mode_flag" \
             $approval_flag \
-            $auto_approve_flag
+            $auto_approve_flag \
+            $trigger_reviews_flag
