@@ -84,7 +84,7 @@ HTML_TEMPLATE = """
         <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
             <p>
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="const f = this.files[0]; const preview = document.getElementById('file_size_preview'); if(f) { const val = f.size; let text = ''; if (val < 1000) text = val + ' B'; else if (val < 1000000) text = (val / 1000).toFixed(2) + ' KB'; else if (val < 1000000000) text = (val / 1000000).toFixed(2) + ' MB'; else text = (val / 1000000000).toFixed(2) + ' GB'; preview.innerText = 'Selected file size: ' + text; } else { preview.innerText = ''; }">
+                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="updateFileSizePreview(this)">
                 <br><span id="file_help" class="help-text">Select an audio or video file to shrink.</span>
                 <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #17a2b8;"></span>
             </p>
@@ -97,6 +97,35 @@ HTML_TEMPLATE = """
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
         <script>
+            const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
+            function formatBinaryBytes(value) {
+                const units = ['B', 'KiB', 'MiB', 'GiB'];
+                let size = value;
+                let unit = 0;
+                while (size >= 1024 && unit < units.length - 1) {
+                    size = size / 1024;
+                    unit += 1;
+                }
+                return unit === 0 ? size + ' ' + units[unit] : size.toFixed(2) + ' ' + units[unit];
+            }
+            function updateFileSizePreview(input) {
+                const file = input.files[0];
+                const preview = document.getElementById('file_size_preview');
+                input.setCustomValidity('');
+                preview.style.color = '#17a2b8';
+                if (!file) {
+                    preview.innerText = '';
+                    return;
+                }
+                const text = formatBinaryBytes(file.size);
+                if (file.size > MAX_UPLOAD_BYTES) {
+                    input.setCustomValidity('File exceeds 5 GiB limit.');
+                    preview.innerText = 'Selected file size: ' + text + ' (exceeds 5 GiB limit)';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+                preview.innerText = 'Selected file size: ' + text;
+            }
             document.getElementById('shrink-form').addEventListener('submit', function() {
                 const btn = document.getElementById('submit-btn');
                 setTimeout(() => {
