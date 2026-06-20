@@ -564,7 +564,7 @@ jobs:
           opencode_json_file="${OPENCODE_OUTPUT_FILE}.jsonl"
           opencode_export_file="${OPENCODE_OUTPUT_FILE}.session.json"
           set +e
-          timeout 2400 opencode run "$(cat "$prompt_file")" \
+          timeout 300 opencode run "$(cat "$prompt_file")" \
             --pure \
             --agent ci-review \
             --model "$MODEL" \
@@ -667,7 +667,7 @@ jobs:
           opencode_json_file="${OPENCODE_OUTPUT_FILE}.jsonl"
           opencode_export_file="${OPENCODE_OUTPUT_FILE}.session.json"
           set +e
-          timeout 300 opencode run "$(cat "$prompt_file")" \
+          timeout 180 opencode run "$(cat "$prompt_file")" \
             --pure \
             --agent ci-review-fallback \
             --model "$MODEL" \
@@ -770,7 +770,7 @@ jobs:
           opencode_json_file="${OPENCODE_OUTPUT_FILE}.jsonl"
           opencode_export_file="${OPENCODE_OUTPUT_FILE}.session.json"
           set +e
-          timeout 300 opencode run "$(cat "$prompt_file")" \
+          timeout 180 opencode run "$(cat "$prompt_file")" \
             --pure \
             --agent ci-review-fallback \
             --model "$MODEL" \
