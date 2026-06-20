@@ -217,6 +217,27 @@ class ProbeMediaTests(unittest.TestCase):
 
         self.assertIn("ffprobe returned invalid JSON for test.wav", str(cm.exception))
 
+    def test_parse_probe_payload_uses_known_source_size_without_stat(self) -> None:
+        payload = {
+            "streams": [
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "duration": "1.0",
+                    "bit_rate": "128000",
+                }
+            ],
+            "format": {"duration": "1.0", "format_name": "wav"},
+        }
+
+        probe = media_shrinker._parse_probe_payload(
+            payload,
+            Path("missing.wav"),
+            source_size=123,
+        )
+
+        self.assertEqual(probe.size_bytes, 123)
+
 
 class PlanningTests(unittest.TestCase):
     def test_pcm_wav_uses_lossless_flac_first_and_preserves_container_metadata(
@@ -507,7 +528,10 @@ class PlanningTests(unittest.TestCase):
             original_probe_media = media_shrinker.probe_media
 
             def fake_probe_media(
-                path: Path, *, ffprobe_path: str = "ffprobe"
+                path: Path,
+                *,
+                ffprobe_path: str = "ffprobe",
+                source_size: int | None = None,
             ) -> MediaProbe:
                 return output_probe if path.suffix == ".flac" else source_probe
 
