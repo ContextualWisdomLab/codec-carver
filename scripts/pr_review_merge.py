@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import re
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ MERGEABLE_STATES = {"CLEAN", "HAS_HOOKS", "UNSTABLE"}
 PASSING_STATES = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 FAILING_STATES = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}
 PENDING_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
+DISPATCH_MARKER = "<!-- scheduled-pr-review-merge opencode-dispatch"
 
 
 class Runner(Protocol):
@@ -46,6 +48,8 @@ class GhRunner:
 class PullRequest:
     number: int
     title: str
+    base_ref: str
+    base_sha: str
     head_sha: str
     is_draft: bool
     merge_state: str
@@ -95,13 +99,15 @@ def load_pr(runner: Runner, repo: str, number: int) -> PullRequest:
             "--json",
             (
                 "number,title,headRefOid,isDraft,mergeStateStatus,"
-                "reviewDecision,statusCheckRollup"
+                "reviewDecision,statusCheckRollup,baseRefName,baseRefOid"
             ),
         ]
     )
     return PullRequest(
         number=payload["number"],
         title=payload["title"],
+        base_ref=payload["baseRefName"],
+        base_sha=payload["baseRefOid"],
         head_sha=payload["headRefOid"],
         is_draft=bool(payload["isDraft"]),
         merge_state=payload.get("mergeStateStatus") or "UNKNOWN",
@@ -157,6 +163,117 @@ def authenticated_login(runner: Runner) -> str:
     if not isinstance(payload, dict):
         return ""
     return str(payload.get("login") or "")
+
+
+def review_mentions_head(body: str, head_sha: str) -> bool:
+    return (
+        head_sha in body
+        or f"Head SHA: `{head_sha}`" in body
+        or f"head_sha={head_sha}" in body
+    )
+
+
+def current_opencode_review_exists(runner: Runner, repo: str, pr: PullRequest) -> bool:
+    pages = runner.run_json(
+        ["api", f"repos/{repo}/pulls/{pr.number}/reviews", "--paginate", "--slurp"]
+    )
+    for page in pages or []:
+        for review in page or []:
+            state = str(review.get("state") or "").upper()
+            if state not in {"APPROVED", "CHANGES_REQUESTED"}:
+                continue
+            login = str((review.get("user") or {}).get("login") or "").lower()
+            body = str(review.get("body") or "")
+            commit_id = str(review.get("commit_id") or "")
+            if "opencode" not in login and "OpenCode Agent" not in body:
+                continue
+            if commit_id == pr.head_sha or review_mentions_head(body, pr.head_sha):
+                return True
+    return False
+
+
+def opencode_check_is_pending(status_rollup: list[dict[str, Any]]) -> bool:
+    for item in status_rollup:
+        name = " ".join(
+            str(value or "")
+            for value in (
+                item.get("name"),
+                item.get("context"),
+                item.get("workflowName"),
+                ((item.get("checkSuite") or {}).get("workflowRun") or {})
+                .get("workflow", {})
+                .get("name"),
+            )
+        ).lower()
+        if "opencode" not in name:
+            continue
+        state = str(item.get("state") or item.get("status") or "").upper()
+        if state in PENDING_STATES:
+            return True
+    return False
+
+
+def recent_dispatch_marker_exists(
+    runner: Runner,
+    repo: str,
+    pr: PullRequest,
+    *,
+    retry_seconds: int,
+) -> bool:
+    pages = runner.run_json(
+        ["api", f"repos/{repo}/issues/{pr.number}/comments", "--paginate", "--slurp"]
+    )
+    marker_re = re.compile(
+        r"<!-- scheduled-pr-review-merge opencode-dispatch "
+        r"head_sha=([0-9a-fA-F]{40}) epoch=([0-9]+) -->"
+    )
+    now = int(time.time())
+    for page in reversed(pages or []):
+        for comment in reversed(page or []):
+            match = marker_re.search(str(comment.get("body") or ""))
+            if not match or match.group(1).lower() != pr.head_sha.lower():
+                continue
+            return now - int(match.group(2)) < retry_seconds
+    return False
+
+
+def dispatch_opencode_review(runner: Runner, repo: str, pr: PullRequest) -> None:
+    runner.run(
+        [
+            "workflow",
+            "run",
+            "opencode-review.yml",
+            "--repo",
+            repo,
+            "-f",
+            f"pr_number={pr.number}",
+            "-f",
+            f"pr_base_ref={pr.base_ref}",
+            "-f",
+            f"pr_base_sha={pr.base_sha}",
+            "-f",
+            f"pr_head_sha={pr.head_sha}",
+        ]
+    )
+    body = "\n".join(
+        [
+            f"{DISPATCH_MARKER} head_sha={pr.head_sha} epoch={int(time.time())} -->",
+            "",
+            "Scheduled OpenCode review dispatch for this PR head.",
+            "",
+            f"- Head SHA: `{pr.head_sha}`",
+        ]
+    )
+    runner.run(
+        [
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/issues/{pr.number}/comments",
+            "-f",
+            f"body={body}",
+        ]
+    )
 
 
 def check_blockers(status_rollup: list[dict[str, Any]]) -> list[str]:
@@ -289,6 +406,8 @@ def process_queue(
     merge: bool,
     require_approval: bool,
     auto_approve: bool = False,
+    trigger_reviews: bool = False,
+    review_retry_seconds: int = 24 * 3600,
 ) -> int:
     numbers = list_open_pr_numbers(runner, repo)
     if not numbers:
@@ -310,6 +429,26 @@ def process_queue(
     merged = 0
     for number in numbers:
         pr = load_pr(runner, repo, number)
+
+        if trigger_reviews and not pr.is_draft:
+            if current_opencode_review_exists(runner, repo, pr):
+                pass
+            elif opencode_check_is_pending(pr.status_rollup):
+                print(f"PR #{pr.number} waiting for OpenCode review.")
+                continue
+            elif recent_dispatch_marker_exists(
+                runner,
+                repo,
+                pr,
+                retry_seconds=review_retry_seconds,
+            ):
+                print(f"PR #{pr.number} OpenCode review recently dispatched.")
+                continue
+            else:
+                dispatch_opencode_review(runner, repo, pr)
+                print(f"PR #{pr.number} OpenCode review dispatched for {pr.head_sha}.")
+                continue
+
         unresolved_threads = unresolved_review_thread_count(runner, repo, number)
 
         if merge and auto_approve and require_approval and pr.review_decision != "APPROVED":
@@ -376,6 +515,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Approve PRs that have no non-review blockers before merging.",
     )
+    parser.add_argument(
+        "--trigger-reviews",
+        action="store_true",
+        help="Dispatch OpenCode review for PR heads that lack one.",
+    )
     return parser
 
 
@@ -389,6 +533,7 @@ def main(argv: list[str] | None = None) -> int:
             merge=args.merge and not args.dry_run,
             require_approval=args.require_approval,
             auto_approve=args.auto_approve,
+            trigger_reviews=args.trigger_reviews,
         )
     except (subprocess.CalledProcessError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
