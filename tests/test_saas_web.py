@@ -25,16 +25,25 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
-    @patch("saas_web.media_shrinker.convert_file")
-    @patch("saas_web.tempfile.mkdtemp")
-    def test_shrink_media_success(self, mock_mkdtemp, mock_convert_file):
-        # Setup mock temp dir
-        mock_temp_dir = "/tmp/mock_temp"
-        mock_mkdtemp.return_value = mock_temp_dir
+    def test_security_headers_present_without_plain_http_hsts(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+        self.assertEqual(response.headers["X-XSS-Protection"], "1; mode=block")
+        self.assertEqual(
+            response.headers["Content-Security-Policy"],
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
+        )
+        self.assertNotIn("Strict-Transport-Security", response.headers)
 
-        # We need to mock the path objects to prevent actual file system operations if possible
-        # Or let the endpoint create the temp dir structure in the actual /tmp
-        pass # To properly test, it's better to let tempfile work or mock properly.
+    def test_hsts_header_present_for_forwarded_https(self):
+        response = client.get("/", headers={"X-Forwarded-Proto": "https"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["Strict-Transport-Security"],
+            "max-age=31536000; includeSubDomains",
+        )
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_endpoint(self, mock_convert_file):
