@@ -36,7 +36,7 @@ jobs:
   review-merge:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Exchange OpenCode app token for review writes
         id: opencode_app_token
