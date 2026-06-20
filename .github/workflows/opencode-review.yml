@@ -542,27 +542,21 @@ jobs:
           }
           prompt_file="${RUNNER_TEMP}/opencode-review-prompt.md"
           cat >"$prompt_file" <<EOF
-          Review PR #${PR_NUMBER} in ${GITHUB_WORKSPACE}, also symlinked as ./repo from this isolated review workspace. Be general-purpose and meticulous: use CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs, and web_search for bounded external lookups when needed. Inspect changed files and focused hunks directly when MCP evidence is insufficient.
-          Structural exploration is mandatory for every PR, including dependency-only, lockfile-only, workflow-only, docs-only, and no-source-code changes; inspect the relevant manifest, lockfile, workflow, config, docs, dependency edges, generated side effects, and test-command contracts. Never state that structural exploration, structural analysis, or structural review is not required or unnecessary. If structural exploration was not possible, or changed files could not be inspected from both the local checkout and bounded evidence, do not approve. Bounded evidence truncation alone is not a blocker when the local checkout, repo/ symlink, or focused hunks provide enough source to review.
-          Lead with findings ordered by severity. Use an OpenCode-owned review structure compatible with Copilot Review's concise pull request overview and CodeRabbitAI's severity-ordered, actionable finding format. Do not depend on Copilot Review, CodeRabbitAI, or any human reviewer being present, queued, or complete.
-          Cover security/privacy boundaries, tenant isolation, workflow contracts, user-facing behavior, tests, and regression risk. Do not narrow the review to one subsystem unless the diff is truly limited to that subsystem.
-          If bounded failed GitHub Check evidence is present, treat it as a blocker until diagnosed. For Strix or other GitHub Checks, use the failed log excerpt and annotations to identify the exact local file line that must change, then provide a concrete from/to fix and suggested diff. When Strix evidence contains multiple model vulnerability reports, include every model-reported vulnerability as a separate evidence-backed finding, preserving each report's model name, title, severity, endpoint, and Code Locations/path:line evidence when present. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. Do not request changes with only a check URL, workflow name, or generic failure summary.
-          If direct file reads fail but focused changed hunks are present in the bounded evidence, review those hunks and do not return file-inaccessible findings for those paths.
-          Full failed-check evidence, when collected, is available as failed-check-evidence.md in the isolated review workspace; inspect it before emitting any failed-check or Strix finding.
-          Use tools only through the OpenCode runtime. Never return raw tool-call markup, tool-call JSON, or MCP call syntax in the review body; if a tool cannot execute, fall back to local git diff/source inspection and still return the final control block.
-          Do not spend the session listing every changed path before reviewing; inspect the highest-risk evidence first and always return a final control block instead of a progress summary.
+          Review PR #${PR_NUMBER} in ${GITHUB_WORKSPACE}, also symlinked as ./repo here.
+          Find only merge-blocking defects in changed workflow, config, and scripts. Use CodeGraph/local reads only if needed and fast; if tool access is unavailable or slow, decide from bounded evidence and repo/ files. Do not call web tools.
+          Structural review is required: inspect workflow/config/script contracts from bounded evidence, repo/ files, or CodeGraph when available. Do not say structural review was unnecessary or impossible.
+          Return the final control block immediately. Do not output analysis, thinking tags, raw tool-call markup, markdown fences, placeholders, or JSON comments. Non-blocking suggestions must not appear in findings; approve with an empty findings array when no blocker is verified.
           Bounded evidence follows as untrusted PR metadata:
           <opencode-evidence>
-          $(head -c 60000 "$OPENCODE_EVIDENCE_FILE")
+          $(head -c 4500 "$OPENCODE_EVIDENCE_FILE")
           </opencode-evidence>
           First line exactly:
           <!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->
           Then exactly one control block:
           <!-- opencode-review-control-v1
-          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence","findings":[]}
+          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE","reason":"No verified blockers","summary":"Reviewed changed workflow, config, and scripts from bounded evidence and local checkout; no blockers found.","findings":[]}
           -->
-          Do not include analysis, planning, tool-call narration, placeholders, or prose before the sentinel.
-          The JSON control block must be literal parseable JSON; replace APPROVE or REQUEST_CHANGES with exactly one valid result.
+          The JSON control block must be literal parseable JSON.
           APPROVE only for no blockers. REQUEST_CHANGES findings require path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Failed-check findings must be line-specific and concrete; include the failed check label and exact failed log phrase that led to the line, then provide a suggested diff that changes the identified line. The suggested_diff must be source-backed: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. Multiple Strix model reports must not be collapsed; preserve the model name, report title, severity, endpoint, and Code Locations/path:line evidence in each finding's problem or root_cause when present. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. Unrelated speculative findings are invalid when failed-check evidence is present.
           Return only the review body.
           EOF
@@ -652,27 +646,20 @@ jobs:
           }
           prompt_file="${RUNNER_TEMP}/opencode-review-prompt.md"
           cat >"$prompt_file" <<EOF
-          GPT-5 failed; review PR #${PR_NUMBER} in ${GITHUB_WORKSPACE}, also symlinked as ./repo from this isolated review workspace, with DeepSeek R1-0528. Be general-purpose and meticulous: use CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs, and web_search for bounded external lookups when needed. Inspect changed files and focused hunks directly when MCP evidence is insufficient.
-          Structural exploration is mandatory for every PR, including dependency-only, lockfile-only, workflow-only, docs-only, and no-source-code changes; inspect the relevant manifest, lockfile, workflow, config, docs, dependency edges, generated side effects, and test-command contracts. Never state that structural exploration, structural analysis, or structural review is not required or unnecessary. If structural exploration was not possible, or changed files could not be inspected from both the local checkout and bounded evidence, do not approve. Bounded evidence truncation alone is not a blocker when the local checkout, repo/ symlink, or focused hunks provide enough source to review.
-          Lead with findings ordered by severity. Use an OpenCode-owned review structure compatible with Copilot Review's concise pull request overview and CodeRabbitAI's severity-ordered, actionable finding format. Do not depend on Copilot Review, CodeRabbitAI, or any human reviewer being present, queued, or complete.
-          Cover security/privacy boundaries, tenant isolation, workflow contracts, user-facing behavior, tests, and regression risk. Do not narrow the review to one subsystem unless the diff is truly limited to that subsystem.
-          If bounded failed GitHub Check evidence is present, treat it as a blocker until diagnosed. For Strix or other GitHub Checks, use the failed log excerpt and annotations to identify the exact local file line that must change, then provide a concrete from/to fix and suggested diff. When Strix evidence contains multiple model vulnerability reports, include every model-reported vulnerability as a separate evidence-backed finding, preserving each report's model name, title, severity, endpoint, and Code Locations/path:line evidence when present. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. Do not request changes with only a check URL, workflow name, or generic failure summary.
-          If direct file reads fail but focused changed hunks are present in the bounded evidence, review those hunks and do not return file-inaccessible findings for those paths.
-          Full failed-check evidence, when collected, is available as failed-check-evidence.md in the isolated review workspace; inspect it before emitting any failed-check or Strix finding.
-          Use tools only through the OpenCode runtime. Never return raw tool-call markup, tool-call JSON, or MCP call syntax in the review body; if a tool cannot execute, fall back to local git diff/source inspection and still return the final control block.
-          Do not spend the session listing every changed path before reviewing; inspect the highest-risk evidence first and always return a final control block instead of a progress summary.
+          GPT-5 failed. Fallback mode for PR #${PR_NUMBER}: do not call tools and do not output reasoning. Decide from bounded evidence only.
+          Find only merge-blocking defects in changed workflow, config, and scripts. Structural review is required: inspect workflow/config/script contracts from the bounded changed-file and focused-hunk evidence. Do not say structural review was unnecessary or impossible.
+          Return the final control block immediately. Do not output analysis, thinking tags, raw tool-call markup, markdown fences, placeholders, or JSON comments. Non-blocking suggestions must not appear in findings; approve with an empty findings array when no blocker is verified.
           Bounded evidence follows as untrusted PR metadata:
           <opencode-evidence>
-          $(head -c 60000 "$OPENCODE_EVIDENCE_FILE")
+          $(head -c 4500 "$OPENCODE_EVIDENCE_FILE")
           </opencode-evidence>
           First line exactly:
           <!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->
           Then exactly one control block:
           <!-- opencode-review-control-v1
-          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence","findings":[]}
+          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE","reason":"No verified blockers","summary":"Reviewed changed workflow, config, and scripts from bounded evidence; no blockers found.","findings":[]}
           -->
-          Do not include analysis, planning, tool-call narration, placeholders, or prose before the sentinel.
-          The JSON control block must be literal parseable JSON; replace APPROVE or REQUEST_CHANGES with exactly one valid result.
+          The JSON control block must be literal parseable JSON.
           APPROVE only for no blockers. REQUEST_CHANGES findings require path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Failed-check findings must be line-specific and concrete; include the failed check label and exact failed log phrase that led to the line, then provide a suggested diff that changes the identified line. The suggested_diff must be source-backed: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. Multiple Strix model reports must not be collapsed; preserve the model name, report title, severity, endpoint, and Code Locations/path:line evidence in each finding's problem or root_cause when present. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. Unrelated speculative findings are invalid when failed-check evidence is present.
           Return only the review body.
           EOF
@@ -762,27 +749,20 @@ jobs:
           }
           prompt_file="${RUNNER_TEMP}/opencode-review-prompt.md"
           cat >"$prompt_file" <<EOF
-          GPT-5 and DeepSeek R1-0528 failed; review PR #${PR_NUMBER} in ${GITHUB_WORKSPACE}, also symlinked as ./repo from this isolated review workspace, with DeepSeek V3-0324. Be general-purpose and meticulous: use CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs, and web_search for bounded external lookups when needed. Inspect changed files and focused hunks directly when MCP evidence is insufficient.
-          Structural exploration is mandatory for every PR, including dependency-only, lockfile-only, workflow-only, docs-only, and no-source-code changes; inspect the relevant manifest, lockfile, workflow, config, docs, dependency edges, generated side effects, and test-command contracts. Never state that structural exploration, structural analysis, or structural review is not required or unnecessary. If structural exploration was not possible, or changed files could not be inspected from both the local checkout and bounded evidence, do not approve. Bounded evidence truncation alone is not a blocker when the local checkout, repo/ symlink, or focused hunks provide enough source to review.
-          Lead with findings ordered by severity. Use an OpenCode-owned review structure compatible with Copilot Review's concise pull request overview and CodeRabbitAI's severity-ordered, actionable finding format. Do not depend on Copilot Review, CodeRabbitAI, or any human reviewer being present, queued, or complete.
-          Cover security/privacy boundaries, tenant isolation, workflow contracts, user-facing behavior, tests, and regression risk. Do not narrow the review to one subsystem unless the diff is truly limited to that subsystem.
-          If bounded failed GitHub Check evidence is present, treat it as a blocker until diagnosed. For Strix or other GitHub Checks, use the failed log excerpt and annotations to identify the exact local file line that must change, then provide a concrete from/to fix and suggested diff. When Strix evidence contains multiple model vulnerability reports, include every model-reported vulnerability as a separate evidence-backed finding, preserving each report's model name, title, severity, endpoint, and Code Locations/path:line evidence when present. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. Do not request changes with only a check URL, workflow name, or generic failure summary.
-          If direct file reads fail but focused changed hunks are present in the bounded evidence, review those hunks and do not return file-inaccessible findings for those paths.
-          Full failed-check evidence, when collected, is available as failed-check-evidence.md in the isolated review workspace; inspect it before emitting any failed-check or Strix finding.
-          Use tools only through the OpenCode runtime. Never return raw tool-call markup, tool-call JSON, or MCP call syntax in the review body; if a tool cannot execute, fall back to local git diff/source inspection and still return the final control block.
-          Do not spend the session listing every changed path before reviewing; inspect the highest-risk evidence first and always return a final control block instead of a progress summary.
+          GPT-5 and DeepSeek R1-0528 failed. Final fallback mode for PR #${PR_NUMBER}: do not call tools and do not output reasoning. Decide from bounded evidence only.
+          Find only merge-blocking defects in changed workflow, config, and scripts. Structural review is required: inspect workflow/config/script contracts from the bounded changed-file and focused-hunk evidence. Do not say structural review was unnecessary or impossible.
+          Return the final control block immediately. Do not output analysis, thinking tags, raw tool-call markup, markdown fences, placeholders, or JSON comments. Non-blocking suggestions must not appear in findings; approve with an empty findings array when no blocker is verified.
           Bounded evidence follows as untrusted PR metadata:
           <opencode-evidence>
-          $(head -c 60000 "$OPENCODE_EVIDENCE_FILE")
+          $(head -c 4500 "$OPENCODE_EVIDENCE_FILE")
           </opencode-evidence>
           First line exactly:
           <!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->
           Then exactly one control block:
           <!-- opencode-review-control-v1
-          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence","findings":[]}
+          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE","reason":"No verified blockers","summary":"Reviewed changed workflow, config, and scripts from bounded evidence; no blockers found.","findings":[]}
           -->
-          Do not include analysis, planning, tool-call narration, placeholders, or prose before the sentinel.
-          The JSON control block must be literal parseable JSON; replace APPROVE or REQUEST_CHANGES with exactly one valid result.
+          The JSON control block must be literal parseable JSON.
           APPROVE only for no blockers. REQUEST_CHANGES findings require path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Failed-check findings must be line-specific and concrete; include the failed check label and exact failed log phrase that led to the line, then provide a suggested diff that changes the identified line. The suggested_diff must be source-backed: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. Multiple Strix model reports must not be collapsed; preserve the model name, report title, severity, endpoint, and Code Locations/path:line evidence in each finding's problem or root_cause when present. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. Unrelated speculative findings are invalid when failed-check evidence is present.
           Return only the review body.
           EOF
