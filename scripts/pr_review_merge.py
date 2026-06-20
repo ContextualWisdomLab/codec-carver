@@ -149,6 +149,16 @@ def unresolved_review_thread_count(runner: Runner, repo: str, number: int) -> in
     )
 
 
+def authenticated_login(runner: Runner) -> str:
+    try:
+        payload = runner.run_json(["api", "user"])
+    except subprocess.CalledProcessError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("login") or "")
+
+
 def check_blockers(status_rollup: list[dict[str, Any]]) -> list[str]:
     blockers: list[str] = []
     for item in status_rollup:
@@ -285,13 +295,30 @@ def process_queue(
         print("No open pull requests.")
         return 0
 
+    approval_login = ""
+    approval_available = True
+    if merge and auto_approve and require_approval:
+        approval_login = authenticated_login(runner)
+        if approval_login == "github-actions[bot]":
+            approval_available = False
+            print(
+                "Auto-approval disabled: github-actions[bot] cannot approve "
+                "pull requests. Configure OPENCODE_APPROVE_TOKEN or use the "
+                "OpenCode app token exchange."
+            )
+
     merged = 0
     for number in numbers:
         pr = load_pr(runner, repo, number)
         unresolved_threads = unresolved_review_thread_count(runner, repo, number)
 
         if merge and auto_approve and require_approval and pr.review_decision != "APPROVED":
-            blockers = auto_approval_blockers(pr, unresolved_threads)
+            blockers = []
+            if not approval_available:
+                blockers.append(
+                    f"approval actor {approval_login or 'unknown'} cannot approve PRs"
+                )
+            blockers.extend(auto_approval_blockers(pr, unresolved_threads))
             if blockers:
                 print(f"PR #{pr.number} not auto-approved: {', '.join(blockers)}")
             else:
@@ -299,6 +326,11 @@ def process_queue(
                     approve_pr(runner, repo, pr)
                 except subprocess.CalledProcessError as exc:
                     detail = (exc.stderr or str(exc)).strip()
+                    if "GitHub Actions is not permitted to approve pull requests" in detail:
+                        detail = (
+                            f"{detail} Configure OPENCODE_APPROVE_TOKEN or use the "
+                            "OpenCode app token exchange."
+                        )
                     print(f"PR #{pr.number} auto-approval failed: {detail}")
                 else:
                     print(f"PR #{pr.number} approved at {pr.head_sha}.")
