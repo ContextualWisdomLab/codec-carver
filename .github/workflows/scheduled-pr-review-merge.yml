@@ -18,7 +18,7 @@ on:
       auto_approve:
         description: "Approve PRs with no non-review blockers before merging"
         required: false
-        default: true
+        default: false
         type: boolean
 
 concurrency:
@@ -110,7 +110,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           REQUIRE_APPROVAL: ${{ github.event_name != 'workflow_dispatch' || inputs.require_approval }}
-          AUTO_APPROVE: ${{ github.event_name != 'workflow_dispatch' || inputs.auto_approve }}
+          AUTO_APPROVE: ${{ github.event_name == 'workflow_dispatch' && inputs.auto_approve }}
         run: |
           mode_flag="--merge"
           if [ "$DRY_RUN" = "true" ]; then
