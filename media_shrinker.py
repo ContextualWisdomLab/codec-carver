@@ -444,7 +444,12 @@ def build_opus_plan(
     )
 
 
-def probe_media(source_path: Path, *, ffprobe_path: str = "ffprobe") -> MediaProbe:
+def probe_media(
+    source_path: Path,
+    *,
+    ffprobe_path: str = "ffprobe",
+    source_size: int | None = None,
+) -> MediaProbe:
     """Probe source_path with ffprobe and return normalized media properties."""
 
     command = [
@@ -473,7 +478,7 @@ def probe_media(source_path: Path, *, ffprobe_path: str = "ffprobe") -> MediaPro
             f"ffprobe returned invalid JSON for {source_path}"
         ) from exc
 
-    return _parse_probe_payload(payload, source_path)
+    return _parse_probe_payload(payload, source_path, source_size=source_size)
 
 
 def build_silencedetect_command(
@@ -731,7 +736,7 @@ def convert_file(
     rel_source = source.relative_to(root)
     if download_icloud:
         download_from_icloud(source, brctl_path=brctl_path)
-    probe = probe_media(source, ffprobe_path=ffprobe_path)
+    probe = probe_media(source, ffprobe_path=ffprobe_path, source_size=original_size)
 
     silence_intervals: list[SilenceInterval] = []
     if probe.duration_seconds >= max_segment_duration_seconds:
@@ -1438,7 +1443,11 @@ def _with_ffmpeg_threads(args: list[str], ffmpeg_threads: int | None) -> list[st
     return [*args[:-1], "-threads", str(ffmpeg_threads), args[-1]]
 
 
-def _parse_probe_payload(payload: dict[str, Any], source_path: Path) -> MediaProbe:
+def _parse_probe_payload(
+    payload: dict[str, Any],
+    source_path: Path,
+    source_size: int | None = None,
+) -> MediaProbe:
     """Parse raw ffprobe JSON payload into a MediaProbe object."""
     streams = payload.get("streams", [])
     audio_stream = next(
@@ -1454,21 +1463,16 @@ def _parse_probe_payload(payload: dict[str, Any], source_path: Path) -> MediaPro
     if duration <= 0:
         raise MediaShrinkerError(f"{source_path} has no usable duration")
 
-    size_str = format_section.get("size")
-    if size_str is not None:
-        try:
-            source_size = int(size_str)
-        except ValueError:
-            source_size = source_path.stat().st_size
-    else:
-        source_size = source_path.stat().st_size
+    parsed_size = _first_int(format_section.get("size"))
+    if parsed_size is None:
+        parsed_size = source_size if source_size is not None else source_path.stat().st_size
 
     audio_bit_rate = _first_int(
         audio_stream.get("bit_rate"), format_section.get("bit_rate")
     )
     return MediaProbe(
         duration_seconds=duration,
-        size_bytes=source_size,
+        size_bytes=parsed_size,
         audio_codec=audio_stream.get("codec_name"),
         audio_bit_rate=audio_bit_rate,
         has_video=any(stream.get("codec_type") == "video" for stream in streams),
