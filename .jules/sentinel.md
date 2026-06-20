@@ -27,6 +27,11 @@
 **Learning:** Using `shutil.copyfileobj` blindly copies an uploaded stream directly to disk without size constraints. An attacker could upload an infinitely large file or a file large enough to exhaust server storage space, causing a Denial of Service.
 **Prevention:** Do not use unbounded `shutil.copyfileobj` for web uploads. Implement chunked reads and track bytes written, raising an exception safely if a predefined strict maximum file size is exceeded.
 
+## 2026-06-20 - [Sentinel: FastAPI request size limits]
+**Vulnerability:** Uncontrolled Resource Consumption (CWE-400) via oversized HTTP request bodies.
+**Learning:** A `Content-Length` check rejects known-oversized requests early, but requests without a usable length header still need byte counting while the ASGI body stream is consumed.
+**Prevention:** Validate malformed or negative `Content-Length` values, reject declared oversized requests with `413`, and wrap the request receive function so chunked or lengthless uploads cannot exceed the same global limit.
+
 ## 2026-06-25 - [Sentinel: Unsafe Subprocess Paths leading to Argument Injection]
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.

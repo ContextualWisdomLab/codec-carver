@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 from fastapi.testclient import TestClient
 
+import saas_web
 from saas_web import app
 from media_shrinker import ConversionResult
 
@@ -44,6 +45,22 @@ class TestSaasWeb(unittest.TestCase):
             response.headers["Strict-Transport-Security"],
             "max-age=31536000; includeSubDomains",
         )
+
+    def test_request_size_limit_rejects_oversized_declared_body(self):
+        response = client.post(
+            "/shrink",
+            headers={"Content-Length": str(saas_web.MAX_REQUEST_BYTES + 1)},
+        )
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.json(), {"error": "Payload Too Large"})
+
+    def test_request_size_limit_rejects_invalid_content_length(self):
+        response = client.post(
+            "/shrink",
+            headers={"Content-Length": "not-a-number"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"error": "Invalid Content-Length"})
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_endpoint(self, mock_convert_file):

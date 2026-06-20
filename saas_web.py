@@ -3,10 +3,48 @@ import logging
 import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import media_shrinker
 
 app = FastAPI(title="Codec Carver SaaS")
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
+MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
+
+
+class RequestTooLarge(Exception):
+    pass
+
+
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_size = int(content_length)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"error": "Invalid Content-Length"})
+        if declared_size < 0:
+            return JSONResponse(status_code=400, content={"error": "Invalid Content-Length"})
+        if declared_size > MAX_REQUEST_BYTES:
+            return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
+
+    received = 0
+    receive = request._receive
+
+    async def limited_receive():
+        nonlocal received
+        message = await receive()
+        if message.get("type") == "http.request":
+            received += len(message.get("body", b""))
+            if received > MAX_REQUEST_BYTES:
+                raise RequestTooLarge
+        return message
+
+    request._receive = limited_receive
+    try:
+        return await call_next(request)
+    except RequestTooLarge:
+        return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
@@ -117,12 +155,11 @@ def shrink_media(
             safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename
-        max_upload_bytes = 5 * 1024 * 1024 * 1024  # 5 GB limit
         bytes_written = 0
         with open(source_path, "wb") as f:
             while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
                 bytes_written += len(chunk)
-                if bytes_written > max_upload_bytes:
+                if bytes_written > MAX_UPLOAD_BYTES:
                     raise ValueError("File exceeds maximum allowed upload size")
                 f.write(chunk)
     except Exception:
