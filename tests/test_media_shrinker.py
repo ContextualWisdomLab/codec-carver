@@ -265,6 +265,25 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("0", plan.ffmpeg_args)
         self.assertIn("flac", plan.ffmpeg_args)
 
+    def test_conversion_command_resolves_input_and_output_overrides(self) -> None:
+        plan = ConversionPlan(
+            strategy="test",
+            input_path=Path("input.wav"),
+            output_path=Path("output.flac"),
+            ffmpeg_args=["-n", "-i", "input.wav", "output.flac"],
+        )
+
+        command = plan.command(
+            input_path=Path("-input.wav"),
+            output_path=Path("-output.flac"),
+        )
+
+        self.assertEqual(
+            command[command.index("-i") + 1],
+            str(Path("-input.wav").resolve()),
+        )
+        self.assertEqual(command[-1], str(Path("-output.flac").resolve()))
+
     def test_lossy_audio_uses_highest_opus_bitrate_that_fits_target_with_safety_margin(
         self,
     ) -> None:
@@ -1017,7 +1036,7 @@ class ICloudDownloadTests(unittest.TestCase):
 
         self.assertEqual(
             command,
-            ["brctl", "download", str(Path("folder/file with spaces.m4a").absolute())],
+            ["brctl", "download", str(Path("folder/file with spaces.m4a").resolve())],
         )
 
 
