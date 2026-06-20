@@ -107,6 +107,7 @@ class ReviewMergeTests(unittest.TestCase):
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
+            {"login": "opencode-agent[bot]"},
             pr_payload(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED"),
             threads_payload(),
             pr_payload(reviewDecision="APPROVED", mergeStateStatus="CLEAN"),
@@ -184,6 +185,7 @@ class ReviewMergeTests(unittest.TestCase):
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
+            {"login": "opencode-agent[bot]"},
             pr_payload(
                 mergeStateStatus="BLOCKED",
                 reviewDecision="REVIEW_REQUIRED",
@@ -207,6 +209,28 @@ class ReviewMergeTests(unittest.TestCase):
         )
 
         self.assertEqual(merged, 0)
+        self.assertFalse(any(command[:3] == ["pr", "review", "7"] for command in runner.commands))
+        self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
+
+    def test_process_queue_skips_auto_approval_with_github_actions_token(self):
+        runner = FakeRunner()
+        runner.json_outputs = [
+            [{"number": 7}],
+            {"login": "github-actions[bot]"},
+            pr_payload(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED"),
+            threads_payload(),
+        ]
+
+        merged = pr_review_merge.process_queue(
+            runner,
+            "owner/repo",
+            merge=True,
+            require_approval=True,
+            auto_approve=True,
+        )
+
+        self.assertEqual(merged, 0)
+        self.assertIn(["api", "user"], runner.commands)
         self.assertFalse(any(command[:3] == ["pr", "review", "7"] for command in runner.commands))
         self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
 
