@@ -807,6 +807,7 @@ def _find_valid_existing_output(
         candidate = _planned_output_path(segment_rel_source, output_dir, suffix)
         if not candidate.exists():
             continue
+        _ensure_not_source_path(source, candidate)
         _ensure_not_protected_source_path(resolved_protected_sources, candidate)
         try:
             candidate_size = candidate.stat().st_size
@@ -1056,6 +1057,7 @@ def _remove_invalid_legacy_outputs(
         canonical_output = _planned_output_path(rel_source, output_dir, suffix)
         if legacy_output == canonical_output or not legacy_output.exists():
             continue
+        _ensure_not_source_path(source, legacy_output)
         _ensure_not_protected_source_path(protected_sources, legacy_output)
         try:
             legacy_size = legacy_output.stat().st_size
