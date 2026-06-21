@@ -819,7 +819,7 @@ def _find_valid_existing_output(
             )
             continue
         candidate_duration = _probe_output_duration(
-            candidate, ffprobe_path=ffprobe_path
+            candidate, ffprobe_path=ffprobe_path, output_size=candidate_size
         )
         if (
             candidate_duration >= max_segment_duration_seconds
@@ -834,6 +834,7 @@ def _find_valid_existing_output(
             continue
         existing_output = candidate
         existing_duration = candidate_duration
+        existing_size = candidate_size
         break
 
     if existing_output is not None:
@@ -842,7 +843,7 @@ def _find_valid_existing_output(
             output_path=existing_output,
             status="skipped_existing",
             original_size_bytes=original_size,
-            output_size_bytes=existing_output.stat().st_size,
+            output_size_bytes=existing_size,
             strategy="existing",
             message="Existing output is already under target",
             segment_index=segment.index,
@@ -890,7 +891,8 @@ def _execute_segment_conversion(
         overwrite=overwrite,
         protected_sources=resolved_protected_sources,
     )
-    if first_result.stat().st_size > target_bytes and plan.strategy in {
+    output_size = first_result.stat().st_size
+    if output_size > target_bytes and plan.strategy in {
         "flac-lossless",
         "flac-transcode",
     }:
@@ -915,9 +917,11 @@ def _execute_segment_conversion(
             protected_sources=resolved_protected_sources,
         )
         plan = opus_plan
+        output_size = first_result.stat().st_size
 
-    output_size = first_result.stat().st_size
-    output_duration = _probe_output_duration(first_result, ffprobe_path=ffprobe_path)
+    output_duration = _probe_output_duration(
+        first_result, ffprobe_path=ffprobe_path, output_size=output_size
+    )
     preserve_file_attributes(source, first_result)
     common_fields = {
         "source_path": source,
@@ -1069,7 +1073,7 @@ def _remove_invalid_legacy_outputs(
             )
             continue
         legacy_duration = _probe_output_duration(
-            legacy_output, ffprobe_path=ffprobe_path
+            legacy_output, ffprobe_path=ffprobe_path, output_size=legacy_size
         )
         if (
             legacy_duration >= max_segment_duration_seconds
@@ -1331,9 +1335,13 @@ def _is_lossless_probe(probe: MediaProbe) -> bool:
     return (probe.audio_codec or "").lower() in LOSSLESS_AUDIO_CODECS
 
 
-def _probe_output_duration(output_path: Path, *, ffprobe_path: str) -> float:
+def _probe_output_duration(
+    output_path: Path, *, ffprobe_path: str, output_size: int | None = None
+) -> float:
     """Return the duration of a generated output file."""
-    return probe_media(output_path, ffprobe_path=ffprobe_path).duration_seconds
+    return probe_media(
+        output_path, ffprobe_path=ffprobe_path, source_size=output_size
+    ).duration_seconds
 
 
 def _duration_matches_expected(
@@ -1467,7 +1475,9 @@ def _parse_probe_payload(
 
     parsed_size = _first_int(format_section.get("size"))
     if parsed_size is None:
-        parsed_size = source_size if source_size is not None else source_path.stat().st_size
+        parsed_size = (
+            source_size if source_size is not None else source_path.stat().st_size
+        )
 
     audio_bit_rate = _first_int(
         audio_stream.get("bit_rate"), format_section.get("bit_rate")

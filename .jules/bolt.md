@@ -51,3 +51,6 @@
 ## 2024-05-24 - Batch Processing Path Checks
 **Learning:** Instantiating `frozenset` objects via union operations (e.g., `frozenset(large_set | {item})`) inside tight inner loops causes severe O(N^2) overhead, especially when `large_set` contains thousands of path strings. Passing the original set unmodified and checking individual items independently is far more performant and requires only a constant time overhead per iteration.
 **Action:** When filtering or checking exclusions inside batch process loops, do not modify or clone large collections per iteration. Always use the base set directly and check item equality independently if needed.
+## 2026-06-21 - Cache stat() results for media files to avoid repeated system calls
+**Learning:** Checking the size of intermediate file outputs and probing them with ffprobe results in redundant `stat()` calls if the file size can just be supplied to the probe mechanism.
+**Action:** Always attempt to pass down already computed `os.stat` or `pathlib.Path.stat()` results, especially `st_size`, to child operations in batch loops instead of repeating the system call.
