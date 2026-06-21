@@ -29,3 +29,6 @@
 ## 2024-06-14 - Add dynamic human-readable file size preview to file upload
 **Learning:** In simple web forms without React/Vue, inline Javascript `onchange` events can provide essential dynamic accessibility feedback.
 **Action:** Always pair raw file upload inputs with a dynamic, human-readable file size preview using an `aria-live` region, accessible via `aria-describedby`.
+## 2026-06-21 - Accessible Form Validation
+**Learning:** When using custom JS validation, dynamically toggling `aria-invalid='true'` in tandem with `setCustomValidity()` provides critical feedback to screen readers that isn't always reliably conveyed by custom validity alone.
+**Action:** Always sync `aria-invalid` state with JS validation logic for screen reader users.

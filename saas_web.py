@@ -90,9 +90,9 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required oninput="const val = parseInt(this.value, 10); const preview = document.getElementById('target_bytes_preview'); if (isNaN(val) || val <= 0) { preview.innerText = ''; } else if (val < 1000) { preview.innerText = val + ' B'; } else if (val < 1000000) { preview.innerText = (val / 1000).toFixed(2) + ' KB'; } else if (val < 1000000000) { preview.innerText = (val / 1000000).toFixed(2) + ' MB'; } else { preview.innerText = (val / 1000000000).toFixed(2) + ' GB'; }">
-                <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~2GB)</span>
-                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #28a745;">2.00 GB</span>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
+                <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
+                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #28a745;">1.86 GiB</span>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
@@ -112,6 +112,7 @@ HTML_TEMPLATE = """
                 const file = input.files[0];
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
+                input.removeAttribute('aria-invalid');
                 preview.style.color = '#17a2b8';
                 if (!file) {
                     preview.innerText = '';
@@ -120,12 +121,30 @@ HTML_TEMPLATE = """
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     input.setCustomValidity('File exceeds 5 GiB limit.');
+                    input.setAttribute('aria-invalid', 'true');
                     preview.innerText = 'Selected file size: ' + text + ' (exceeds 5 GiB limit)';
                     preview.style.color = '#dc3545';
                     return;
                 }
                 preview.innerText = 'Selected file size: ' + text;
             }
+
+            document.getElementById('target_bytes').addEventListener('input', function() {
+                const val = parseInt(this.value, 10);
+                const preview = document.getElementById('target_bytes_preview');
+                this.setCustomValidity('');
+                this.removeAttribute('aria-invalid');
+                preview.style.color = '#28a745';
+
+                if (isNaN(val) || val <= 0) {
+                    preview.innerText = '';
+                    this.setCustomValidity('Must be greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
+                } else {
+                    preview.innerText = formatBinaryBytes(val);
+                }
+            });
+
             document.getElementById('shrink-form').addEventListener('submit', function() {
                 const btn = document.getElementById('submit-btn');
                 setTimeout(() => {
