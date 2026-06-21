@@ -604,8 +604,10 @@ class PlanningTests(unittest.TestCase):
             original_probe_media = media_shrinker.probe_media
 
             try:
-                media_shrinker.probe_media = lambda path, *, ffprobe_path="ffprobe": (
-                    truncated_probe
+                media_shrinker.probe_media = (
+                    lambda path, *, ffprobe_path="ffprobe", source_size=None: (
+                        truncated_probe
+                    )
                 )
                 result = media_shrinker._convert_segment(
                     source,
@@ -661,8 +663,10 @@ class PlanningTests(unittest.TestCase):
             original_probe_media = media_shrinker.probe_media
 
             try:
-                media_shrinker.probe_media = lambda path, *, ffprobe_path="ffprobe": (
-                    next(probes)
+                media_shrinker.probe_media = (
+                    lambda path, *, ffprobe_path="ffprobe", source_size=None: next(
+                        probes
+                    )
                 )
                 result = media_shrinker._convert_segment(
                     source,
@@ -713,8 +717,8 @@ class PlanningTests(unittest.TestCase):
             original_probe_media = media_shrinker.probe_media
 
             try:
-                media_shrinker.probe_media = lambda path, *, ffprobe_path="ffprobe": (
-                    probe
+                media_shrinker.probe_media = (
+                    lambda path, *, ffprobe_path="ffprobe", source_size=None: probe
                 )
                 result = media_shrinker._convert_segment(
                     source,
@@ -777,8 +781,10 @@ class PlanningTests(unittest.TestCase):
             original_probe_media = media_shrinker.probe_media
 
             try:
-                media_shrinker.probe_media = lambda path, *, ffprobe_path="ffprobe": (
-                    next(probes)
+                media_shrinker.probe_media = (
+                    lambda path, *, ffprobe_path="ffprobe", source_size=None: next(
+                        probes
+                    )
                 )
                 result = media_shrinker._convert_segment(
                     source,
@@ -855,8 +861,8 @@ class PlanningTests(unittest.TestCase):
             original_probe_media = media_shrinker.probe_media
 
             try:
-                media_shrinker.probe_media = lambda path, *, ffprobe_path="ffprobe": (
-                    probe
+                media_shrinker.probe_media = (
+                    lambda path, *, ffprobe_path="ffprobe", source_size=None: probe
                 )
                 result = media_shrinker._convert_segment(
                     source,
