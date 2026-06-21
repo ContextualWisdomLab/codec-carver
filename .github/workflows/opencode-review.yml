@@ -593,11 +593,16 @@ jobs:
           <opencode-evidence>
           $(head -c 4500 "$OPENCODE_EVIDENCE_FILE")
           </opencode-evidence>
+          Use CodeGraph for blast-radius, call graph, and test-coverage questions before broad local reads.
+          Prefer deletion, stdlib/native platform features, and already-installed dependencies before proposing new code or packages, but do not simplify away trust-boundary validation, data-loss handling, security, accessibility, or required tests.
+          For Korean prose, preserve facts, identifiers, numbers, and quotes while removing only formulaic filler or translationese.
+          When Strix evidence supports it, name the concrete CWE/KISA-style class such as injection, auth/authz, secrets, crypto, path traversal/file upload, XSS/CSRF/SSRF, error disclosure, or debug/deployment config; do not invent a category without evidence.
+          Before APPROVE, the summary must include at least one exact changed file path inspected as changed-file evidence. Never approve with a reason or summary that says no changes, no files, or no actionable changes were found when bounded evidence lists changed files; that control block is invalid.
           First line exactly:
           <!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->
           Then exactly one control block:
           <!-- opencode-review-control-v1
-          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE","reason":"No verified blockers","summary":"Reviewed changed workflow, config, and scripts from bounded evidence and local checkout; no blockers found.","findings":[]}
+          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE","reason":"No verified blockers","summary":"Reviewed .github/workflows/opencode-review.yml and scripts/ci/opencode_review_normalize_output.py from bounded evidence and local checkout; no blockers found.","findings":[]}
           -->
           The JSON control block must be literal parseable JSON.
           APPROVE only for no blockers. REQUEST_CHANGES findings require path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Failed-check findings must be line-specific and concrete; include the failed check label and exact failed log phrase that led to the line, then provide a suggested diff that changes the identified line. The suggested_diff must be source-backed: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. Multiple Strix model reports must not be collapsed; preserve the model name, report title, severity, endpoint, and Code Locations/path:line evidence in each finding's problem or root_cause when present. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. Unrelated speculative findings are invalid when failed-check evidence is present.
@@ -696,11 +701,16 @@ jobs:
           <opencode-evidence>
           $(head -c 4500 "$OPENCODE_EVIDENCE_FILE")
           </opencode-evidence>
+          Use CodeGraph for blast-radius, call graph, and test-coverage questions before broad local reads.
+          Prefer deletion, stdlib/native platform features, and already-installed dependencies before proposing new code or packages, but do not simplify away trust-boundary validation, data-loss handling, security, accessibility, or required tests.
+          For Korean prose, preserve facts, identifiers, numbers, and quotes while removing only formulaic filler or translationese.
+          When Strix evidence supports it, name the concrete CWE/KISA-style class such as injection, auth/authz, secrets, crypto, path traversal/file upload, XSS/CSRF/SSRF, error disclosure, or debug/deployment config; do not invent a category without evidence.
+          Before APPROVE, the summary must include at least one exact changed file path inspected as changed-file evidence. Never approve with a reason or summary that says no changes, no files, or no actionable changes were found when bounded evidence lists changed files; that control block is invalid.
           First line exactly:
           <!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->
           Then exactly one control block:
           <!-- opencode-review-control-v1
-          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE","reason":"No verified blockers","summary":"Reviewed changed workflow, config, and scripts from bounded evidence; no blockers found.","findings":[]}
+          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE","reason":"No verified blockers","summary":"Reviewed .github/workflows/opencode-review.yml and scripts/ci/opencode_review_normalize_output.py from bounded evidence; no blockers found.","findings":[]}
           -->
           The JSON control block must be literal parseable JSON.
           APPROVE only for no blockers. REQUEST_CHANGES findings require path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Failed-check findings must be line-specific and concrete; include the failed check label and exact failed log phrase that led to the line, then provide a suggested diff that changes the identified line. The suggested_diff must be source-backed: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. Multiple Strix model reports must not be collapsed; preserve the model name, report title, severity, endpoint, and Code Locations/path:line evidence in each finding's problem or root_cause when present. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. Unrelated speculative findings are invalid when failed-check evidence is present.
@@ -799,11 +809,16 @@ jobs:
           <opencode-evidence>
           $(head -c 4500 "$OPENCODE_EVIDENCE_FILE")
           </opencode-evidence>
+          Use CodeGraph for blast-radius, call graph, and test-coverage questions before broad local reads.
+          Prefer deletion, stdlib/native platform features, and already-installed dependencies before proposing new code or packages, but do not simplify away trust-boundary validation, data-loss handling, security, accessibility, or required tests.
+          For Korean prose, preserve facts, identifiers, numbers, and quotes while removing only formulaic filler or translationese.
+          When Strix evidence supports it, name the concrete CWE/KISA-style class such as injection, auth/authz, secrets, crypto, path traversal/file upload, XSS/CSRF/SSRF, error disclosure, or debug/deployment config; do not invent a category without evidence.
+          Before APPROVE, the summary must include at least one exact changed file path inspected as changed-file evidence. Never approve with a reason or summary that says no changes, no files, or no actionable changes were found when bounded evidence lists changed files; that control block is invalid.
           First line exactly:
           <!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->
           Then exactly one control block:
           <!-- opencode-review-control-v1
-          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE","reason":"No verified blockers","summary":"Reviewed changed workflow, config, and scripts from bounded evidence; no blockers found.","findings":[]}
+          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE","reason":"No verified blockers","summary":"Reviewed .github/workflows/opencode-review.yml and scripts/ci/opencode_review_normalize_output.py from bounded evidence; no blockers found.","findings":[]}
           -->
           The JSON control block must be literal parseable JSON.
           APPROVE only for no blockers. REQUEST_CHANGES findings require path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Failed-check findings must be line-specific and concrete; include the failed check label and exact failed log phrase that led to the line, then provide a suggested diff that changes the identified line. The suggested_diff must be source-backed: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. Multiple Strix model reports must not be collapsed; preserve the model name, report title, severity, endpoint, and Code Locations/path:line evidence in each finding's problem or root_cause when present. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. Unrelated speculative findings are invalid when failed-check evidence is present.
@@ -2122,6 +2137,8 @@ jobs:
             failed_checks_file="$(mktemp)"
             failed_check_evidence_file="$(mktemp)"
             failed_check_review_body_file="$(mktemp)"
+            failed_check_review_payload_file="$(mktemp)"
+            failed_check_inline_failure_body_file="$(mktemp)"
             pending_checks_file=""
             # shellcheck disable=SC2329
             cleanup_failed_outcome_files() {
