@@ -54,3 +54,6 @@
 ## 2026-06-21 - Cache stat() results for media files to avoid repeated system calls
 **Learning:** Checking the size of intermediate file outputs and probing them with ffprobe results in redundant `stat()` calls if the file size can just be supplied to the probe mechanism.
 **Action:** Always attempt to pass down already computed `os.stat` or `pathlib.Path.stat()` results, especially `st_size`, to child operations in batch loops instead of repeating the system call.
+## 2024-06-22 - Optimize FFprobe payload parsing with single pass iteration
+**Learning:** Using multiple generator expressions (`next` and `any`) to search through the same list (like FFprobe streams) requires iterating through the list multiple times. In `_parse_probe_payload`, parsing out both the audio stream and checking for a video stream with separate generator expressions introduces unnecessary loop overhead, which is measurable in batch processes.
+**Action:** Combine multiple searches over the same list into a single standard `for` loop, extracting all necessary information in one pass. This provides measurable CPU savings and avoids multiple iterator instantiations.
