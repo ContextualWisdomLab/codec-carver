@@ -1460,9 +1460,18 @@ def _parse_probe_payload(
 ) -> MediaProbe:
     """Parse raw ffprobe JSON payload into a MediaProbe object."""
     streams = payload.get("streams", [])
-    audio_stream = next(
-        (stream for stream in streams if stream.get("codec_type") == "audio"), None
-    )
+
+    # Fast path: O(N) loop to find audio stream and check for video in one pass
+    # Avoids multiple generator expressions and any/next calls for measurable CPU savings on large files
+    audio_stream = None
+    has_video = False
+    for stream in streams:
+        codec_type = stream.get("codec_type")
+        if codec_type == "audio" and audio_stream is None:
+            audio_stream = stream
+        elif codec_type == "video":
+            has_video = True
+
     if audio_stream is None:
         raise MediaShrinkerError(f"{source_path} has no audio stream")
 
@@ -1487,7 +1496,7 @@ def _parse_probe_payload(
         size_bytes=parsed_size,
         audio_codec=audio_stream.get("codec_name"),
         audio_bit_rate=audio_bit_rate,
-        has_video=any(stream.get("codec_type") == "video" for stream in streams),
+        has_video=has_video,
         format_name=str(format_section.get("format_name", "")),
     )
 
