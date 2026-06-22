@@ -2611,7 +2611,7 @@ jobs:
             local validation_status=0
             local source_root="${OPENCODE_SOURCE_WORKDIR:-}"
 
-            if [ -z "$source_root" ] || [ ! -d "$source_root/.git" ]; then
+            if [ -z "$source_root" ] || ! git -C "$source_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
               return 1
             fi
 
