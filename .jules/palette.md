@@ -32,3 +32,6 @@
 ## 2026-06-21 - Accessible Form Validation
 **Learning:** When using custom JS validation, dynamically toggling `aria-invalid='true'` in tandem with `setCustomValidity()` provides critical feedback to screen readers that isn't always reliably conveyed by custom validity alone.
 **Action:** Always sync `aria-invalid` state with JS validation logic for screen reader users.
+## 2024-06-25 - Expanding Drop Zones for File Inputs
+**Learning:** Tiny file input buttons are hard targets. Expanding the drop zone to the entire parent container (and adding a clear `.dragover` visual state) drastically improves the drag-and-drop experience.
+**Action:** Always make entire form containers accept dropped files when possible, rather than relying solely on the native file input element.
