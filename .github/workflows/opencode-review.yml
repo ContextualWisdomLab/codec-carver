@@ -2895,12 +2895,6 @@ jobs:
               ;;
           esac
 
-          if [ "$gate_result" = "MISSING_SENTINEL" ] && [ -z "$comment_body" ]; then
-            request_changes_for_gate_failure "No current-run OpenCode sentinel comment was found."
-            echo "::endgroup::"
-            exit 0
-          fi
-
           case "$gate_result" in
             APPROVE)
               if request_changes_for_merge_conflict_if_present; then
