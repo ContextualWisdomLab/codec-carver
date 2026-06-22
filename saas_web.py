@@ -76,16 +76,18 @@ HTML_TEMPLATE = """
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
         @keyframes spinner-border { to { transform: rotate(360deg); } }
+        .box { transition: background-color 0.2s, border-color 0.2s; }
+        .box.dragover { background-color: #f8f9fa; border-color: #007bff; border-style: dashed; }
     </style>
 </head>
 <body>
-    <div class="box">
+    <div class="box" id="drop-zone">
         <h2>Shrink Media File</h2>
         <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
             <p>
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="updateFileSizePreview(this)">
-                <br><span id="file_help" class="help-text">Select an audio or video file to shrink.</span>
+                <br><span id="file_help" class="help-text">Select an audio or video file to shrink, or drag and drop it here.</span>
                 <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #17a2b8;"></span>
             </p>
             <p>
@@ -153,6 +155,31 @@ HTML_TEMPLATE = """
                     btn.setAttribute('aria-busy', 'true');
                 }, 10);
             });
+
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file');
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+        function preventDefaults (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
+        });
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false);
+        });
+        dropZone.addEventListener('drop', (e) => {
+            let dt = e.dataTransfer;
+            let files = dt.files;
+            if (files.length) {
+                fileInput.files = files;
+                updateFileSizePreview(fileInput);
+            }
+        }, false);
         </script>
     </div>
 </body>
