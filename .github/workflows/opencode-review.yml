@@ -577,6 +577,7 @@ jobs:
 
           jq -n --arg workspace "$OPENCODE_SOURCE_WORKDIR" '{
             "$schema": "https://opencode.ai/config.json",
+            "lsp": true,
             "model": "github-models/openai/gpt-5",
             "small_model": "github-models/deepseek/deepseek-v3-0324",
             "enabled_providers": ["github-models"],
@@ -629,15 +630,15 @@ jobs:
             },
             "permission": {
               "edit": "deny",
-              "bash": "deny",
+              "bash": "allow",
               "read": "allow",
               "grep": "allow",
               "glob": "allow",
               "list": "allow",
-              "task": "deny",
-              "webfetch": "deny",
-              "websearch": "deny",
-              "lsp": "deny",
+              "task": "allow",
+              "webfetch": "allow",
+              "websearch": "allow",
+              "lsp": "allow",
               "external_directory": "allow"
             },
             "agent": {
@@ -648,15 +649,15 @@ jobs:
                 "steps": 4,
                 "permission": {
                   "edit": "deny",
-                  "bash": "deny",
+                  "bash": "allow",
                   "read": "allow",
                   "grep": "allow",
                   "glob": "allow",
                   "list": "allow",
-                  "task": "deny",
-                  "webfetch": "deny",
-                  "websearch": "deny",
-                  "lsp": "deny",
+                  "task": "allow",
+                  "webfetch": "allow",
+                  "websearch": "allow",
+                  "lsp": "allow",
                   "external_directory": "allow"
                 }
               },
@@ -667,15 +668,15 @@ jobs:
                 "steps": 12,
                 "permission": {
                   "edit": "deny",
-                  "bash": "deny",
+                  "bash": "allow",
                   "read": "allow",
                   "grep": "allow",
                   "glob": "allow",
                   "list": "allow",
-                  "task": "deny",
-                  "webfetch": "deny",
-                  "websearch": "deny",
-                  "lsp": "deny",
+                  "task": "allow",
+                  "webfetch": "allow",
+                  "websearch": "allow",
+                  "lsp": "allow",
                   "external_directory": "allow"
                 }
               }
