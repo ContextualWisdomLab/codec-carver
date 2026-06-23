@@ -1,0 +1,88 @@
+name: PR Review Merge Scheduler
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print planned actions without mutating PRs
+        required: false
+        default: false
+        type: boolean
+      max_prs:
+        description: Maximum open PRs to inspect
+        required: false
+        default: "100"
+      trigger_reviews:
+        description: Dispatch OpenCode Review for PR heads without current approval
+        required: false
+        default: true
+        type: boolean
+      enable_auto_merge:
+        description: Enable auto-merge for current-head approved PRs
+        required: false
+        default: true
+        type: boolean
+      update_branches:
+        description: Update outdated PR branches after OpenCode approval
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: pr-review-merge-scheduler
+  cancel-in-progress: false
+
+jobs:
+  scan-pr-queue:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      checks: read
+      contents: write
+      pull-requests: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+      MAX_PRS: ${{ inputs.max_prs || '100' }}
+      PROJECT_FLOW: ${{ vars.PROJECT_FLOW }}
+      TRIGGER_REVIEWS: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_reviews == true }}
+      ENABLE_AUTO_MERGE: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_auto_merge == true }}
+      UPDATE_BRANCHES: ${{ github.event_name != 'workflow_dispatch' || inputs.update_branches == true }}
+    steps:
+      - name: Download central scheduler
+        env:
+          CENTRAL_REPOSITORY: ContextualWisdomLab/.github
+          CENTRAL_REF: main
+        run: |
+          set -euo pipefail
+          scheduler_dir="$RUNNER_TEMP/pr-governance"
+          mkdir -p "$scheduler_dir"
+          gh api "repos/${CENTRAL_REPOSITORY}/contents/scripts/ci/pr_review_merge_scheduler.py?ref=${CENTRAL_REF}"             --jq .content | base64 -d > "$scheduler_dir/pr_review_merge_scheduler.py"
+          python3 "$scheduler_dir/pr_review_merge_scheduler.py" --self-test
+
+      - name: Inspect PR review and merge queue
+        run: |
+          set -euo pipefail
+          project_flow="$PROJECT_FLOW"
+          if [ -z "$project_flow" ]; then
+            project_flow=github-flow
+            if [ "$DEFAULT_BRANCH" = develop ]; then
+              project_flow=git-flow
+            fi
+          fi
+          args=(
+            --repo "$GITHUB_REPOSITORY"
+            --base-branch "$DEFAULT_BRANCH"
+            --max-prs "$MAX_PRS"
+            --project-flow "$project_flow"
+            --review-workflow "OpenCode Review"
+          )
+          if [ "$DRY_RUN" = true ]; then args+=(--dry-run); fi
+          if [ "$TRIGGER_REVIEWS" = true ]; then args+=(--trigger-reviews); else args+=(--no-trigger-reviews); fi
+          if [ "$ENABLE_AUTO_MERGE" = true ]; then args+=(--enable-auto-merge); else args+=(--no-enable-auto-merge); fi
+          if [ "$UPDATE_BRANCHES" = true ]; then args+=(--update-branches); else args+=(--no-update-branches); fi
+          python3 "$RUNNER_TEMP/pr-governance/pr_review_merge_scheduler.py" "${args[@]}"
