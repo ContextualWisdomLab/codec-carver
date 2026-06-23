@@ -56,12 +56,19 @@ jobs:
       - name: Download central scheduler
         env:
           CENTRAL_REPOSITORY: ContextualWisdomLab/.github
-          CENTRAL_REF: main
+          CENTRAL_REF: 6cb3250efdbc27e57e63ed09b14fb6e8ddf18384
+          CENTRAL_SCHEDULER_SHA256: 1024bd751cdcf4f114d831ce45b08bd666b3eb5033be0039ceed657f103d8ff7
         run: |
           set -euo pipefail
           scheduler_dir="$RUNNER_TEMP/pr-governance"
           mkdir -p "$scheduler_dir"
-          gh api "repos/${CENTRAL_REPOSITORY}/contents/scripts/ci/pr_review_merge_scheduler.py?ref=${CENTRAL_REF}"             --jq .content | base64 -d > "$scheduler_dir/pr_review_merge_scheduler.py"
+          gh api "repos/${CENTRAL_REPOSITORY}/contents/scripts/ci/pr_review_merge_scheduler.py?ref=${CENTRAL_REF}" \
+            --jq .content | base64 -d > "$scheduler_dir/pr_review_merge_scheduler.py"
+          actual_sha256="$(sha256sum "$scheduler_dir/pr_review_merge_scheduler.py" | awk '{print $1}')"
+          if [ "$actual_sha256" != "$CENTRAL_SCHEDULER_SHA256" ]; then
+            echo "::error::Central scheduler checksum mismatch: expected $CENTRAL_SCHEDULER_SHA256, got $actual_sha256"
+            exit 1
+          fi
           python3 "$scheduler_dir/pr_review_merge_scheduler.py" --self-test
 
       - name: Inspect PR review and merge queue
