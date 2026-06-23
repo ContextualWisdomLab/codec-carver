@@ -177,5 +177,49 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#b02a37';", html)
 
+
+    def test_shrink_media_endpoint_rejects_invalid_content_type(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.sh"
+            dummy_file_path.write_bytes(b"echo 'hacked'")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("input.sh", f, "application/x-sh")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "Invalid content type"})
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_sanitizes_filename(self, mock_convert_file):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            # Setup mock return value to avoid actually running conversion
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = Path(temp_dir) / "output.flac"
+            mock_result.output_path.write_bytes(b"dummy")
+            mock_convert_file.return_value = [mock_result]
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("../../etc/passwd", f, "audio/wav")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+
+            # Extract the actual source path passed to convert_file
+            called_source_path = mock_convert_file.call_args.kwargs['source']
+            self.assertEqual(called_source_path.name, "passwd")
+
 if __name__ == '__main__':
+
     unittest.main()
