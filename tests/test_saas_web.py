@@ -169,5 +169,13 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(payload, {"error": "Processing failed or no output generated"})
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
+
+    def test_get_ui_includes_target_bytes_validation_feedback(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
+        self.assertIn("preview.style.color = '#dc3545';", html)
+
 if __name__ == '__main__':
     unittest.main()
