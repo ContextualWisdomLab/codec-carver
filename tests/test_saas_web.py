@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import saas_web
-from saas_web import app
+from saas_web import app, secure_filename
 from media_shrinker import ConversionResult
 
 client = TestClient(app)
@@ -176,6 +176,26 @@ class TestSaasWeb(unittest.TestCase):
         html = response.text
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
+
+    def test_secure_filename_sanitizes_path_traversal(self):
+        self.assertEqual(secure_filename("../../../etc/passwd"), "passwd")
+        self.assertEqual(secure_filename("/var/log/syslog"), "syslog")
+
+    def test_secure_filename_handles_windows_paths(self):
+        self.assertEqual(secure_filename("C:\\Windows\\System32\\cmd.exe"), "cmd.exe")
+        self.assertEqual(secure_filename("..\\..\\boot.ini"), "boot.ini")
+
+    def test_secure_filename_replaces_unsafe_characters(self):
+        self.assertEqual(secure_filename("my file @123!.txt"), "my_file__123_.txt")
+        self.assertEqual(secure_filename("injection; rm -rf /"), "injection__rm_-rf_")
+
+    def test_secure_filename_strips_leading_trailing_dots(self):
+        self.assertEqual(secure_filename(".hidden.txt"), "hidden.txt")
+        self.assertEqual(secure_filename("file.."), "file")
+
+    def test_secure_filename_empty_fallback(self):
+        self.assertEqual(secure_filename("..."), "upload.tmp")
+        self.assertEqual(secure_filename(""), "upload.tmp")
 
 if __name__ == '__main__':
     unittest.main()

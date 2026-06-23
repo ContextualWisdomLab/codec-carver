@@ -1,6 +1,7 @@
 import tempfile
 import logging
 import shutil
+import re
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -187,6 +188,18 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def secure_filename(filename: str) -> str:
+    """Sanitize the filename to prevent path traversal and ensure safe characters."""
+    name = Path(filename).name
+    if "\\" in name:
+        name = name.split("\\")[-1]
+    name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', name)
+    name = name.strip(' .')
+    if not name:
+        return "upload.tmp"
+    return name
+
+
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
     if temp_dir_path.exists():
@@ -226,9 +239,7 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
+        safe_filename = secure_filename(file.filename)
 
         source_path = input_dir / safe_filename
         bytes_written = 0
