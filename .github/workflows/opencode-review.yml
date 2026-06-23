@@ -732,7 +732,7 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_ATTEMPTS: "2"
+          OPENCODE_MODEL_ATTEMPTS: "3"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -860,7 +860,7 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_ATTEMPTS: "2"
+          OPENCODE_MODEL_ATTEMPTS: "3"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-fallback.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -986,7 +986,7 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_ATTEMPTS: "2"
+          OPENCODE_MODEL_ATTEMPTS: "3"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -1100,6 +1100,128 @@ jobs:
           fi
           record_review_status "success"
 
+      - name: Run OpenCode PR Review fallback (OpenAI o-series)
+        id: opencode_review_o_series_fallback
+        if: >-
+          always()
+          && steps.opencode_review_primary.outputs.review_status != 'success'
+          && steps.opencode_review_fallback.outputs.review_status != 'success'
+          && steps.opencode_review_second_fallback.outputs.review_status != 'success'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          USE_GITHUB_TOKEN: "true"
+          SHARE: "false"
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+          NO_COLOR: "1"
+          OPENCODE_MODEL_CANDIDATES: "github-models/openai/o3 github-models/openai/o4-mini"
+          OPENCODE_MODEL_ATTEMPTS: "2"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
+          OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
+          OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-o-series-fallback.md
+          OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
+          OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          record_review_status() {
+            printf 'review_status=%s\n' "$1" >>"$GITHUB_OUTPUT"
+          }
+          record_review_model() {
+            printf 'review_model=%s\n' "$1" >>"$GITHUB_OUTPUT"
+          }
+          normalize_opencode_output() {
+            local output_file="$1"
+
+            if bash "$GITHUB_WORKSPACE/scripts/ci/opencode_review_approve_gate.sh" "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file" >/dev/null; then
+              return 0
+            fi
+
+            if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_normalize_output.py" \
+              "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file"; then
+              bash "$GITHUB_WORKSPACE/scripts/ci/opencode_review_approve_gate.sh" "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file" >/dev/null
+              return $?
+            fi
+
+            return 1
+          }
+
+          cd "$OPENCODE_REVIEW_WORKDIR"
+          opencode_attempts="${OPENCODE_MODEL_ATTEMPTS:-2}"
+          for model_candidate in $OPENCODE_MODEL_CANDIDATES; do
+            candidate_output_file="${RUNNER_TEMP}/opencode-review-${model_candidate//\//-}.md"
+            opencode_json_file="${candidate_output_file}.jsonl"
+            opencode_export_file="${candidate_output_file}.session.json"
+            prompt_file="${RUNNER_TEMP}/opencode-review-${model_candidate//\//-}-prompt.md"
+            cat >"$prompt_file" <<EOF
+          GPT-5, DeepSeek R1, and DeepSeek V3 did not produce a usable review. Review PR #${PR_NUMBER} in ${OPENCODE_SOURCE_WORKDIR} with ${model_candidate}. The trusted workflow checkout is ${GITHUB_WORKSPACE}; inspect the pull request head source only from ${OPENCODE_SOURCE_WORKDIR}.
+          CodeGraph MCP is mandatory for structural checks. Also use DeepWiki for repo docs, Context7 for current library/API docs, and web_search for bounded external lookups such as user-claimed concepts, industry standards, international standards, official platform specifications, and comparable issue or PR precedents when applicable. Do not rely on model memory for concepts, standards, runtime support, or domain terminology when a search source is available.
+          Read ./bounded-review-evidence.md first, follow its Review language evidence for the final review language, then inspect changed files and focused hunks under the PR head worktree. Cover security/privacy boundaries, tenant isolation, workflow contracts, user-facing behavior, tests, cross-file compatibility, repository conventions, deployment evidence, git history, breaking-change/backcompat impact, and regression risk. For schema, migration, database, API, workflow, security, or compliance changes, compare against nearby implementation, code conventions, reserved words, naming rules, applicable standards, and production deployment evidence before approving.
+          Before APPROVE, the summary must name at least one exact changed file path and include a Verification posture section with these exact labels: Linter/static:, TDD/regression:, Coverage:, Docstring coverage:, DAG:, PoC/execution:, DDD/domain:, CDD/context:, Similar issues:, Claim/concept check:, Standards search:, Compatibility/convention:, Breaking-change/backcompat:, Performance:, Design/UX:, Security/privacy:. The CDD/context label must explicitly mention CodeGraph or structural MCP evidence. Coverage and Docstring coverage labels must cite executed coverage evidence proving 100%; missing, partial, skipped, unavailable, or not-applicable measurement is a blocker, not an approval condition. DAG: must name the rendered Change Flow DAG or an equivalent Mermaid DAG that maps changed files to affected execution path, main risk, and verification path. PoC/execution: must cite the scratch proof, repro, focused test, lint, security, performance, or UI verification command that was actually run and its result; if no meaningful PoC can be run, state the exact repository limitation and request changes when the claim cannot otherwise be proven. If a surface is not applicable or unavailable, say why using that label.
+          First line exactly:
+          <!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->
+          Then exactly one control block:
+          <!-- opencode-review-control-v1
+          {"head_sha":"${HEAD_SHA}","run_id":"${RUN_ID}","run_attempt":"${RUN_ATTEMPT}","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence and Verification posture labels","findings":[]}
+          -->
+          APPROVE only for no blockers. REQUEST_CHANGES findings require path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. Use line-specific, source-backed findings only. Return only the review body.
+          EOF
+
+            for opencode_attempt in $(seq 1 "$opencode_attempts"); do
+              rm -f "$opencode_json_file" "$opencode_export_file" "$candidate_output_file"
+              set +e
+              timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-180}s" opencode run "$(cat "$prompt_file")" \
+                --pure \
+                --agent ci-review-fallback \
+                --model "$model_candidate" \
+                --format json \
+                --title "PR #${PR_NUMBER} OpenCode bounded o-series review ${model_candidate} attempt ${opencode_attempt}/${opencode_attempts}" >"$opencode_json_file"
+              opencode_run_status=$?
+              set -e
+              if [ "$opencode_run_status" -ne 0 ]; then
+                printf 'OpenCode %s fallback attempt %s/%s failed with exit %s.\n' "$model_candidate" "$opencode_attempt" "$opencode_attempts" "$opencode_run_status"
+                if [ "$opencode_attempt" -lt "$opencode_attempts" ]; then
+                  sleep 10
+                fi
+                continue
+              fi
+
+              session_id="$(jq -r 'select(.type == "step_start") | .sessionID' "$opencode_json_file" | tail -n 1)"
+              if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
+                printf 'OpenCode %s attempt %s/%s JSON output did not include a session id.\n' "$model_candidate" "$opencode_attempt" "$opencode_attempts"
+                continue
+              fi
+              if ! opencode export "$session_id" --pure >"$opencode_export_file"; then
+                printf 'OpenCode %s attempt %s/%s session export did not complete.\n' "$model_candidate" "$opencode_attempt" "$opencode_attempts"
+                continue
+              fi
+              jq -r '.messages[] | select(.info.role == "assistant") | .parts[]? | select(.type == "text") | .text' "$opencode_export_file" >"$candidate_output_file"
+              if [ ! -s "$candidate_output_file" ]; then
+                printf 'OpenCode %s attempt %s/%s session export did not include assistant text.\n' "$model_candidate" "$opencode_attempt" "$opencode_attempts"
+                continue
+              fi
+              if normalize_opencode_output "$candidate_output_file"; then
+                cp "$candidate_output_file" "$OPENCODE_OUTPUT_FILE"
+                record_review_model "$model_candidate"
+                record_review_status "success"
+                exit 0
+              fi
+              printf 'OpenCode %s attempt %s/%s output did not include a valid control conclusion.\n' "$model_candidate" "$opencode_attempt" "$opencode_attempts"
+              if [ "$opencode_attempt" -lt "$opencode_attempts" ]; then
+                sleep 10
+              fi
+            done
+          done
+
+          record_review_status "failed"
+
       - name: Exchange OpenCode app token for review writes
         id: opencode_app_token
         if: always()
@@ -1172,7 +1294,8 @@ jobs:
           always()
           && (steps.opencode_review_primary.outputs.review_status == 'success'
               || steps.opencode_review_fallback.outputs.review_status == 'success'
-              || steps.opencode_review_second_fallback.outputs.review_status == 'success')
+              || steps.opencode_review_second_fallback.outputs.review_status == 'success'
+              || steps.opencode_review_o_series_fallback.outputs.review_status == 'success')
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || secrets.GITHUB_TOKEN }}
           GH_REPOSITORY: ${{ github.repository }}
@@ -1183,9 +1306,11 @@ jobs:
           OPENCODE_PRIMARY_OUTCOME: ${{ steps.opencode_review_primary.outputs.review_status }}
           OPENCODE_FALLBACK_OUTCOME: ${{ steps.opencode_review_fallback.outputs.review_status }}
           OPENCODE_SECOND_FALLBACK_OUTCOME: ${{ steps.opencode_review_second_fallback.outputs.review_status }}
+          OPENCODE_O_SERIES_FALLBACK_OUTCOME: ${{ steps.opencode_review_o_series_fallback.outputs.review_status }}
           OPENCODE_PRIMARY_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-fallback.md
           OPENCODE_SECOND_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
+          OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-o-series-fallback.md
         run: |
           set -euo pipefail
 
@@ -1193,8 +1318,10 @@ jobs:
             review_output_file="$OPENCODE_PRIMARY_OUTPUT_FILE"
           elif [ "$OPENCODE_FALLBACK_OUTCOME" = "success" ]; then
             review_output_file="$OPENCODE_FALLBACK_OUTPUT_FILE"
-          else
+          elif [ "$OPENCODE_SECOND_FALLBACK_OUTCOME" = "success" ]; then
             review_output_file="$OPENCODE_SECOND_FALLBACK_OUTPUT_FILE"
+          else
+            review_output_file="$OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE"
           fi
 
           clean_output="$(mktemp)"
@@ -1336,9 +1463,11 @@ jobs:
           OPENCODE_PRIMARY_OUTCOME: ${{ steps.opencode_review_primary.outputs.review_status }}
           OPENCODE_FALLBACK_OUTCOME: ${{ steps.opencode_review_fallback.outputs.review_status }}
           OPENCODE_SECOND_FALLBACK_OUTCOME: ${{ steps.opencode_review_second_fallback.outputs.review_status }}
+          OPENCODE_O_SERIES_FALLBACK_OUTCOME: ${{ steps.opencode_review_o_series_fallback.outputs.review_status }}
           OPENCODE_PRIMARY_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-fallback.md
           OPENCODE_SECOND_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
+          OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-o-series-fallback.md
           APPROVAL_CHECK_WAIT_ATTEMPTS: "241"
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
@@ -2731,6 +2860,9 @@ jobs:
           if [ "$opencode_review_outcome" != "success" ]; then
             opencode_review_outcome="${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}"
           fi
+          if [ "$opencode_review_outcome" != "success" ]; then
+            opencode_review_outcome="${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}"
+          fi
 
           if [ "$opencode_review_outcome" != "success" ]; then
             failed_checks_file="$(mktemp)"
@@ -2801,7 +2933,7 @@ jobs:
                   "" \
                   "### 1. MEDIUM Review Evidence Missing - Rerun OpenCode with usable current-head evidence" \
                   "- Problem: OpenCode did not return a valid control block that can be tied to the changed files for head \`${HEAD_SHA}\`." \
-                  "- Root cause: The model attempts ended with outcomes primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}; the workflow cannot distinguish a real clean review from invalid or unsupported model output." \
+                  "- Root cause: The model attempts ended with outcomes primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}; the workflow cannot distinguish a real clean review from invalid or unsupported model output." \
                   "- Fix: Rerun or repair the OpenCode review path until the review names the changed-file evidence it inspected, then let the trusted gate evaluate that valid output." \
                   "- Regression test: Keep invalid OpenCode model output on the request-changes path even when same-head peer checks are otherwise clean." \
                   "" \
@@ -2810,7 +2942,7 @@ jobs:
                   "All same-head peer GitHub Checks completed without failed or pending contexts, and no unresolved human review threads remained. Approval still requires a valid current-head review summary that names changed-file evidence. Invalid model output is treated as review tooling instability, not as a source-code defect." \
                   "" \
                   "- Result: REQUEST_CHANGES" \
-                  "- Reason: OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}; no valid source-backed review output was available for current head \`${HEAD_SHA}\`." \
+                  "- Reason: OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}; no valid source-backed review output was available for current head \`${HEAD_SHA}\`." \
                   "- Head SHA: \`${HEAD_SHA}\`" \
                   "- Workflow run: ${RUN_ID}" \
                   "- Workflow attempt: ${RUN_ATTEMPT}")"
@@ -2828,6 +2960,8 @@ jobs:
             selected_review_output_file="${OPENCODE_FALLBACK_OUTPUT_FILE}"
           elif [ "${OPENCODE_SECOND_FALLBACK_OUTCOME:-}" = "success" ]; then
             selected_review_output_file="${OPENCODE_SECOND_FALLBACK_OUTPUT_FILE}"
+          elif [ "${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-}" = "success" ]; then
+            selected_review_output_file="${OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE}"
           fi
 
           load_selected_review_output() {
