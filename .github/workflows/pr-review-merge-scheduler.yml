@@ -56,8 +56,8 @@ jobs:
       - name: Download central scheduler
         env:
           CENTRAL_REPOSITORY: ContextualWisdomLab/.github
-          CENTRAL_REF: 6cb3250efdbc27e57e63ed09b14fb6e8ddf18384
-          CENTRAL_SCHEDULER_SHA256: 1024bd751cdcf4f114d831ce45b08bd666b3eb5033be0039ceed657f103d8ff7
+          CENTRAL_REF: 7be2d9949831d94cfb96cd7eaadae9513e7d325d
+          CENTRAL_SCHEDULER_SHA256: f954b62efa4ad60964a65501d777cb4ba26f1ac5746c2d11406d610a5ab695f6
         run: |
           set -euo pipefail
           scheduler_dir="$RUNNER_TEMP/pr-governance"
