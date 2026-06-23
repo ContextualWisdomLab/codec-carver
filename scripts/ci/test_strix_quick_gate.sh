@@ -329,15 +329,16 @@ assert_strix_child_target_uses_constant_argument() {
 
 assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	local workflow_file="$REPO_ROOT/.github/workflows/opencode-review.yml"
+	local scheduler_workflow_file="$REPO_ROOT/.github/workflows/pr-review-merge-scheduler.yml"
 	local opencode_config="$REPO_ROOT/opencode.jsonc"
 
-	assert_file_contains "$workflow_file" "pull_request_target:" "opencode review workflow runs on the trusted PR trigger so merge-conflict PRs still get the standard review surface"
-	assert_file_contains "$workflow_file" "pull_request:" "opencode review workflow publishes a PR-associated required check while trusted review side effects stay on pull_request_target"
-	assert_file_contains "$workflow_file" "Wait for trusted OpenCode approval review" "opencode pull_request bridge only waits for a trusted same-head OpenCode approval"
-	assert_file_contains "$workflow_file" "Trusted OpenCode requested changes for head" "opencode pull_request bridge fails immediately when the trusted same-head review requested changes"
-	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target'" "opencode review side effects are limited to pull_request_target or manual workflow dispatch"
+	assert_file_contains "$workflow_file" "workflow_dispatch:" "opencode review workflow is triggered by the central PR review scheduler"
+	assert_file_contains "$workflow_file" "pr_head_ref:" "opencode review workflow accepts the explicit PR head ref from the scheduler"
+	assert_file_contains "$workflow_file" "pr_head_sha:" "opencode review workflow accepts the explicit PR head SHA from the scheduler"
+	assert_file_contains "$scheduler_workflow_file" '--review-workflow "OpenCode Review"' "PR review scheduler dispatches the canonical OpenCode review workflow"
+	assert_file_contains "$scheduler_workflow_file" 'args+=(--trigger-reviews)' "PR review scheduler can request current-head OpenCode review evidence"
+	assert_file_contains "$workflow_file" "github.event_name == 'workflow_dispatch'" "opencode review side effects are limited to explicit scheduler or manual dispatch"
 	assert_file_contains "$workflow_file" "opencode-review-target:" "opencode trusted review job is separate from the pull_request bridge"
-	assert_file_contains "$workflow_file" "github.event.pull_request.head.repo.full_name == github.repository" "opencode review workflow limits pull_request_target review execution to same-repository PRs"
 	assert_file_contains "$workflow_file" "Initialize CodeGraph index for OpenCode" "opencode review workflow initializes CodeGraph before review"
 	assert_file_contains "$workflow_file" "actions: read" "opencode review workflow can read failed Actions logs for GitHub Check diagnosis"
 	assert_file_contains "$workflow_file" "checks: read" "opencode review workflow can read failed check-run annotations for line-specific findings"
