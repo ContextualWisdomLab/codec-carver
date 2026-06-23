@@ -419,3 +419,44 @@ jobs:
           path: strix_runs/
           if-no-files-found: error
           retention-days: 5
+
+  publish-manual-pr-evidence-status:
+    name: publish-manual-pr-evidence-status
+    needs: strix
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Publish same-head manual Strix status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
+          STRIX_RESULT: ${{ needs.strix.result }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::PR head SHA must be a 40-character git SHA."
+            exit 1
+          fi
+
+          case "$STRIX_RESULT" in
+            success)
+              state="success"
+              description="Manual workflow_dispatch Strix evidence passed"
+              ;;
+            failure|cancelled|skipped)
+              state="failure"
+              description="Manual workflow_dispatch Strix evidence failed"
+              ;;
+            *)
+              state="error"
+              description="Manual workflow_dispatch Strix evidence inconclusive"
+              ;;
+          esac
+
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
+            -f state="$state" \
+            -f context="strix" \
+            -f description="$description" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
