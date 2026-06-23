@@ -187,13 +187,43 @@ class FindCandidateTests(unittest.TestCase):
 
             original_lstat = os.lstat
 
-            def flaky_lstat(path):
-                name = os.path.basename(str(path))
-                if name in {"bad.mp3", "bad_dir"}:
-                    raise OSError("cannot inspect symlink state")
-                return original_lstat(path)
 
-            with patch("os.lstat", flaky_lstat):
+
+            # When using os.scandir, entry attributes (is_symlink, stat) don't call os.lstat
+            # in a way that can be mocked by patch("os.lstat"). We patch os.scandir to yield
+            # a mock entry that raises OSError when is_symlink or stat is called, or we just
+            # patch os.lstat and add a call to os.lstat in the code.
+            # A cleaner way is to patch the code to simulate the failure, but since we just
+            # want to verify that an OSError on checking a file causes it to be skipped,
+            # we can create a directory/file without read permissions, but Python tests running
+            # as root might bypass it. Let's patch os.scandir instead.
+
+            original_scandir = os.scandir
+            class FlakyDirEntry:
+                def __init__(self, entry):
+                    self._entry = entry
+                def __getattr__(self, name):
+                    if name in ('is_symlink', 'is_dir', 'is_file', 'stat'):
+                        if self._entry.name in {"bad.mp3", "bad_dir"}:
+                            def raise_os_error(*args, **kwargs):
+                                raise OSError("cannot inspect state")
+                            return raise_os_error
+                    return getattr(self._entry, name)
+
+            def flaky_scandir(path):
+                for entry in original_scandir(path):
+                    yield FlakyDirEntry(entry)
+
+            class FlakyScandirContext:
+                def __init__(self, path):
+                    self.path = path
+                    self.it = flaky_scandir(path)
+                def __enter__(self):
+                    return self.it
+                def __exit__(self, *args):
+                    pass
+
+            with patch("os.scandir", FlakyScandirContext):
                 candidates = [
                     p[0].relative_to(root)
                     for p in find_candidates(root, include_under_limit=True)
@@ -1019,6 +1049,8 @@ class MetadataPreservationTests(unittest.TestCase):
                     setxattr(source, b"user.media_shrinker_test", b"recording-date")
                 except OSError:
                     xattr_supported = False
+            else:
+                xattr_supported = False
 
             preserve_file_attributes(source, dest, setfile_path=None)
 
