@@ -38,7 +38,3 @@
 ## 2026-06-23 - Improve Error Message Clarity
 **Learning:** Added inline visual feedback to the 'target_bytes' input field for invalid inputs (e.g., negative or zero values) provides immediate context to the user. I saw the empty text in preview on invalid inputs in the UI test screenshots and in the code, and realized it would be better UX to display the error text in the preview span with red styling, rather than leaving it empty.
 **Action:** Add descriptive innerText and red color styling to the preview element on validation failure to enhance error visibility.
-
-## 2026-06-25 - Tactile Button Feedback and Visual ARIA Mapping
-**Learning:** Enhancing button click states (via `transform: scale()`) provides highly intuitive tactile feedback, and directly mapping visual error styles to accessibility attributes (e.g., `input[aria-invalid="true"] { outline: 2px solid red; }`) ensures that sighted users and screen reader users experience the exact same validation state source of truth.
-**Action:** Always add subtle `scale` transforms on `:active:not(:disabled)` button states, and hook visual error outlines to the `aria-invalid` attribute rather than custom classes.
