@@ -349,7 +349,7 @@ def build_audio_plan(
                 "-protocol_whitelist",
                 "file,crypto,data",
                 "-i",
-                str(source_path),
+                str(source_path.resolve()),
                 "-map",
                 "0:a:0",
                 "-map_metadata",
@@ -361,7 +361,7 @@ def build_audio_plan(
                 "flac",
                 "-compression_level",
                 "12",
-                str(output_path),
+                str(output_path.resolve()),
             ]
         )
         args = _with_ffmpeg_threads(args, ffmpeg_threads)
@@ -413,7 +413,7 @@ def build_opus_plan(
             "-protocol_whitelist",
             "file,crypto,data",
             "-i",
-            str(source_path),
+            str(source_path.resolve()),
             "-map",
             "0:a:0",
             "-map_metadata",
@@ -431,7 +431,7 @@ def build_opus_plan(
             "on",
             "-compression_level",
             "10",
-            str(output_path),
+            str(output_path.resolve()),
         ]
     )
     args = _with_ffmpeg_threads(args, ffmpeg_threads)
@@ -463,7 +463,7 @@ def probe_media(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path),
+        str(source_path.resolve()),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
@@ -500,7 +500,7 @@ def build_silencedetect_command(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path),
+        str(source_path.resolve()),
         "-af",
         f"silencedetect=noise={silence_noise}:d={_format_seconds(silence_min_duration_seconds)}",
         "-f",
