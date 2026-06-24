@@ -72,7 +72,7 @@ HTML_TEMPLATE = """
         button:hover:not(:disabled) { background-color: #0056b3; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
         button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
-        .required-star { color: #dc3545; }
+        .required-star { color: #b02a37; }
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
         @keyframes spinner-border { to { transform: rotate(360deg); } }
@@ -88,13 +88,13 @@ HTML_TEMPLATE = """
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="updateFileSizePreview(this)">
                 <br><span id="file_help" class="help-text">Select an audio or video file to shrink, or drag and drop it here.</span>
-                <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #17a2b8;"></span>
+                <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
-                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #28a745;">1.86 GiB</span>
+                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
@@ -115,7 +115,7 @@ HTML_TEMPLATE = """
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
-                preview.style.color = '#17a2b8';
+                preview.style.color = '#0f6674';
                 if (!file) {
                     preview.innerText = '';
                     return;
@@ -125,7 +125,7 @@ HTML_TEMPLATE = """
                     input.setCustomValidity('File exceeds 5 GiB limit.');
                     input.setAttribute('aria-invalid', 'true');
                     preview.innerText = 'Selected file size: ' + text + ' (exceeds 5 GiB limit)';
-                    preview.style.color = '#dc3545';
+                    preview.style.color = '#b02a37';
                     return;
                 }
                 preview.innerText = 'Selected file size: ' + text;
@@ -136,11 +136,11 @@ HTML_TEMPLATE = """
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
-                preview.style.color = '#28a745';
+                preview.style.color = '#1e7e34';
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
-                    preview.style.color = '#dc3545';
+                    preview.style.color = '#b02a37';
                     this.setCustomValidity('Must be greater than 0.');
                     this.setAttribute('aria-invalid', 'true');
                 } else {
@@ -210,6 +210,10 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
+    # Security: Validate content type to prevent executable uploads
+    if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
+        return {"error": "Invalid content type"}
+
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -225,9 +229,10 @@ def shrink_media(
         input_dir.mkdir()
         output_dir.mkdir()
 
-        # Save the uploaded file
+        # Security: Prevent path traversal and executable uploads
         safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
+        safe_filename = "".join(c for c in safe_filename if c.isalnum() or c in ".-_")
+        if not safe_filename or safe_filename.startswith(".") or ".." in safe_filename:
             safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename
