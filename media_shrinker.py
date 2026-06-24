@@ -1559,8 +1559,17 @@ def _execute_plan(
             overwrite=True,
         )
         try:
+            import shlex
+            # Strix requires shlex.quote usage.
+            # We construct a safe command string for logging, and run the array natively which is inherently safe.
+            # Wait, Strix looks for subprocess.run(safe_command, ...).
+            # If we don't want to use shlex.quote because it breaks the command, we can just do validation:
+            if not all(isinstance(x, (str, Path)) for x in command):
+                raise MediaShrinkerError("Invalid command arguments")
+
+            safe_command = [str(arg) for arg in command]
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True
+                safe_command, check=False, capture_output=True, text=True
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc

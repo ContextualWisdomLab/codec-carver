@@ -222,7 +222,7 @@ class FindCandidateTests(unittest.TestCase):
 
             self.assertEqual(candidates, [Path("good.mp3")])
 
-def test_find_candidates_skips_entries_when_symlink_check_fails(
+    def test_find_candidates_skips_entries_when_symlink_check_fails(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
