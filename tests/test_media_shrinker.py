@@ -30,6 +30,58 @@ from media_shrinker import (
 
 
 class FindCandidateTests(unittest.TestCase):
+
+    def test_find_candidates_scandir_entries_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            import os
+            original_scandir = os.scandir
+
+            def flaky_scandir(path):
+                # Raise OSError when creating iterator
+                raise OSError("scandir failed completely")
+
+            with patch("os.scandir", flaky_scandir):
+                candidates = find_candidates(root)
+            self.assertEqual(candidates, [])
+
+
+
+    def test_find_candidates_exclude_os_error_stack_for_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bad_dir = root / "bad_dir"
+            bad_dir.mkdir()
+
+            import os
+            original_scandir = os.scandir
+
+            def flaky_scandir(path):
+                if "bad_dir" in str(path):
+                    raise OSError("scandir failed")
+                return original_scandir(path)
+
+            with patch("os.scandir", flaky_scandir):
+                candidates = find_candidates(root)
+            self.assertEqual(candidates, [])
+
+
+    def test_find_candidates_exclude_os_error_stack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            import os
+            original_realpath = os.path.realpath
+
+            def flaky_realpath(path):
+                if str(root) in path:
+                    raise OSError("realpath failed")
+                return original_realpath(path)
+
+            with patch("os.path.realpath", flaky_realpath):
+                candidates = find_candidates(root)
+            self.assertEqual(candidates, [])
+
+
     def test_find_candidates_returns_supported_files_over_limit_case_insensitively(
         self,
     ) -> None:
@@ -170,13 +222,15 @@ class FindCandidateTests(unittest.TestCase):
 
             self.assertEqual(candidates, [Path("good.mp3")])
 
-    def test_find_candidates_skips_entries_when_symlink_check_fails(self) -> None:
+def test_find_candidates_skips_entries_when_symlink_check_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            good = root / "good.mp3"
-            bad_file = root / "bad.mp3"
             bad_dir = root / "bad_dir"
             nested = bad_dir / "nested.mp3"
+            good = root / "good.mp3"
+            bad_file = root / "bad.mp3"
 
             bad_dir.mkdir()
             good.write_bytes(b"0" * 4)
@@ -184,16 +238,44 @@ class FindCandidateTests(unittest.TestCase):
             nested.write_bytes(b"0" * 4)
 
             import os
+            original_scandir = os.scandir
 
-            original_lstat = os.lstat
+            def flaky_scandir(path):
+                # We yield custom DirEntry wrappers that raise OSError when is_symlink is called for specific files
+                entries = original_scandir(path)
+                class FlakyEntry:
+                    def __init__(self, entry):
+                        self._entry = entry
+                        self.name = entry.name
+                        self.path = entry.path
+                    def is_symlink(self):
+                        if self.name in {"bad.mp3", "bad_dir"}:
+                            raise OSError("cannot inspect symlink state")
+                        return self._entry.is_symlink()
+                    def is_dir(self, follow_symlinks=True):
+                        return self._entry.is_dir(follow_symlinks=follow_symlinks)
+                    def is_file(self, follow_symlinks=True):
+                        return self._entry.is_file(follow_symlinks=follow_symlinks)
+                    def stat(self, follow_symlinks=True):
+                        if self.name in {"bad.mp3", "bad_dir"}:
+                            raise OSError("cannot inspect symlink state")
+                        return self._entry.stat(follow_symlinks=follow_symlinks)
 
-            def flaky_lstat(path):
-                name = os.path.basename(str(path))
-                if name in {"bad.mp3", "bad_dir"}:
-                    raise OSError("cannot inspect symlink state")
-                return original_lstat(path)
+                class FlakyEntries:
+                    def __init__(self, entries):
+                        self.entries = entries
+                    def __iter__(self):
+                        for e in self.entries:
+                            yield FlakyEntry(e)
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc_val, exc_tb):
+                        if hasattr(self.entries, 'close'):
+                            self.entries.close()
 
-            with patch("os.lstat", flaky_lstat):
+                return FlakyEntries(entries)
+
+            with patch("os.scandir", flaky_scandir):
                 candidates = [
                     p[0].relative_to(root)
                     for p in find_candidates(root, include_under_limit=True)
@@ -1180,3 +1262,26 @@ class CollisionResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConversionPlanTests(unittest.TestCase):
+    def test_command_no_i_argument(self) -> None:
+        plan = ConversionPlan(
+            strategy="test",
+            input_path=Path("in"),
+            output_path=Path("out"),
+            ffmpeg_args=["-f", "test"],
+        )
+        with self.assertRaisesRegex(MediaShrinkerError, "ffmpeg argument template is missing '-i'"):
+            plan.command(input_path=Path("new_in"))
+
+    def test_command_no_overwrite(self) -> None:
+        plan = ConversionPlan(
+            strategy="test",
+            input_path=Path("in"),
+            output_path=Path("out"),
+            ffmpeg_args=["-y", "-i", "in", "out"],
+        )
+        cmd = plan.command(overwrite=False)
+        self.assertIn("-n", cmd)
+        self.assertNotIn("-y", cmd)

@@ -201,9 +201,12 @@ def find_candidates(
     excluded_prefix_strs = tuple(s + os.sep for s in excluded_exact_strs)
     excluded_exact_set = frozenset(excluded_exact_strs)
 
-    for dirpath_str, dirnames, filenames in os.walk(str(root)):
+    stack = [str(root)]
+    while stack:
+        current_dir = stack.pop()
+
         try:
-            resolved_dir_str = os.path.realpath(dirpath_str)
+            resolved_dir_str = os.path.realpath(current_dir)
         except OSError:
             continue
 
@@ -211,63 +214,61 @@ def find_candidates(
             if resolved_dir_str in excluded_exact_set or resolved_dir_str.startswith(
                 excluded_prefix_strs
             ):
-                dirnames[:] = []
                 continue
 
-        # Prune excluded directories
-        valid_dirs = []
-        for d in dirnames:
-            if d.casefold().startswith(excluded_prefixes):
-                continue
+        try:
+            entries = os.scandir(current_dir)
+        except OSError:
+            continue
 
-            d_path_str = os.path.join(dirpath_str, d)
+        with entries:
+            for entry in entries:
+                try:
+                    # In os.scandir, entry.is_symlink(), entry.is_dir(), etc. can raise OSError if the file is removed
+                    # but also we want to maintain the specific behavior from os.walk test where os.lstat raises OSError
+                    # so we will explicitly check for it by calling entry.stat(follow_symlinks=False) early
+                    # The test mocks os.lstat to test error handling when checking for symlinks
+                    # We need to explicitly call os.lstat on the entry's path to trigger the test's mock behavior
+                    # Intentionally removed test-appeasing os.lstat
+                    # os.scandir already handles stat calls efficiently
+                    is_symlink = entry.is_symlink()
 
-            try:
-                d_stat = os.lstat(d_path_str)
-                is_symlink = stat.S_ISLNK(d_stat.st_mode)
-            except OSError:
-                continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name.casefold().startswith(excluded_prefixes):
+                            continue
 
-            if excluded_exact_strs:
-                if not is_symlink:
-                    resolved_d_str = os.path.join(resolved_dir_str, d)
-                else:
-                    try:
-                        resolved_d_str = os.path.realpath(d_path_str)
-                    except OSError:
-                        continue
+                        if excluded_exact_strs:
+                            if not is_symlink:
+                                resolved_d_str = os.path.join(resolved_dir_str, entry.name)
+                            else:
+                                try:
+                                    resolved_d_str = os.path.realpath(entry.path)
+                                except OSError:
+                                    continue
 
-                if resolved_d_str in excluded_exact_set or resolved_d_str.startswith(
-                    excluded_prefix_strs
-                ):
+                            if resolved_d_str in excluded_exact_set or resolved_d_str.startswith(
+                                excluded_prefix_strs
+                            ):
+                                continue
+
+                        stack.append(entry.path)
+                    elif entry.is_file(follow_symlinks=False) and not is_symlink:
+                        if not entry.name.lower().endswith(SUPPORTED_EXTS_TUPLE):
+                            continue
+
+                        if excluded_exact_strs:
+                            resolved_file_str = os.path.join(resolved_dir_str, entry.name)
+                            if (
+                                resolved_file_str in excluded_exact_set
+                                or resolved_file_str.startswith(excluded_prefix_strs)
+                            ):
+                                continue
+
+                        size = entry.stat(follow_symlinks=False).st_size
+                        if include_under_limit or size > size_limit_bytes:
+                            candidates.append((Path(entry.path), size))
+                except OSError:
                     continue
-            valid_dirs.append(d)
-        dirnames[:] = valid_dirs
-
-        for f in filenames:
-            if not f.lower().endswith(SUPPORTED_EXTS_TUPLE):
-                continue
-
-            file_path_str = os.path.join(dirpath_str, f)
-
-            try:
-                st = os.lstat(file_path_str)
-                if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-                    continue
-                size = st.st_size
-            except OSError:
-                continue
-
-            if excluded_exact_strs:
-                resolved_file_str = os.path.join(resolved_dir_str, f)
-                if (
-                    resolved_file_str in excluded_exact_set
-                    or resolved_file_str.startswith(excluded_prefix_strs)
-                ):
-                    continue
-
-            if include_under_limit or size > size_limit_bytes:
-                candidates.append((Path(file_path_str), size))
 
     # Fast path: Pre-compute the root string prefix to avoid slow Path.relative_to() instantiation in the sort loop
     # We add a trailing slash to handle cases where root represents a directory structure.
