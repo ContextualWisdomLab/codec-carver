@@ -68,10 +68,12 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
         .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
-        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.15s ease-in-out, transform 0.1s ease-in-out; }
         button:hover:not(:disabled) { background-color: #0056b3; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        button:active:not(:disabled) { transform: scale(0.98); }
         button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
+        input[aria-invalid="true"] { outline: 2px solid #dc3545; outline-offset: 2px; }
         .required-star { color: #dc3545; }
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
