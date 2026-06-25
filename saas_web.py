@@ -53,6 +53,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -189,7 +191,7 @@ HTML_TEMPLATE = """
 
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
-    if temp_dir_path.exists():
+    if temp_dir_path.exists() and temp_dir_path.resolve().is_relative_to(Path(tempfile.gettempdir())):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 

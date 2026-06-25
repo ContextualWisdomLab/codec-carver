@@ -36,3 +36,13 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+
+## 2026-06-25 - [Sentinel: FastAPI Security Headers]
+**Vulnerability:** Missing strict security headers (Referrer-Policy, Permissions-Policy).
+**Learning:** Default HTTP responses do not include privacy-preserving security headers. Referrer leakage can happen on cross-origin requests, and the browser may allow default access to sensitive APIs without an explicit policy blocking them.
+**Prevention:** Apply `Referrer-Policy: strict-origin-when-cross-origin` and restrict unneeded browser features via `Permissions-Policy: geolocation=(), microphone=(), camera=()` in the response middleware to adhere to defense in depth strategies.
+
+## 2026-06-25 - [Sentinel: Path Traversal in Temporary Directory Deletion]
+**Vulnerability:** Use of `shutil.rmtree()` on directories derived from user input or unpredictable states without verification can lead to path traversal if the directory path gets unexpectedly manipulated to point outside of temporary storage.
+**Learning:** Even when `tempfile.mkdtemp()` is used to create a secure directory name, if the code structure passes that `Path` object to a cleanup function later, static analysis tools (like Strix) will flag it as a path traversal risk because they cannot guarantee the path wasn't modified in between.
+**Prevention:** Ensure any path passed to recursive deletion functions like `shutil.rmtree()` is explicitly validated right before deletion. Validate that `path.resolve().is_relative_to(Path(tempfile.gettempdir()))` to guarantee it only deletes files within the designated system temporary directory.
