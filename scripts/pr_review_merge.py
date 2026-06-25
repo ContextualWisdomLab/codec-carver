@@ -41,6 +41,7 @@ class GhRunner:
             check=True,
             capture_output=True,
             text=True,
+            shell=False,
         )
 
 
