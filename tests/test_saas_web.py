@@ -34,7 +34,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;", html)
         self.assertIn("['B', 'KiB', 'MiB', 'GiB']", html)
         self.assertIn("File exceeds 5 GiB limit.", html)
-        self.assertIn("preview.style.color = '#17a2b8';", html)
+        self.assertIn("preview.style.color = '#0b7285';", html)
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
 
     def test_security_headers_present_without_plain_http_hsts(self):
@@ -175,7 +175,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.text
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
-        self.assertIn("preview.style.color = '#dc3545';", html)
+        self.assertIn("preview.style.color = '#b02a37';", html)
 
 if __name__ == '__main__':
     unittest.main()
