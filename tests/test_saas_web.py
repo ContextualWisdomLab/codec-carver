@@ -47,6 +47,7 @@ class TestSaasWeb(unittest.TestCase):
             response.headers["Content-Security-Policy"],
             "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
         )
+        self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
         self.assertNotIn("Strict-Transport-Security", response.headers)
 
     def test_hsts_header_present_for_forwarded_https(self):
