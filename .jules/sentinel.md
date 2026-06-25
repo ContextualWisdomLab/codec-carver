@@ -41,3 +41,8 @@
 **Vulnerability:** Missing strict security headers (Referrer-Policy, Permissions-Policy).
 **Learning:** Default HTTP responses do not include privacy-preserving security headers. Referrer leakage can happen on cross-origin requests, and the browser may allow default access to sensitive APIs without an explicit policy blocking them.
 **Prevention:** Apply `Referrer-Policy: strict-origin-when-cross-origin` and restrict unneeded browser features via `Permissions-Policy: geolocation=(), microphone=(), camera=()` in the response middleware to adhere to defense in depth strategies.
+
+## 2026-06-25 - [Sentinel: Path Traversal in Temporary Directory Deletion]
+**Vulnerability:** Use of `shutil.rmtree()` on directories derived from user input or unpredictable states without verification can lead to path traversal if the directory path gets unexpectedly manipulated to point outside of temporary storage.
+**Learning:** Even when `tempfile.mkdtemp()` is used to create a secure directory name, if the code structure passes that `Path` object to a cleanup function later, static analysis tools (like Strix) will flag it as a path traversal risk because they cannot guarantee the path wasn't modified in between.
+**Prevention:** Ensure any path passed to recursive deletion functions like `shutil.rmtree()` is explicitly validated right before deletion. Validate that `path.resolve().is_relative_to(Path(tempfile.gettempdir()))` to guarantee it only deletes files within the designated system temporary directory.
