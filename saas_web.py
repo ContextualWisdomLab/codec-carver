@@ -190,8 +190,20 @@ HTML_TEMPLATE = """
 
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
-    if temp_dir_path.exists():
-        shutil.rmtree(temp_dir_path, ignore_errors=True)
+    try:
+        system_tmp = Path(tempfile.gettempdir()).resolve()
+        resolved = temp_dir_path.resolve()
+        # Only delete paths inside the system temp directory that were
+        # created by this application (prefix "codec_carver_").
+        if (
+            resolved != system_tmp
+            and system_tmp in resolved.parents
+            and resolved.name.startswith("codec_carver_")
+            and resolved.exists()
+        ):
+            shutil.rmtree(resolved, ignore_errors=True)
+    except Exception:
+        logger.exception("Failed to clean up temp dir %s", temp_dir_path)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -205,8 +217,8 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
-    if target_bytes <= 0:
-        return {"error": "Invalid target_bytes value. Must be greater than 0."}
+    if target_bytes <= 0 or target_bytes > MAX_UPLOAD_BYTES:
+        return {"error": "Invalid target_bytes value. Must be between 1 and MAX_UPLOAD_BYTES."}
 
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
