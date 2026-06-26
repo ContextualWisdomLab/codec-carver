@@ -60,3 +60,6 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+## 2024-05-15 - Fast Absolute Paths for Subprocesses
+**Learning:** In Python, `pathlib.Path.resolve()` incurs heavy disk I/O because it traverses the filesystem to resolve symlinks and normalize the path. This can be a significant bottleneck when called repeatedly (e.g. in loops or large batches of files).
+**Action:** When passing file paths to command-line tools like `ffmpeg` or `subprocess.run` to ensure they are absolute and avoid argument injection, use `pathlib.Path.absolute()` instead of `.resolve()`. It performs a purely lexical path join (adding the current working directory if relative) and avoids expensive system calls, as the underlying OS syscalls handle symlink resolution automatically anyway.
