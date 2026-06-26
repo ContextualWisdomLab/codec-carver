@@ -2,6 +2,7 @@ import tempfile
 import logging
 import shutil
 from pathlib import Path
+import re
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import media_shrinker
@@ -226,10 +227,11 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
-        import re
         safe_filename = Path(file.filename).name
         safe_filename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', safe_filename)
-        safe_filename = safe_filename.replace("..", "").lstrip(".")
+        while ".." in safe_filename:
+            safe_filename = safe_filename.replace("..", "")
+        safe_filename = safe_filename.lstrip(".-")
         if not safe_filename or safe_filename in (".", ".."):
             safe_filename = "upload.tmp"
 

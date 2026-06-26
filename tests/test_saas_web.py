@@ -177,5 +177,29 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
 
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_path_traversal_sanitization(self, mock_convert_file):
+        mock_convert_file.return_value = []
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("../../../etc/passwd", f, "text/plain")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+
+            self.assertTrue(mock_convert_file.called)
+            called_args = mock_convert_file.call_args.kwargs
+            source_path = called_args.get("source")
+            self.assertNotIn("..", str(source_path))
+            self.assertTrue(str(source_path).endswith("passwd"))
+
 if __name__ == '__main__':
     unittest.main()
