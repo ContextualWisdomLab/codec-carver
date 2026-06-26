@@ -201,7 +201,7 @@ def iter_json_objects(text: str) -> list[Any]:
 
     try:
         values.append(json.loads(text))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
@@ -215,7 +215,7 @@ def iter_json_objects(text: str) -> list[Any]:
             value, new_pos = decoder.raw_decode(text, pos)
             values.append(value)
             pos = new_pos
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             pos += 1
 
     return values
