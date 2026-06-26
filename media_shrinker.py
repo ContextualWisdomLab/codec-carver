@@ -464,7 +464,9 @@ def probe_media(
         "-i",
         str(source_path),
     ]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    completed = subprocess.run(
+        command, check=False, capture_output=True, text=True, shell=False
+    )
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -527,6 +529,7 @@ def detect_silence_intervals(
         check=False,
         capture_output=True,
         text=True,
+        shell=False,
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -640,6 +643,7 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
         check=False,
         capture_output=True,
         text=True,
+        shell=False,
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -1553,7 +1557,7 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True
+                command, check=False, capture_output=True, text=True, shell=False
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
@@ -1626,6 +1630,7 @@ def _copy_macos_creation_time(
         check=False,
         capture_output=True,
         text=True,
+        shell=False,
     )
 
 

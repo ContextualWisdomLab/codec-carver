@@ -1,3 +1,4 @@
+"""Module docstring."""
 import subprocess
 import unittest
 
@@ -5,16 +6,20 @@ from scripts import pr_review_merge
 
 
 class FakeRunner:
+    """Class docstring."""
     def __init__(self):
+        """Function docstring."""
         self.json_outputs = []
         self.run_outputs = []
         self.commands = []
 
     def run_json(self, args):
+        """Function docstring."""
         self.commands.append(args)
         return self.json_outputs.pop(0)
 
     def run(self, args):
+        """Function docstring."""
         self.commands.append(args)
         if self.run_outputs:
             output = self.run_outputs.pop(0)
@@ -25,6 +30,7 @@ class FakeRunner:
 
 
 def pr_payload(**overrides):
+    """Function docstring."""
     payload = {
         "number": 7,
         "title": "Test PR",
@@ -43,6 +49,7 @@ def pr_payload(**overrides):
 
 
 def threads_payload(*nodes):
+    """Function docstring."""
     return {
         "data": {
             "repository": {
@@ -57,7 +64,9 @@ def threads_payload(*nodes):
 
 
 class ReviewMergeTests(unittest.TestCase):
+    """Class docstring."""
     def test_process_queue_merges_approved_clean_pr(self):
+        """Function docstring."""
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
@@ -88,6 +97,7 @@ class ReviewMergeTests(unittest.TestCase):
         )
 
     def test_process_queue_skips_without_required_approval(self):
+        """Function docstring."""
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
@@ -106,6 +116,7 @@ class ReviewMergeTests(unittest.TestCase):
         self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
 
     def test_process_queue_auto_approves_then_merges(self):
+        """Function docstring."""
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
@@ -143,6 +154,7 @@ class ReviewMergeTests(unittest.TestCase):
         )
 
     def test_process_queue_treats_already_merged_race_as_success(self):
+        """Function docstring."""
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
@@ -184,6 +196,7 @@ class ReviewMergeTests(unittest.TestCase):
         )
 
     def test_process_queue_does_not_auto_approve_failing_check(self):
+        """Function docstring."""
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
@@ -215,6 +228,7 @@ class ReviewMergeTests(unittest.TestCase):
         self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
 
     def test_process_queue_skips_auto_approval_with_github_actions_token(self):
+        """Function docstring."""
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
@@ -237,6 +251,7 @@ class ReviewMergeTests(unittest.TestCase):
         self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
 
     def test_process_queue_does_not_auto_approve_dry_run(self):
+        """Function docstring."""
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
@@ -257,6 +272,7 @@ class ReviewMergeTests(unittest.TestCase):
         self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
 
     def test_process_queue_dispatches_missing_opencode_review(self):
+        """Function docstring."""
         head = "a" * 40
         runner = FakeRunner()
         runner.json_outputs = [
@@ -298,6 +314,7 @@ class ReviewMergeTests(unittest.TestCase):
         )
 
     def test_process_queue_does_not_repeat_recent_opencode_dispatch(self):
+        """Function docstring."""
         head = "a" * 40
         runner = FakeRunner()
         runner.json_outputs = [
@@ -328,6 +345,7 @@ class ReviewMergeTests(unittest.TestCase):
         self.assertFalse(any(command[:3] == ["workflow", "run", "opencode-review.yml"] for command in runner.commands))
 
     def test_process_queue_skips_unresolved_review_threads(self):
+        """Function docstring."""
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
@@ -346,6 +364,7 @@ class ReviewMergeTests(unittest.TestCase):
         self.assertFalse(any(command[:3] == ["pr", "merge", "7"] for command in runner.commands))
 
     def test_process_queue_skips_failing_check(self):
+        """Function docstring."""
         runner = FakeRunner()
         runner.json_outputs = [
             [{"number": 7}],
