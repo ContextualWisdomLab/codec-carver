@@ -177,5 +177,11 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
 
+    def test_get_ui_includes_aria_invalid_css(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn('input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }', html)
+
 if __name__ == '__main__':
     unittest.main()
