@@ -205,14 +205,18 @@ def iter_json_objects(text: str) -> list[Any]:
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
-    for index, character in enumerate(text):
-        if character != "{":
+    pos = 0
+    text_len = len(text)
+    while pos < text_len:
+        if text[pos] != "{":
+            pos += 1
             continue
         try:
-            value, _ = decoder.raw_decode(text[index:])
+            value, new_pos = decoder.raw_decode(text, pos)
+            values.append(value)
+            pos = new_pos
         except json.JSONDecodeError:
-            continue
-        values.append(value)
+            pos += 1
 
     return values
 
