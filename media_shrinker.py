@@ -1237,6 +1237,7 @@ def _execute_conversions(
     protected_sources = [c[0] for c in candidates]
 
     def process_candidate(candidate_tuple: tuple[Path, int]) -> list[ConversionResult]:
+        """Convert a single candidate inside the thread pool."""
         candidate, size = candidate_tuple
         try:
             return convert_file(
@@ -1629,7 +1630,8 @@ def _copy_macos_creation_time(
     creation_date = datetime.fromtimestamp(float(birthtime)).strftime(
         "%m/%d/%Y %H:%M:%S"
     )
-    if not re.match(r"^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}$", creation_date):
+    import re as _re
+    if not _re.match(r"^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}$", creation_date):
         return
     subprocess.run(
         [setfile_path, "-d", creation_date, str(dest.absolute())],
