@@ -132,9 +132,9 @@ class ConversionPlan:
                 raise MediaShrinkerError(
                     "ffmpeg argument template is missing '-i'"
                 ) from exc
-            args[input_index] = str(input_path.resolve())
+            args[input_index] = str(input_path.absolute())
         if output_path is not None:
-            args[-1] = str(output_path.resolve())
+            args[-1] = str(output_path.absolute())
 
         if overwrite:
             args = ["-y" if arg == "-n" else arg for arg in args]
@@ -633,7 +633,7 @@ def build_icloud_download_command(
 ) -> list[str]:
     """Build a safe iCloud download command for source_path."""
 
-    return [brctl_path, "download", str(source_path.resolve())]
+    return [brctl_path, "download", str(source_path.absolute())]
 
 
 def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> None:
@@ -1630,7 +1630,7 @@ def _copy_macos_creation_time(
         "%m/%d/%Y %H:%M:%S"
     )
     subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest.resolve())],
+        [setfile_path, "-d", creation_date, str(dest.absolute())],
         check=False,
         capture_output=True,
         text=True,
