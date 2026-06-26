@@ -1,3 +1,4 @@
+"""Module docstring."""
 import json
 import os
 import tempfile
@@ -30,6 +31,7 @@ from media_shrinker import (
 
 
 class FindCandidateTests(unittest.TestCase):
+    """Class docstring."""
     def test_find_candidates_returns_supported_files_over_limit_case_insensitively(
         self,
     ) -> None:
@@ -94,6 +96,7 @@ class FindCandidateTests(unittest.TestCase):
             self.assertEqual(candidates, [Path("source.m4a")])
 
     def test_find_candidates_skips_multiple_excluded_paths(self) -> None:
+        """Function docstring."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             keep = root / "keep" / "source.wav"
@@ -158,6 +161,7 @@ class FindCandidateTests(unittest.TestCase):
             original_realpath = os.path.realpath
 
             def flaky_realpath(path: str, *args: object, **kwargs: object) -> str:
+                """Function docstring."""
                 if path == str(broken):
                     raise OSError("cannot resolve directory")
                 return original_realpath(path, *args, **kwargs)
@@ -171,6 +175,7 @@ class FindCandidateTests(unittest.TestCase):
             self.assertEqual(candidates, [Path("good.mp3")])
 
     def test_find_candidates_skips_entries_when_symlink_check_fails(self) -> None:
+        """Function docstring."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             good = root / "good.mp3"
@@ -188,6 +193,7 @@ class FindCandidateTests(unittest.TestCase):
             original_lstat = os.lstat
 
             def flaky_lstat(path):
+                """Function docstring."""
                 name = os.path.basename(str(path))
                 if name in {"bad.mp3", "bad_dir"}:
                     raise OSError("cannot inspect symlink state")
@@ -203,6 +209,7 @@ class FindCandidateTests(unittest.TestCase):
 
 
 class ProbeMediaTests(unittest.TestCase):
+    """Class docstring."""
     @patch("media_shrinker.subprocess.run")
     def test_probe_media_raises_error_on_invalid_json(
         self, mock_run: MagicMock
@@ -218,6 +225,7 @@ class ProbeMediaTests(unittest.TestCase):
         self.assertIn("ffprobe returned invalid JSON for test.wav", str(cm.exception))
 
     def test_parse_probe_payload_uses_known_source_size_without_stat(self) -> None:
+        """Function docstring."""
         payload = {
             "streams": [
                 {
@@ -240,6 +248,7 @@ class ProbeMediaTests(unittest.TestCase):
 
 
 class PlanningTests(unittest.TestCase):
+    """Class docstring."""
     def test_pcm_wav_uses_lossless_flac_first_and_preserves_container_metadata(
         self,
     ) -> None:
@@ -266,6 +275,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("flac", plan.ffmpeg_args)
 
     def test_conversion_command_resolves_input_and_output_overrides(self) -> None:
+        """Function docstring."""
         plan = ConversionPlan(
             strategy="test",
             input_path=Path("input.wav"),
@@ -309,6 +319,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("libopus", plan.ffmpeg_args)
 
     def test_prefer_flac_converts_lossy_audio_to_flac_without_extra_loss(self) -> None:
+        """Function docstring."""
         probe = MediaProbe(
             duration_seconds=3_600.0,
             size_bytes=50_000_000,
@@ -334,6 +345,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("0", plan.ffmpeg_args)
 
     def test_calculate_audio_bitrate_never_exceeds_source_bitrate(self) -> None:
+        """Function docstring."""
         bitrate = calculate_audio_bitrate(
             duration_seconds=1_000.0,
             target_bytes=1_900_000_000,
@@ -343,6 +355,7 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(bitrate, 96_000)
 
     def test_same_stem_sources_keep_unique_output_paths(self) -> None:
+        """Function docstring."""
         wav_probe = MediaProbe(
             duration_seconds=60.0,
             size_bytes=1_000,
@@ -500,6 +513,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("14230", plan.ffmpeg_args)
 
     def test_segment_duration_ffmpeg_arg_never_rounds_up_to_four_hours(self) -> None:
+        """Function docstring."""
         probe = MediaProbe(
             duration_seconds=14_399.9996,
             size_bytes=1_000,
@@ -637,6 +651,7 @@ class PlanningTests(unittest.TestCase):
             self.assertFalse((output_dir / "source.wav.flac").exists())
 
     def test_existing_output_with_wrong_duration_is_replaced_not_skipped(self) -> None:
+        """Function docstring."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -815,6 +830,7 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(canonical.read_bytes(), b"ok")
 
     def test_cleanup_refuses_to_delete_another_protected_source_file(self) -> None:
+        """Function docstring."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -849,6 +865,7 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(other_source.read_bytes(), b"do-not-delete")
 
     def test_prefer_flac_reuses_existing_opus_fallback_output(self) -> None:
+        """Function docstring."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -891,6 +908,7 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(result.output_path, existing_opus)
 
     def test_missing_source_size_fallback_keeps_failure_reporting_safe(self) -> None:
+        """Function docstring."""
         missing_source = Path("/tmp/media-shrinker-test-missing-source.wav")
 
         self.assertEqual(media_shrinker.safe_source_size(missing_source), 0)
@@ -917,8 +935,10 @@ class PlanningTests(unittest.TestCase):
 
 
 class SilenceDetectionTests(unittest.TestCase):
+    """Class docstring."""
     @patch("media_shrinker.subprocess.run")
     def test_detect_silence_intervals_success(self, mock_run: MagicMock) -> None:
+        """Function docstring."""
         mock_completed = MagicMock()
         mock_completed.returncode = 0
         mock_completed.stderr = """
@@ -969,6 +989,7 @@ class SilenceDetectionTests(unittest.TestCase):
 
 
 class MetadataPreservationTests(unittest.TestCase):
+    """Class docstring."""
     @patch("os.setxattr", create=True)
     @patch("os.getxattr", create=True)
     @patch("os.listxattr", create=True)
@@ -978,6 +999,7 @@ class MetadataPreservationTests(unittest.TestCase):
         mock_list.return_value = ["user.attr1", "user.attr2"]
 
         def mock_getxattr_side_effect(src, name):
+            """Function docstring."""
             if name == "user.attr1":
                 raise OSError("Access denied")
             return b"value2"
@@ -1033,6 +1055,7 @@ class MetadataPreservationTests(unittest.TestCase):
 
 
 class ICloudDownloadTests(unittest.TestCase):
+    """Class docstring."""
     def test_build_icloud_download_command_uses_argument_list_for_paths_with_spaces(
         self,
     ) -> None:
@@ -1047,7 +1070,9 @@ class ICloudDownloadTests(unittest.TestCase):
 
 
 class ParallelismTests(unittest.TestCase):
+    """Class docstring."""
     def test_choose_worker_count_uses_requested_workers_when_positive(self) -> None:
+        """Function docstring."""
         self.assertEqual(choose_worker_count(3, cpu_count=8), 3)
 
     def test_choose_worker_count_auto_uses_multiple_workers_without_exceeding_half_cores(
@@ -1057,7 +1082,9 @@ class ParallelismTests(unittest.TestCase):
 
 
 class ReportingTests(unittest.TestCase):
+    """Class docstring."""
     def test_write_report(self) -> None:
+        """Function docstring."""
         result1 = media_shrinker.ConversionResult(
             source_path=Path("/scan/source1.wav"),
             output_path=Path("/scan/source1.wav.flac"),
@@ -1099,6 +1126,7 @@ class ReportingTests(unittest.TestCase):
             self.assertIsNone(payload[1]["output_size_bytes"])
 
     def test_format_result_handles_output_path_outside_scan_root(self) -> None:
+        """Function docstring."""
         result = media_shrinker.ConversionResult(
             source_path=Path("/scan/source.wav"),
             output_path=Path("/external-output/source.wav.flac"),
@@ -1115,23 +1143,29 @@ class ReportingTests(unittest.TestCase):
 
 
 class FirstFloatTests(unittest.TestCase):
+    """Class docstring."""
     def test_first_float_returns_first_valid_number(self) -> None:
+        """Function docstring."""
         self.assertEqual(_first_float(1.5, "2.0"), 1.5)
         self.assertEqual(_first_float(None, 2.0, 3.0), 2.0)
         self.assertEqual(_first_float("N/A", "1.1"), 1.1)
 
     def test_first_float_ignores_type_error_and_value_error(self) -> None:
+        """Function docstring."""
         self.assertEqual(_first_float({}, "not-a-float", 3.14), 3.14)
         self.assertEqual(_first_float([], None, "bad", 42.0), 42.0)
 
     def test_first_float_returns_zero_on_all_failures(self) -> None:
+        """Function docstring."""
         self.assertEqual(_first_float(), 0.0)
         self.assertEqual(_first_float(None, "N/A"), 0.0)
         self.assertEqual(_first_float({}, "bad"), 0.0)
 
 
 class FirstIntTests(unittest.TestCase):
+    """Class docstring."""
     def test_first_int_handles_uncastable_types(self) -> None:
+        """Function docstring."""
         self.assertEqual(_first_int("invalid", "N/A", None, "12"), 12)
         self.assertIsNone(_first_int("invalid", object(), []))
         self.assertEqual(_first_int(10), 10)
@@ -1139,6 +1173,7 @@ class FirstIntTests(unittest.TestCase):
         self.assertIsNone(_first_int())
 
     def test_first_int_more_cases(self) -> None:
+        """Function docstring."""
         self.assertIsNone(_first_int("not a number"))
         self.assertIsNone(_first_int([1, 2]))
         self.assertIsNone(_first_int({"a": 1}))
@@ -1147,7 +1182,9 @@ class FirstIntTests(unittest.TestCase):
 
 
 class FormatSecondsTests(unittest.TestCase):
+    """Class docstring."""
     def test_format_seconds_truncates_to_three_decimals(self) -> None:
+        """Function docstring."""
         from media_shrinker import _format_seconds
 
         self.assertEqual(_format_seconds(1.23456), "1.234")
@@ -1157,13 +1194,16 @@ class FormatSecondsTests(unittest.TestCase):
 
 
 class CollisionResolutionTests(unittest.TestCase):
+    """Class docstring."""
     def test_resolve_collision_returns_original_if_no_collision(self) -> None:
+        """Function docstring."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "new.flac"
             resolved = media_shrinker._resolve_collision(path, overwrite=False)
             self.assertEqual(resolved, path)
 
     def test_resolve_collision_returns_numbered_variant_if_collision(self) -> None:
+        """Function docstring."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "existing.flac"
             path.write_bytes(b"data")
@@ -1171,6 +1211,7 @@ class CollisionResolutionTests(unittest.TestCase):
             self.assertEqual(resolved, Path(tmp) / "existing-1.flac")
 
     def test_resolve_collision_returns_original_if_overwrite_is_true(self) -> None:
+        """Function docstring."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "existing.flac"
             path.write_bytes(b"data")
@@ -1180,3 +1221,26 @@ class CollisionResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class SilenceParsingEdgeCasesTests(unittest.TestCase):
+    """Class docstring."""
+    def test_parse_silencedetect_intervals_ignores_unpaired_starts(self) -> None:
+        """Ensure silence start markers without a matching end are ignored."""
+        from media_shrinker import parse_silencedetect_intervals, SilenceInterval
+        stderr = """
+        [silencedetect @ 0x1] silence_start: 14200.125
+        [silencedetect @ 0x1] silence_start: 28000
+        [silencedetect @ 0x1] silence_end: 28008 | silence_duration: 8
+        """
+        intervals = parse_silencedetect_intervals(stderr)
+        self.assertEqual(intervals, [SilenceInterval(start_seconds=28000.0, end_seconds=28008.0)])
+
+    def test_parse_silencedetect_intervals_ignores_invalid_end_before_start(self) -> None:
+        """Ensure end markers that appear chronologically before start markers are ignored."""
+        from media_shrinker import parse_silencedetect_intervals
+        stderr = """
+        [silencedetect @ 0x1] silence_start: 14200.125
+        [silencedetect @ 0x1] silence_end: 14000.0 | silence_duration: -200
+        """
+        intervals = parse_silencedetect_intervals(stderr)
+        self.assertEqual(intervals, [])
