@@ -1,57 +1,38 @@
-from pathlib import Path
+"""FastMCP driver for Media Shrinker."""
 from mcp.server.fastmcp import FastMCP
+from pathlib import Path
 import media_shrinker
 
-mcp = FastMCP("Codec Carver")
+# Initialize FastMCP server
+mcp = FastMCP("codec-carver")
 
 @mcp.tool()
-def shrink_media(source_path: str, output_dir: str, target_bytes: int = 2_000_000_000) -> str:
+def shrink_media(source_path: str, target_bytes: int) -> str:
     """
-    Shrink a media file to fit under a target size, preserving metadata and using FLAC/Opus.
+    Shrink a media file to a target size using Codec Carver.
 
     Args:
-        source_path: Absolute or relative path to the input media file.
-        output_dir: Path to the directory where the converted file will be saved.
-        target_bytes: Maximum target size for the output file in bytes (default 2GB).
+        source_path: The absolute path to the input media file.
+        target_bytes: The desired maximum size of the output file in bytes.
 
     Returns:
-        A string summarizing the result of the conversion.
+        A string describing the result of the operation, including the output path if successful.
     """
-    source = Path(source_path).resolve()
-    out_dir = Path(output_dir).resolve()
-
-    if not source.exists():
-        return f"Error: Source file does not exist: {source}"
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    root = source.parent
-
     try:
         results = media_shrinker.convert_file(
-            source=source,
-            root=root,
-            output_dir=out_dir,
+            source=Path(source_path),
             target_bytes=target_bytes,
+            root=None,
+            output_dir=None
         )
 
-        output_messages = []
-        for res in results:
-            msg = f"Status: {res.status}"
-            if res.output_path:
-                msg += f", Output: {res.output_path}"
-            if res.strategy:
-                msg += f", Strategy: {res.strategy}"
-            if res.message:
-                msg += f", Details: {res.message}"
-            output_messages.append(msg)
+        if not results:
+            return "Shrink operation failed. See server logs for details."
 
-        if not output_messages:
-             return "No conversion results generated."
-
-        return "\n".join(output_messages)
+        return f"Shrink operation completed successfully. Output file generated at: {results[0].output_path}"
 
     except Exception as e:
-        return f"Conversion failed with error: {str(e)}"
+        return f"Shrink operation failed: {str(e)}"
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport='stdio')
