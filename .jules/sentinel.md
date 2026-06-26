@@ -36,3 +36,7 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+## 2026-06-26 - Path Traversal in File Upload
+**Vulnerability:** Path traversal in file upload endpoint (`saas_web.py`).
+**Learning:** Using `Path(file.filename).name` alone is insufficient to prevent path traversal if the filename contains characters like `..` or `/` that are parsed by the OS or the Pathlib module in unexpected ways during file writing. It's critical to sanitize filenames strictly.
+**Prevention:** Always use a whitelist approach for characters in filenames, e.g., `re.sub(r'[^a-zA-Z0-9_\-\.]', '_', filename)` and `replace("..", "")`, or use established libraries like `werkzeug.utils.secure_filename`.

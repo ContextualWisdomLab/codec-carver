@@ -226,7 +226,10 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
+        import re
         safe_filename = Path(file.filename).name
+        safe_filename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', safe_filename)
+        safe_filename = safe_filename.replace("..", "").lstrip(".")
         if not safe_filename or safe_filename in (".", ".."):
             safe_filename = "upload.tmp"
 
