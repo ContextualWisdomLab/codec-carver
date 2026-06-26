@@ -1629,6 +1629,8 @@ def _copy_macos_creation_time(
     creation_date = datetime.fromtimestamp(float(birthtime)).strftime(
         "%m/%d/%Y %H:%M:%S"
     )
+    if not re.match(r"^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}$", creation_date):
+        return
     subprocess.run(
         [setfile_path, "-d", creation_date, str(dest.absolute())],
         check=False,
