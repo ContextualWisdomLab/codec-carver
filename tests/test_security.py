@@ -1,4 +1,3 @@
-"""Module docstring."""
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -6,9 +5,7 @@ from unittest.mock import MagicMock, patch
 from media_shrinker import build_silencedetect_command, MediaShrinkerError, probe_media
 
 class SecurityTests(unittest.TestCase):
-    """Class docstring."""
     def test_silence_noise_validation(self):
-        """Function docstring."""
         valid_noises = ["-35dB", "35", "+35.5", "-35.5dB"]
         for noise in valid_noises:
             build_silencedetect_command(Path("test.wav"), silence_noise=noise)
