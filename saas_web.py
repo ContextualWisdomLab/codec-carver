@@ -1,8 +1,9 @@
+"""SaaS web interface for the Codec Carver media shrinker."""
+import re
 import tempfile
 import logging
 import shutil
 from pathlib import Path
-import re
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import media_shrinker
@@ -13,11 +14,13 @@ MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
 
 
 class RequestTooLarge(Exception):
+    """Exception raised when a request exceeds the maximum allowed size."""
     pass
 
 
 @app.middleware("http")
 async def limit_request_size(request: Request, call_next):
+    """Limit the request size to prevent denial of service via large payloads."""
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
@@ -33,6 +36,7 @@ async def limit_request_size(request: Request, call_next):
     receive = request._receive
 
     async def limited_receive():
+        """Receive request chunks while tracking total size."""
         nonlocal received
         message = await receive()
         if message.get("type") == "http.request":
@@ -49,6 +53,7 @@ async def limit_request_size(request: Request, call_next):
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    """Add security headers to responses."""
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -196,6 +201,7 @@ def cleanup_temp_dir(temp_dir_path: Path):
 
 @app.get("/", response_class=HTMLResponse)
 async def get_ui():
+    """Serve the SaaS web UI."""
     return HTML_TEMPLATE
 
 
@@ -205,6 +211,7 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
+    """Process a media file to reduce its size."""
     if target_bytes <= 0:
         return {"error": "Invalid target_bytes value. Must be greater than 0."}
 
