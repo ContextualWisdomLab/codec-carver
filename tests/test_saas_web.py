@@ -179,3 +179,8 @@ class TestSaasWeb(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_get_ui_includes_aria_invalid_styling(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }', response.content)
