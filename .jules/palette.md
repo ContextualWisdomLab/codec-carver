@@ -38,3 +38,9 @@
 ## 2026-06-23 - Improve Error Message Clarity
 **Learning:** Added inline visual feedback to the 'target_bytes' input field for invalid inputs (e.g., negative or zero values) provides immediate context to the user. I saw the empty text in preview on invalid inputs in the UI test screenshots and in the code, and realized it would be better UX to display the error text in the preview span with red styling, rather than leaving it empty.
 **Action:** Add descriptive innerText and red color styling to the preview element on validation failure to enhance error visibility.
+## 2024-06-27 - Visual Styling for aria-invalid
+**Learning:** Adding aria-invalid via JS validation lacks visual feedback unless paired with corresponding CSS styles. The input was missing styles for input[aria-invalid="true"], leaving sighted users confused as to which field failed validation.
+**Action:** Always ensure that when dynamically setting aria-invalid="true" via JavaScript, there is a corresponding CSS rule to provide immediate, distinct visual feedback.
+## 2026-06-27 - Security vs UX Boundary
+**Learning:** Sentinel flagged a critical missing server-side validation for `target_bytes`. While Palette added the client-side validation to improve UX, we must also ensure backend validation aligns to prevent resource exhaustion bypasses.
+**Action:** When implementing client-side validation for form constraints, ensure the backend also enforces the same constraint.

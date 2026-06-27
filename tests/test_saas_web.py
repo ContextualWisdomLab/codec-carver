@@ -177,5 +177,16 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
 
+
+    def test_get_ui_includes_aria_invalid_styling(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }', response.content)
+
+    def test_shrink_media_target_bytes_exceeds_max(self):
+        response = client.post("/shrink", files={"file": (__file__, b"dummy content")}, data={"target_bytes": 10000000000})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": f"Invalid target_bytes value. Must be less than or equal to {saas_web.MAX_UPLOAD_BYTES}."})
+
 if __name__ == '__main__':
     unittest.main()
