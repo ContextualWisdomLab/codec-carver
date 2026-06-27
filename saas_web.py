@@ -215,7 +215,7 @@ def shrink_media(
 
     # Create a temporary directory that will hold the input and output
     try:
-        temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
+        temp_dir = tempfile.mkdtemp()
         temp_dir_path = Path(temp_dir)
     except Exception:
         logger.exception("Failed to create upload workspace")
