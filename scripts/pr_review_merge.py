@@ -39,6 +39,7 @@ class GhRunner:
         return subprocess.run(
             ["gh", *args],
             check=True,
+            shell=False,
             capture_output=True,
             text=True,
         )

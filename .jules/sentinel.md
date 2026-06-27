@@ -36,3 +36,8 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+
+## 2026-07-02 - [Sentinel: CI Security Scanner False Positives for Command Injection]
+**Vulnerability:** Command Injection (False Positive)
+**Learning:** CI security scanners (like Strix) often flag `subprocess.run` calls without explicit `shell=False` as potential command injection vulnerabilities, even if the arguments are passed as a list. This creates noise and can hide true vulnerabilities.
+**Prevention:** Explicitly include `shell=False` in all `subprocess.run` calls, even when passing arguments as a list, to prevent false positive command injection alerts from CI security scanners.
