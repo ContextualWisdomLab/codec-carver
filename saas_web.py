@@ -207,6 +207,8 @@ def shrink_media(
 ):
     if target_bytes <= 0:
         return {"error": "Invalid target_bytes value. Must be greater than 0."}
+    if target_bytes > MAX_UPLOAD_BYTES:
+        return {"error": f"Invalid target_bytes value. Must be less than or equal to {MAX_UPLOAD_BYTES}."}
 
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
