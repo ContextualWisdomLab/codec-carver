@@ -33,5 +33,20 @@ class SecurityTests(unittest.TestCase):
         input_index = command.index("-i")
         self.assertEqual(command[input_index + 1], str(source_path))
 
-if __name__ == "__main__":
+    @patch("media_shrinker.subprocess.run")
+    def test_probe_media_uses_shell_false(self, mock_run: MagicMock):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout='{"format":{"duration":"1","size":"10","format_name":"wav"},"streams":[{"codec_type":"audio","codec_name":"pcm_s16le","bit_rate":"128000"}]}',
+        )
+
+        source_path = Path("test.wav")
+        with patch.object(Path, "stat") as mock_stat:
+            mock_stat.return_value = MagicMock(st_size=10)
+            probe_media(source_path)
+
+        mock_run.assert_called_once()
+        self.assertFalse(mock_run.call_args.kwargs.get("shell", True))
+
+if __name__ == "__main__":  # pragma: no cover
     unittest.main()
