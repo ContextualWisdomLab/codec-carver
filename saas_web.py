@@ -1,7 +1,6 @@
-import logging
-import secrets
-import shutil
 import tempfile
+import logging
+import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -49,17 +48,13 @@ async def limit_request_size(request: Request, call_next):
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    csp_nonce = secrets.token_urlsafe(16)
-    request.state.csp_nonce = csp_nonce
+    import os
+    request.state.nonce = os.urandom(16).hex()
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        f"style-src 'self' 'nonce-{csp_nonce}'; "
-        f"script-src 'self' 'nonce-{csp_nonce}'"
-    )
+    response.headers["Content-Security-Policy"] = f"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-{request.state.nonce}'"
     if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -72,7 +67,7 @@ HTML_TEMPLATE = """
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Codec Carver SaaS</title>
-    <style nonce="__CSP_NONCE__">
+    <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
         .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
         button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
@@ -81,9 +76,6 @@ HTML_TEMPLATE = """
         button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
         .required-star { color: #dc3545; }
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
-        .preview-info { font-weight: bold; color: #17a2b8; }
-        .preview-success { font-weight: bold; color: #28a745; }
-        .preview-error { color: #dc3545; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
         @keyframes spinner-border { to { transform: rotate(360deg); } }
         .box { transition: background-color 0.2s, border-color 0.2s; }
@@ -96,22 +88,20 @@ HTML_TEMPLATE = """
         <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
             <p>
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required>
+                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="updateFileSizePreview(this)">
                 <br><span id="file_help" class="help-text">Select an audio or video file to shrink, or drag and drop it here.</span>
-                <br><span id="file_size_preview" class="help-text preview-info" aria-live="polite"></span>
+                <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #17a2b8;"></span>
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
-                <br><span id="target_bytes_preview" class="help-text preview-success" aria-live="polite">1.86 GiB</span>
+                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #28a745;">1.86 GiB</span>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
-        <script nonce="__CSP_NONCE__">
+        <script nonce="{nonce}">
             const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
-            const fileInput = document.getElementById('file');
-            const dropZone = document.getElementById('drop-zone');
             function formatBinaryBytes(value) {
                 const units = ['B', 'KiB', 'MiB', 'GiB'];
                 let size = value;
@@ -122,16 +112,12 @@ HTML_TEMPLATE = """
                 }
                 return unit === 0 ? size + ' ' + units[unit] : size.toFixed(2) + ' ' + units[unit];
             }
-            function setPreviewTone(preview, tone) {
-                preview.classList.remove('preview-info', 'preview-success', 'preview-error');
-                preview.classList.add(tone);
-            }
             function updateFileSizePreview(input) {
                 const file = input.files[0];
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
-                setPreviewTone(preview, 'preview-info');
+                preview.style.color = '#17a2b8';
                 if (!file) {
                     preview.innerText = '';
                     return;
@@ -141,26 +127,22 @@ HTML_TEMPLATE = """
                     input.setCustomValidity('File exceeds 5 GiB limit.');
                     input.setAttribute('aria-invalid', 'true');
                     preview.innerText = 'Selected file size: ' + text + ' (exceeds 5 GiB limit)';
-                    setPreviewTone(preview, 'preview-error');
+                    preview.style.color = '#dc3545';
                     return;
                 }
                 preview.innerText = 'Selected file size: ' + text;
             }
-
-            fileInput.addEventListener('change', function() {
-                updateFileSizePreview(this);
-            });
 
             document.getElementById('target_bytes').addEventListener('input', function() {
                 const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
-                setPreviewTone(preview, 'preview-success');
+                preview.style.color = '#28a745';
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
-                    setPreviewTone(preview, 'preview-error');
+                    preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
                     this.setAttribute('aria-invalid', 'true');
                 } else {
@@ -177,6 +159,8 @@ HTML_TEMPLATE = """
                 }, 10);
             });
 
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file');
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             dropZone.addEventListener(eventName, preventDefaults, false);
             document.body.addEventListener(eventName, preventDefaults, false);
@@ -213,7 +197,8 @@ def cleanup_temp_dir(temp_dir_path: Path):
 
 @app.get("/", response_class=HTMLResponse)
 async def get_ui(request: Request):
-    return HTML_TEMPLATE.replace("__CSP_NONCE__", request.state.csp_nonce)
+    nonce = getattr(request.state, "nonce", "")
+    return HTML_TEMPLATE.replace("{nonce}", nonce)
 
 
 @app.post("/shrink")
