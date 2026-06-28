@@ -698,7 +698,6 @@ jobs:
                       "output": 100000
                     }
                   },
-                  "deepseek/deepseek-r1-0528": {
                     "name": "DeepSeek R1 0528",
                     "tool_call": true,
                     "reasoning": true,
@@ -856,7 +855,6 @@ jobs:
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MODEL: github-models/deepseek/deepseek-r1-0528
           USE_GITHUB_TOKEN: "true"
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
