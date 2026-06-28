@@ -32,6 +32,8 @@ from media_shrinker import (
 class FindCandidateTests(unittest.TestCase):
 
     def test_find_candidates_scandir_entries_exception(self) -> None:
+        """Test coverage for handling OSError in scandir loop."""
+        """Test coverage for handling OSError in scandir loop."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             import os
@@ -48,6 +50,8 @@ class FindCandidateTests(unittest.TestCase):
 
 
     def test_find_candidates_exclude_os_error_stack_for_entry(self) -> None:
+        """Test coverage for handling OSError when scanning directory entries."""
+        """Test coverage for handling OSError when scanning directory entries."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bad_dir = root / "bad_dir"
@@ -67,6 +71,8 @@ class FindCandidateTests(unittest.TestCase):
 
 
     def test_find_candidates_exclude_os_error_stack(self) -> None:
+        """Test coverage for handling realpath OSError when expanding stack."""
+        """Test coverage for handling realpath OSError when expanding stack."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             import os
@@ -225,6 +231,8 @@ class FindCandidateTests(unittest.TestCase):
     def test_find_candidates_skips_entries_when_symlink_check_fails(
         self,
     ) -> None:
+        """Test coverage for symlink check failures."""
+        """Test coverage for symlink check failures."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bad_dir = root / "bad_dir"
@@ -1266,6 +1274,8 @@ if __name__ == "__main__":
 
 class ConversionPlanTests(unittest.TestCase):
     def test_command_no_i_argument(self) -> None:
+        """Test coverage for handling missing input argument in conversion plan."""
+        """Test coverage for handling missing input argument in conversion plan."""
         plan = ConversionPlan(
             strategy="test",
             input_path=Path("in"),
@@ -1276,6 +1286,8 @@ class ConversionPlanTests(unittest.TestCase):
             plan.command(input_path=Path("new_in"))
 
     def test_command_no_overwrite(self) -> None:
+        """Test coverage for command generation without overwrite flag."""
+        """Test coverage for command generation without overwrite flag."""
         plan = ConversionPlan(
             strategy="test",
             input_path=Path("in"),
