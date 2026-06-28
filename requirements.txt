@@ -4,3 +4,4 @@ python-multipart
 mcp
 aiofiles
 httpx
+werkzeug
