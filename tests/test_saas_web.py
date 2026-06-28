@@ -94,6 +94,37 @@ class TestSaasWeb(unittest.TestCase):
             with open(dummy_file_path, "rb") as f:
                 response = client.post(
                     "/shrink",
+                    files={"file": ("../../etc/passwd", f, "audio/wav")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, b"dummy audio data")
+
+            # Verify the mock was called
+            mock_convert_file.assert_called_once()
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_path_traversal(self, mock_convert_file):
+        # Create a dummy output file for the FileResponse
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_output = Path(temp_dir) / "output.flac"
+            temp_output.write_bytes(b"dummy audio data")
+
+            # Setup mock return value
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = temp_output
+            mock_convert_file.return_value = [mock_result]
+
+            # Create a dummy upload file
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
                     files={"file": ("input.wav", f, "audio/wav")},
                     data={"target_bytes": 10000}
                 )
@@ -186,3 +217,217 @@ class TestSaasWeb(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_path_traversal_empty(self, mock_convert_file):
+        # Create a dummy output file for the FileResponse
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_output = Path(temp_dir) / "output.flac"
+            temp_output.write_bytes(b"dummy audio data")
+
+            # Setup mock return value
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = temp_output
+            mock_convert_file.return_value = [mock_result]
+
+            # Create a dummy upload file
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("", f, "audio/wav")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "No file uploaded or filename missing"})
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_path_traversal_dot_dot(self, mock_convert_file):
+        # Create a dummy output file for the FileResponse
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_output = Path(temp_dir) / "output.flac"
+            temp_output.write_bytes(b"dummy audio data")
+
+            # Setup mock return value
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = temp_output
+            mock_convert_file.return_value = [mock_result]
+
+            # Create a dummy upload file
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("..", f, "audio/wav")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, b"dummy audio data")
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_path_traversal_dot(self, mock_convert_file):
+        # Create a dummy output file for the FileResponse
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_output = Path(temp_dir) / "output.flac"
+            temp_output.write_bytes(b"dummy audio data")
+
+            # Setup mock return value
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = temp_output
+            mock_convert_file.return_value = [mock_result]
+
+            # Create a dummy upload file
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": (".", f, "audio/wav")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, b"dummy audio data")
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_path_traversal_backslash(self, mock_convert_file):
+        # Create a dummy output file for the FileResponse
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_output = Path(temp_dir) / "output.flac"
+            temp_output.write_bytes(b"dummy audio data")
+
+            # Setup mock return value
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = temp_output
+            mock_convert_file.return_value = [mock_result]
+
+            # Create a dummy upload file
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("..\\etc\\passwd", f, "audio/wav")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, b"dummy audio data")
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_invalid_file_type(self, mock_convert_file):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a dummy upload file
+            dummy_file_path = Path(temp_dir) / "input.txt"
+            dummy_file_path.write_bytes(b"dummy text data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("input.txt", f, "text/plain")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "Invalid file type. Only audio and video files are supported."})
+            mock_convert_file.assert_not_called()
+
+    def test_shrink_media_endpoint_invalid_target_bytes(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a dummy upload file
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("input.wav", f, "audio/wav")},
+                    data={"target_bytes": -1}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "Invalid target_bytes value. Must be greater than 0."})
+
+    def test_shrink_media_endpoint_no_filename(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a dummy upload file
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("", f, "audio/wav")},
+                    data={"target_bytes": 1000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "No file uploaded or filename missing"})
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_path_traversal_empty_again(self, mock_convert_file):
+        # Create a dummy output file for the FileResponse
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_output = Path(temp_dir) / "output.flac"
+            temp_output.write_bytes(b"dummy audio data")
+
+            # Setup mock return value
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = temp_output
+            mock_convert_file.return_value = [mock_result]
+
+            # Create a dummy upload file
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("..", f, "audio/wav")},
+                    data={"target_bytes": -1}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "Invalid target_bytes value. Must be greater than 0."})
+
+    @patch("saas_web.logger")
+    def test_shrink_media_endpoint_mkdtemp_failure(self, mock_logger):
+        with patch('saas_web.tempfile.mkdtemp') as mock_mkdtemp:
+            mock_mkdtemp.side_effect = Exception("mkdtemp failed")
+            import tempfile
+            with tempfile.TemporaryDirectory() as temp_dir:
+                dummy_file_path = Path(temp_dir) / "input.wav"
+                dummy_file_path.write_bytes(b"dummy wav data")
+
+                with open(dummy_file_path, "rb") as f:
+                    response = client.post(
+                        "/shrink",
+                        files={"file": ("input.wav", f, "audio/wav")},
+                        data={"target_bytes": 10000}
+                    )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), {"error": "Upload processing failed"})

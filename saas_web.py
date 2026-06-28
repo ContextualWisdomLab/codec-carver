@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import media_shrinker
+import mimetypes
 
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
@@ -216,6 +217,10 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
+    content_type = file.content_type
+    if not content_type or not (content_type.startswith("video/") or content_type.startswith("audio/")):
+        return {"error": "Invalid file type. Only audio and video files are supported."}
+
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -232,9 +237,10 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        safe_filename = safe_filename.replace("/", "_").replace("\\", "_")
-        if not safe_filename or safe_filename in (".", ".."):
+        # ensure no slashes in filename are passed to Path().name
+        safe_filename = file.filename.replace("/", "_").replace("\\", "_")
+        safe_filename = Path(safe_filename).name
+        if not safe_filename or safe_filename in (".", "..") or ".." in safe_filename:
             safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename
