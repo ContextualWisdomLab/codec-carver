@@ -224,13 +224,7 @@ def find_candidates(
         with entries:
             for entry in entries:
                 try:
-                    # In os.scandir, entry.is_symlink(), entry.is_dir(), etc. can raise OSError if the file is removed
-                    # but also we want to maintain the specific behavior from os.walk test where os.lstat raises OSError
-                    # so we will explicitly check for it by calling entry.stat(follow_symlinks=False) early
-                    # The test mocks os.lstat to test error handling when checking for symlinks
-                    # We need to explicitly call os.lstat on the entry's path to trigger the test's mock behavior
-                    # Intentionally removed test-appeasing os.lstat
-                    # os.scandir already handles stat calls efficiently
+                    # DirEntry probes can fail during traversal races; skip that entry.
                     is_symlink = entry.is_symlink()
 
                     if entry.is_dir(follow_symlinks=False):
