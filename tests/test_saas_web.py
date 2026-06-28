@@ -177,5 +177,15 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
 
+    def test_path_traversal(self):
+        with open('tests/__init__.py', 'wb') as f:
+            f.write(b'')
+        with open('tests/__init__.py', 'rb') as f:
+            response = client.post('/shrink', files={'file': ('../../exploit.sh', f)}, data={'target_bytes': 2000})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('error', response.json())
+        import os
+        os.remove('tests/__init__.py')
+
 if __name__ == '__main__':
     unittest.main()
