@@ -169,6 +169,22 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(payload, {"error": "Processing failed or no output generated"})
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
+    def test_shrink_media_endpoint_rejects_invalid_content_type(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.sh"
+            dummy_file_path.write_bytes(b"echo hacked")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("input.sh", f, "application/x-sh")},
+                    data={"target_bytes": 10000},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "Invalid content type"})
+
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
         response = client.get("/")
