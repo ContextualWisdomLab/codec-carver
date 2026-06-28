@@ -73,8 +73,9 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"error": "Invalid Content-Length"})
 
+    @patch("saas_web.secrets.token_hex", return_value="abc123")
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_endpoint(self, mock_convert_file):
+    def test_shrink_media_endpoint(self, mock_convert_file, mock_token_hex):
         # Create a dummy output file for the FileResponse
         import tempfile
 
@@ -103,6 +104,11 @@ class TestSaasWeb(unittest.TestCase):
 
             # Verify the mock was called
             mock_convert_file.assert_called_once()
+            self.assertEqual(
+                mock_convert_file.call_args.kwargs["source"].name,
+                "upload-abc123.wav",
+            )
+            mock_token_hex.assert_called_once_with(16)
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_failure(self, mock_convert_file):
@@ -178,24 +184,29 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.style.color = '#dc3545';", html)
 
     def test_secure_filename_sanitizes_path_traversal(self):
-        self.assertEqual(secure_filename("../../../etc/passwd"), "passwd")
-        self.assertEqual(secure_filename("/var/log/syslog"), "syslog")
+        with patch("saas_web.secrets.token_hex", return_value="abc123"):
+            self.assertEqual(secure_filename("../../../etc/passwd"), "upload-abc123.tmp")
+            self.assertEqual(secure_filename("/var/log/syslog"), "upload-abc123.tmp")
 
     def test_secure_filename_handles_windows_paths(self):
-        self.assertEqual(secure_filename("C:\\Windows\\System32\\cmd.exe"), "cmd.exe")
-        self.assertEqual(secure_filename("..\\..\\boot.ini"), "boot.ini")
+        with patch("saas_web.secrets.token_hex", return_value="abc123"):
+            self.assertEqual(secure_filename("C:\\Windows\\System32\\cmd.exe"), "upload-abc123.exe")
+            self.assertEqual(secure_filename("..\\..\\boot.ini"), "upload-abc123.ini")
 
     def test_secure_filename_replaces_unsafe_characters(self):
-        self.assertEqual(secure_filename("my file @123!.txt"), "my_file__123_.txt")
-        self.assertEqual(secure_filename("injection; rm -rf"), "injection__rm_-rf")
+        with patch("saas_web.secrets.token_hex", return_value="abc123"):
+            self.assertEqual(secure_filename("my file @123!.txt"), "upload-abc123.txt")
+            self.assertEqual(secure_filename("injection; rm -rf"), "upload-abc123.tmp")
 
     def test_secure_filename_strips_leading_trailing_dots(self):
-        self.assertEqual(secure_filename(".hidden.txt"), "hidden.txt")
-        self.assertEqual(secure_filename("file.."), "file")
+        with patch("saas_web.secrets.token_hex", return_value="abc123"):
+            self.assertEqual(secure_filename(".hidden.txt"), "upload-abc123.txt")
+            self.assertEqual(secure_filename("file.."), "upload-abc123.tmp")
 
     def test_secure_filename_empty_fallback(self):
-        self.assertEqual(secure_filename("..."), "upload.tmp")
-        self.assertEqual(secure_filename(""), "upload.tmp")
+        with patch("saas_web.secrets.token_hex", return_value="abc123"):
+            self.assertEqual(secure_filename("..."), "upload-abc123.tmp")
+            self.assertEqual(secure_filename(""), "upload-abc123.tmp")
 
 if __name__ == '__main__':
     unittest.main()

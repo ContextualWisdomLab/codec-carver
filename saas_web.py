@@ -1,7 +1,7 @@
-import tempfile
 import logging
+import secrets
 import shutil
-import re
+import tempfile
 import os
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
@@ -190,15 +190,11 @@ HTML_TEMPLATE = """
 """
 
 def secure_filename(filename: str) -> str:
-    """Sanitize the filename to prevent path traversal and ensure safe characters."""
-    name = Path(filename).name
-    if "\\" in name:
-        name = name.split("\\")[-1]
-    name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', name)
-    name = name.strip(' .')
-    if not name:
-        return "upload.tmp"
-    return name
+    """Return a random temp filename with only a safe original suffix."""
+    suffix = Path(filename).suffix.lower()
+    if not suffix or len(suffix) > 16 or not suffix[1:].isalnum():
+        suffix = ".tmp"
+    return f"upload-{secrets.token_hex(16)}{suffix}"
 
 
 def cleanup_temp_dir(temp_dir_path: Path):
