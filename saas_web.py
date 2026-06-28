@@ -78,7 +78,7 @@ HTML_TEMPLATE = """
         @keyframes spinner-border { to { transform: rotate(360deg); } }
         .box { transition: background-color 0.2s, border-color 0.2s; }
         .box.dragover { background-color: #f8f9fa; border-color: #007bff; border-style: dashed; }
-        input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
+        input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; outline-offset: 2px; }
     </style>
 </head>
 <body>
