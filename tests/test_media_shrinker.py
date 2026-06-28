@@ -201,6 +201,24 @@ class FindCandidateTests(unittest.TestCase):
 
             self.assertEqual(candidates, [Path("good.mp3")])
 
+    def test_find_candidates_skips_symlinked_directories_outside_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside)
+            (external / "secret.mp3").write_bytes(b"0" * 4)
+            link = root / "linked"
+            try:
+                link.symlink_to(external, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlink unavailable: {exc}")
+
+            candidates = [
+                p[0].relative_to(root)
+                for p in find_candidates(root, include_under_limit=True)
+            ]
+
+            self.assertEqual(candidates, [])
+
 
 class ProbeMediaTests(unittest.TestCase):
     @patch("media_shrinker.subprocess.run")
@@ -265,7 +283,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("0", plan.ffmpeg_args)
         self.assertIn("flac", plan.ffmpeg_args)
 
-    def test_conversion_command_absolutizes_input_and_output_overrides(self) -> None:
+    def test_conversion_command_resolves_input_and_output_overrides(self) -> None:
         plan = ConversionPlan(
             strategy="test",
             input_path=Path("input.wav"),
@@ -280,9 +298,9 @@ class PlanningTests(unittest.TestCase):
 
         self.assertEqual(
             command[command.index("-i") + 1],
-            str(Path("-input.wav").absolute()),
+            str(Path("-input.wav").resolve()),
         )
-        self.assertEqual(command[-1], str(Path("-output.flac").absolute()))
+        self.assertEqual(command[-1], str(Path("-output.flac").resolve()))
 
     def test_lossy_audio_uses_highest_opus_bitrate_that_fits_target_with_safety_margin(
         self,
@@ -1042,7 +1060,7 @@ class ICloudDownloadTests(unittest.TestCase):
 
         self.assertEqual(
             command,
-            ["brctl", "download", str(Path("folder/file with spaces.m4a").absolute())],
+            ["brctl", "download", str(Path("folder/file with spaces.m4a").resolve())],
         )
 
 

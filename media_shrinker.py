@@ -132,9 +132,9 @@ class ConversionPlan:
                 raise MediaShrinkerError(
                     "ffmpeg argument template is missing '-i'"
                 ) from exc
-            args[input_index] = str(input_path.absolute())
+            args[input_index] = str(input_path.resolve())
         if output_path is not None:
-            args[-1] = str(output_path.absolute())
+            args[-1] = str(output_path.resolve())
 
         if overwrite:
             args = ["-y" if arg == "-n" else arg for arg in args]
@@ -228,15 +228,11 @@ def find_candidates(
             except OSError:
                 continue
 
-            if excluded_exact_strs:
-                if not is_symlink:
-                    resolved_d_str = os.path.join(resolved_dir_str, d)
-                else:
-                    try:
-                        resolved_d_str = os.path.realpath(d_path_str)
-                    except OSError:
-                        continue
+            if is_symlink:
+                continue
 
+            if excluded_exact_strs:
+                resolved_d_str = os.path.join(resolved_dir_str, d)
                 if resolved_d_str in excluded_exact_set or resolved_d_str.startswith(
                     excluded_prefix_strs
                 ):
@@ -633,7 +629,7 @@ def build_icloud_download_command(
 ) -> list[str]:
     """Build a safe iCloud download command for source_path."""
 
-    return [brctl_path, "download", str(source_path.absolute())]
+    return [brctl_path, "download", str(source_path.resolve())]
 
 
 def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> None:
@@ -1630,7 +1626,7 @@ def _copy_macos_creation_time(
         "%m/%d/%Y %H:%M:%S"
     )
     subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest.absolute())],
+        [setfile_path, "-d", creation_date, str(dest.resolve())],
         check=False,
         capture_output=True,
         text=True,
