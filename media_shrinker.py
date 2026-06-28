@@ -452,6 +452,9 @@ def probe_media(
 ) -> MediaProbe:
     """Probe source_path with ffprobe and return normalized media properties."""
 
+    # The path is passed as one argv item with shell=False; shlex quoting would
+    # target shell strings and break legitimate filenames.
+    source_arg = str(source_path.resolve())
     command = [
         ffprobe_path,
         "-v",
@@ -463,9 +466,11 @@ def probe_media(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path.resolve()),
+        source_arg,
     ]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True, shell=False)
+    completed = subprocess.run(
+        command, check=False, capture_output=True, text=True, shell=False
+    )
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
