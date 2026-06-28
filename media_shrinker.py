@@ -805,14 +805,14 @@ def _find_valid_existing_output(
     existing_duration: float | None = None
     for suffix in existing_suffixes:
         candidate = _planned_output_path(segment_rel_source, output_dir, suffix)
-        if not candidate.exists():
-            continue
-        _ensure_not_source_path(source, candidate)
-        _ensure_not_protected_source_path(resolved_protected_sources, candidate)
+        # Fast path: Rely on stat() throwing OSError to check existence and get size simultaneously,
+        # avoiding a redundant exists() syscall. Also defers collision checks for non-existent files.
         try:
             candidate_size = candidate.stat().st_size
         except OSError:
             continue
+        _ensure_not_source_path(source, candidate)
+        _ensure_not_protected_source_path(resolved_protected_sources, candidate)
         if candidate_size > target_bytes:
             _remove_generated_output(
                 source, candidate, protected_sources=resolved_protected_sources
@@ -1059,14 +1059,16 @@ def _remove_invalid_legacy_outputs(
     for suffix in suffixes:
         legacy_output = output_dir / rel_source.with_suffix(suffix)
         canonical_output = _planned_output_path(rel_source, output_dir, suffix)
-        if legacy_output == canonical_output or not legacy_output.exists():
+        if legacy_output == canonical_output:
             continue
-        _ensure_not_source_path(source, legacy_output)
-        _ensure_not_protected_source_path(protected_sources, legacy_output)
+        # Fast path: Rely on stat() throwing OSError to check existence and get size simultaneously,
+        # avoiding a redundant exists() syscall. Also defers collision checks for non-existent files.
         try:
             legacy_size = legacy_output.stat().st_size
         except OSError:
             continue
+        _ensure_not_source_path(source, legacy_output)
+        _ensure_not_protected_source_path(protected_sources, legacy_output)
         if legacy_size > target_bytes:
             _remove_generated_output(
                 source, legacy_output, protected_sources=protected_sources

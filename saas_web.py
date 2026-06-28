@@ -141,7 +141,8 @@ HTML_TEMPLATE = """
                 preview.style.color = '#28a745';
 
                 if (isNaN(val) || val <= 0) {
-                    preview.innerText = '';
+                    preview.innerText = 'Must be greater than 0.';
+                    preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
                     this.setAttribute('aria-invalid', 'true');
                 } else {

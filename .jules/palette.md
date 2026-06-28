@@ -35,3 +35,6 @@
 ## 2024-06-25 - Expanding Drop Zones for File Inputs
 **Learning:** Tiny file input buttons are hard targets. Expanding the drop zone to the entire parent container (and adding a clear `.dragover` visual state) drastically improves the drag-and-drop experience.
 **Action:** Always make entire form containers accept dropped files when possible, rather than relying solely on the native file input element.
+## 2026-06-23 - Improve Error Message Clarity
+**Learning:** Added inline visual feedback to the 'target_bytes' input field for invalid inputs (e.g., negative or zero values) provides immediate context to the user. I saw the empty text in preview on invalid inputs in the UI test screenshots and in the code, and realized it would be better UX to display the error text in the preview span with red styling, rather than leaving it empty.
+**Action:** Add descriptive innerText and red color styling to the preview element on validation failure to enhance error visibility.
