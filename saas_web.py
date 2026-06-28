@@ -1,4 +1,6 @@
 """FastAPI based SaaS web interface for codec carver."""
+import os
+import secrets
 import tempfile
 import logging
 import shutil
@@ -10,6 +12,7 @@ import media_shrinker
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
+MAX_TARGET_BYTES = MAX_UPLOAD_BYTES
 
 
 class RequestTooLarge(Exception):
@@ -198,6 +201,12 @@ def cleanup_temp_dir(temp_dir_path: Path):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
+def has_path_components(filename: str) -> bool:
+    """Return whether an upload filename tries to include directories."""
+    normalized = filename.replace("\\", "/")
+    return "/" in normalized or normalized in {".", ".."}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def get_ui():
     """Return the main HTML UI."""
@@ -214,8 +223,17 @@ def shrink_media(
     if target_bytes <= 0:
         return {"error": "Invalid target_bytes value. Must be greater than 0."}
 
+    if target_bytes > MAX_TARGET_BYTES:
+        return {"error": "Invalid target_bytes value. Must not exceed maximum upload size."}
+
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
+
+    if has_path_components(file.filename):
+        return JSONResponse(status_code=400, content={"error": "Invalid upload filename"})
+
+    if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
+        return {"error": "Invalid content type"}
 
     # Create a temporary directory that will hold the input and output
     try:
@@ -229,17 +247,19 @@ def shrink_media(
         # Setup paths
         input_dir = temp_dir_path / "input"
         output_dir = temp_dir_path / "output"
-        input_dir.mkdir()
-        output_dir.mkdir()
+        input_dir.mkdir(mode=0o700)
+        output_dir.mkdir(mode=0o700)
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
+        suffix = Path(file.filename).suffix.lower()
+        if not suffix or len(suffix) > 16 or not suffix[1:].isalnum():
+            suffix = ".tmp"
+        safe_filename = f"upload-{secrets.token_hex(16)}{suffix}"
 
         source_path = input_dir / safe_filename
         bytes_written = 0
-        with open(source_path, "wb") as f:
+        fd = os.open(source_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
             while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
                 bytes_written += len(chunk)
                 if bytes_written > MAX_UPLOAD_BYTES:
