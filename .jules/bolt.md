@@ -61,6 +61,6 @@
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
 
-## 2024-06-28 - [Optimize subprocess arguments with Path.absolute()]
+## 2026-06-28 - [Optimize subprocess arguments with Path.absolute()]
 **Learning:** `Path.resolve()` is used extensively to resolve paths for command-line arguments (e.g. `ffmpeg`). However, `.resolve()` touches the filesystem to follow symlinks and check for existence, which introduces significant disk I/O overhead. In cases where the path is just passed to an external program (which natively handles the filesystem), using `.absolute()` instead performs a fast purely lexical operation.
 **Action:** Replace `Path.resolve()` with `Path.absolute()` for strings passed to `subprocess.run` to bypass the redundant I/O operations and speed up processing.
