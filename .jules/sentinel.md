@@ -36,3 +36,7 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+## 2026-06-27 - Insecure Temporary Directory Handling
+**Vulnerability:** Predictable temporary directory names via `tempfile.mkdtemp(prefix="codec_carver_")`.
+**Learning:** Hardcoded or static prefixes in temporary directory creation increase the risk of local file inclusion or symlink attacks by making directory names easier to guess.
+**Prevention:** Avoid using predictable prefixes with `tempfile` functions. Rely on the default, fully randomized generation.

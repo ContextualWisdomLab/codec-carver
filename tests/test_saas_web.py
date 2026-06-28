@@ -73,8 +73,9 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"error": "Invalid Content-Length"})
 
+    @patch("saas_web.secrets.token_hex", return_value="abc123")
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_endpoint(self, mock_convert_file):
+    def test_shrink_media_endpoint(self, mock_convert_file, mock_token_hex):
         # Create a dummy output file for the FileResponse
         import tempfile
 
@@ -103,6 +104,11 @@ class TestSaasWeb(unittest.TestCase):
 
             # Verify the mock was called
             mock_convert_file.assert_called_once()
+            self.assertEqual(
+                mock_convert_file.call_args.kwargs["source"].name,
+                "upload-abc123.wav",
+            )
+            mock_token_hex.assert_called_once_with(16)
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_failure(self, mock_convert_file):
@@ -169,6 +175,59 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(payload, {"error": "Processing failed or no output generated"})
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
+    def test_shrink_media_endpoint_rejects_invalid_content_type(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.sh"
+            dummy_file_path.write_bytes(b"echo hacked")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("input.sh", f, "application/x-sh")},
+                    data={"target_bytes": 10000},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "Invalid content type"})
+
+    def test_shrink_media_endpoint_rejects_spoofed_media_extension_before_temp_dir(self):
+        with patch("saas_web.tempfile.mkdtemp") as mock_mkdtemp:
+            response = client.post(
+                "/shrink",
+                files={"file": ("../../malicious.php", b"<?php", "audio/mp3")},
+                data={"target_bytes": 10000},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": "Invalid content type"})
+        mock_mkdtemp.assert_not_called()
+
+    @patch("saas_web.secrets.token_hex", return_value="abc123")
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_sanitizes_filename(self, mock_convert_file, mock_token_hex):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = Path(temp_dir) / "output.flac"
+            mock_result.output_path.write_bytes(b"dummy")
+            mock_convert_file.return_value = [mock_result]
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("../../etc/passwd.wav", f, "audio/wav")},
+                    data={"target_bytes": 10000},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            called_source_path = mock_convert_file.call_args.kwargs["source"]
+            self.assertEqual(called_source_path.name, "upload-abc123.wav")
+            mock_token_hex.assert_called_once_with(16)
+
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
         response = client.get("/")
@@ -176,6 +235,17 @@ class TestSaasWeb(unittest.TestCase):
         html = response.text
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
+
+
+    def test_get_ui_includes_aria_invalid_styling(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }', response.content)
+
+    def test_shrink_media_target_bytes_exceeds_max(self):
+        response = client.post("/shrink", files={"file": (__file__, b"dummy content")}, data={"target_bytes": 10000000000})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": f"Invalid target_bytes value. Must be less than or equal to {saas_web.MAX_UPLOAD_BYTES}."})
 
 if __name__ == '__main__':
     unittest.main()
