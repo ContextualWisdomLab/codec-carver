@@ -73,8 +73,9 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"error": "Invalid Content-Length"})
 
+    @patch("saas_web.secrets.token_hex", return_value="abc123")
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_endpoint(self, mock_convert_file):
+    def test_shrink_media_endpoint(self, mock_convert_file, mock_token_hex):
         # Create a dummy output file for the FileResponse
         import tempfile
 
@@ -103,6 +104,11 @@ class TestSaasWeb(unittest.TestCase):
 
             # Verify the mock was called
             mock_convert_file.assert_called_once()
+            self.assertEqual(
+                mock_convert_file.call_args.kwargs["source"].name,
+                "upload-abc123.wav",
+            )
+            mock_token_hex.assert_called_once_with(16)
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_failure(self, mock_convert_file):
@@ -176,6 +182,18 @@ class TestSaasWeb(unittest.TestCase):
         html = response.text
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
+
+    def test_shrink_media_rejects_invalid_content_type_before_temp_dir(self):
+        with patch("saas_web.tempfile.mkdtemp") as mock_mkdtemp:
+            response = client.post(
+                "/shrink",
+                files={"file": ("../../malicious.php", b"<?php", "application/octet-stream")},
+                data={"target_bytes": 10000},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": "Invalid content type"})
+        mock_mkdtemp.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()
