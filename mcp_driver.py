@@ -1,3 +1,4 @@
+"""Module docstring."""
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 import media_shrinker

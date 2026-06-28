@@ -1,3 +1,4 @@
+"""Module docstring."""
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -6,9 +7,11 @@ from mcp_driver import shrink_media
 from media_shrinker import ConversionResult
 
 class TestMCPDriver(unittest.TestCase):
+    """Test class docstring."""
 
     @patch("mcp_driver.media_shrinker.convert_file")
     def test_shrink_media_success(self, mock_convert_file):
+        """Test docstring."""
         import tempfile
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir_path = Path(temp_dir)
@@ -31,11 +34,13 @@ class TestMCPDriver(unittest.TestCase):
             self.assertIn("Output: " + str(output_dir / "source.flac"), result_str)
 
     def test_shrink_media_source_not_found(self):
+        """Test docstring."""
         result_str = shrink_media("/path/does/not/exist.wav", "/tmp/out")
         self.assertIn("Error: Source file does not exist", result_str)
 
     @patch("mcp_driver.media_shrinker.convert_file")
     def test_shrink_media_exception(self, mock_convert_file):
+        """Test docstring."""
         import tempfile
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir_path = Path(temp_dir)

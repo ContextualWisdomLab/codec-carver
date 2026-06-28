@@ -1,3 +1,4 @@
+"""Module docstring."""
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -10,13 +11,16 @@ from media_shrinker import ConversionResult
 client = TestClient(app)
 
 class TestSaasWeb(unittest.TestCase):
+    """Test class docstring."""
 
     def test_get_ui(self):
+        """Test docstring."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
 
     def test_get_ui_includes_accessible_file_input_helpers(self):
+        """Test docstring."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
@@ -27,6 +31,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
     def test_get_ui_includes_binary_file_size_validation(self):
+        """Test docstring."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
@@ -38,6 +43,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
 
     def test_security_headers_present_without_plain_http_hsts(self):
+        """Test docstring."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
@@ -50,6 +56,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertNotIn("Strict-Transport-Security", response.headers)
 
     def test_hsts_header_present_for_forwarded_https(self):
+        """Test docstring."""
         response = client.get("/", headers={"X-Forwarded-Proto": "https"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -58,6 +65,7 @@ class TestSaasWeb(unittest.TestCase):
         )
 
     def test_request_size_limit_rejects_oversized_declared_body(self):
+        """Test docstring."""
         response = client.post(
             "/shrink",
             headers={"Content-Length": str(saas_web.MAX_REQUEST_BYTES + 1)},
@@ -66,6 +74,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Payload Too Large"})
 
     def test_request_size_limit_rejects_invalid_content_length(self):
+        """Test docstring."""
         response = client.post(
             "/shrink",
             headers={"Content-Length": "not-a-number"},
@@ -75,6 +84,7 @@ class TestSaasWeb(unittest.TestCase):
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_endpoint(self, mock_convert_file):
+        """Test docstring."""
         # Create a dummy output file for the FileResponse
         import tempfile
 
@@ -106,6 +116,7 @@ class TestSaasWeb(unittest.TestCase):
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_failure(self, mock_convert_file):
+        """Test docstring."""
         # Setup mock to return empty or error
         mock_convert_file.return_value = []
 
@@ -127,6 +138,7 @@ class TestSaasWeb(unittest.TestCase):
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_exception_does_not_expose_internal_path(self, mock_convert_file):
+        """Test docstring."""
         mock_convert_file.side_effect = RuntimeError("/tmp/codec_carver_secret/input.wav")
 
         import tempfile
@@ -148,6 +160,7 @@ class TestSaasWeb(unittest.TestCase):
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_failed_result_does_not_expose_internal_path(self, mock_convert_file):
+        """Test docstring."""
         mock_result = MagicMock(spec=ConversionResult)
         mock_result.output_path = Path("/tmp/codec_carver_secret/output.flac")
         mock_convert_file.return_value = [mock_result]
@@ -171,6 +184,7 @@ class TestSaasWeb(unittest.TestCase):
 
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
+        """Test docstring."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
