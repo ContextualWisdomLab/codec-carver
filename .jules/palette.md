@@ -38,6 +38,3 @@
 ## 2026-06-23 - Improve Error Message Clarity
 **Learning:** Added inline visual feedback to the 'target_bytes' input field for invalid inputs (e.g., negative or zero values) provides immediate context to the user. I saw the empty text in preview on invalid inputs in the UI test screenshots and in the code, and realized it would be better UX to display the error text in the preview span with red styling, rather than leaving it empty.
 **Action:** Add descriptive innerText and red color styling to the preview element on validation failure to enhance error visibility.
-## 2026-06-25 - Visual Feedback for aria-invalid
-**Learning:** Setting `aria-invalid="true"` via JavaScript correctly announces the validation error to screen readers, but sighted users receive no immediate visual feedback on the input field itself unless explicitly styled in CSS.
-**Action:** When dynamically toggling `aria-invalid="true"`, always ensure there is a corresponding CSS rule (e.g., `input[aria-invalid="true"] { outline: 2px solid #dc3545; outline-offset: 2px; border-color: #dc3545; }`) to provide immediate, distinct visual feedback to sighted users.
