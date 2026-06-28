@@ -1,3 +1,4 @@
+"""Tests for the SaaS web interface."""
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -10,13 +11,16 @@ from media_shrinker import ConversionResult
 client = TestClient(app)
 
 class TestSaasWeb(unittest.TestCase):
+    """Test suite for the SaaS web application."""
 
     def test_get_ui(self):
+        """Test that the UI page loads correctly."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
 
     def test_get_ui_includes_accessible_file_input_helpers(self):
+        """Test that the UI includes accessible helpers for the file input."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
@@ -27,6 +31,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
     def test_get_ui_includes_binary_file_size_validation(self):
+        """Test that the UI includes JS for binary file size validation."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
@@ -34,10 +39,11 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;", html)
         self.assertIn("['B', 'KiB', 'MiB', 'GiB']", html)
         self.assertIn("File exceeds 5 GiB limit.", html)
-        self.assertIn("preview.style.color = '#17a2b8';", html)
+        self.assertIn("preview.style.color = '#0f6674';", html)
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
 
     def test_security_headers_present_without_plain_http_hsts(self):
+        """Test that security headers are present, except HSTS on HTTP."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
@@ -50,6 +56,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertNotIn("Strict-Transport-Security", response.headers)
 
     def test_hsts_header_present_for_forwarded_https(self):
+        """Test that HSTS is included when behind an HTTPS proxy."""
         response = client.get("/", headers={"X-Forwarded-Proto": "https"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -58,6 +65,7 @@ class TestSaasWeb(unittest.TestCase):
         )
 
     def test_request_size_limit_rejects_oversized_declared_body(self):
+        """Test that requests exceeding the maximum size are rejected based on headers."""
         response = client.post(
             "/shrink",
             headers={"Content-Length": str(saas_web.MAX_REQUEST_BYTES + 1)},
@@ -66,6 +74,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Payload Too Large"})
 
     def test_request_size_limit_rejects_invalid_content_length(self):
+        """Test that requests with invalid Content-Length are rejected."""
         response = client.post(
             "/shrink",
             headers={"Content-Length": "not-a-number"},
@@ -75,6 +84,7 @@ class TestSaasWeb(unittest.TestCase):
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_endpoint(self, mock_convert_file):
+        """Test successful media shrinking process."""
         # Create a dummy output file for the FileResponse
         import tempfile
 
@@ -106,6 +116,7 @@ class TestSaasWeb(unittest.TestCase):
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_failure(self, mock_convert_file):
+        """Test media shrinking failure handling."""
         # Setup mock to return empty or error
         mock_convert_file.return_value = []
 
@@ -127,6 +138,7 @@ class TestSaasWeb(unittest.TestCase):
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_exception_does_not_expose_internal_path(self, mock_convert_file):
+        """Test that exceptions do not expose internal temp paths to the user."""
         mock_convert_file.side_effect = RuntimeError("/tmp/codec_carver_secret/input.wav")
 
         import tempfile
@@ -148,6 +160,7 @@ class TestSaasWeb(unittest.TestCase):
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_failed_result_does_not_expose_internal_path(self, mock_convert_file):
+        """Test that failed results do not expose internal paths to the user."""
         mock_result = MagicMock(spec=ConversionResult)
         mock_result.output_path = Path("/tmp/codec_carver_secret/output.flac")
         mock_convert_file.return_value = [mock_result]
@@ -169,13 +182,78 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(payload, {"error": "Processing failed or no output generated"})
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
+    def test_shrink_media_endpoint_rejects_invalid_content_type(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.sh"
+            dummy_file_path.write_bytes(b"echo hacked")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("input.sh", f, "application/x-sh")},
+                    data={"target_bytes": 10000},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "Invalid content type"})
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_sanitizes_filename(self, mock_convert_file):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = Path(temp_dir) / "output.flac"
+            mock_result.output_path.write_bytes(b"dummy")
+            mock_convert_file.return_value = [mock_result]
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("../../etc/passwd", f, "audio/wav")},
+                    data={"target_bytes": 10000},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            called_source_path = mock_convert_file.call_args.kwargs["source"]
+            self.assertEqual(called_source_path.name, "passwd")
+
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
+        """Test that the UI includes validation feedback styling."""
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_path_traversal_sanitization(self, mock_convert_file):
+        """Test that uploaded filenames are correctly sanitized to prevent path traversal."""
+        mock_convert_file.return_value = []
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("../../../etc/passwd", f, "audio/wav")},
+                    data={"target_bytes": 10000},
+                )
+
+            self.assertEqual(response.status_code, 200)
+
+            self.assertTrue(mock_convert_file.called)
+            called_args = mock_convert_file.call_args.kwargs
+            source_path = called_args.get("source")
+            self.assertNotIn("..", str(source_path))
+            self.assertTrue(str(source_path).endswith("passwd"))
 
 if __name__ == '__main__':
     unittest.main()
