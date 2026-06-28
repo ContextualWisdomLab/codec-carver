@@ -1,3 +1,4 @@
+import re
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -34,8 +35,9 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;", html)
         self.assertIn("['B', 'KiB', 'MiB', 'GiB']", html)
         self.assertIn("File exceeds 5 GiB limit.", html)
-        self.assertIn("preview.style.color = '#17a2b8';", html)
-        self.assertIn('onchange="updateFileSizePreview(this)"', html)
+        self.assertIn("fileInput.addEventListener('change'", html)
+        self.assertIn("setPreviewTone(preview, 'preview-info');", html)
+        self.assertNotIn("onchange=", html)
 
     def test_security_headers_present_without_plain_http_hsts(self):
         response = client.get("/")
@@ -43,9 +45,16 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(response.headers["X-Frame-Options"], "DENY")
         self.assertEqual(response.headers["X-XSS-Protection"], "1; mode=block")
-        self.assertTrue(
-            response.headers["Content-Security-Policy"].startswith("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-")
-        )
+        style_nonce = re.search(r'<style nonce="([^"]+)">', response.text)
+        script_nonce = re.search(r'<script nonce="([^"]+)">', response.text)
+        self.assertIsNotNone(style_nonce)
+        self.assertIsNotNone(script_nonce)
+        self.assertEqual(style_nonce.group(1), script_nonce.group(1))
+        csp = response.headers["Content-Security-Policy"]
+        self.assertIn("default-src 'self'", csp)
+        self.assertIn(f"style-src 'self' 'nonce-{style_nonce.group(1)}'", csp)
+        self.assertIn(f"script-src 'self' 'nonce-{script_nonce.group(1)}'", csp)
+        self.assertNotIn("'unsafe-inline'", csp)
         self.assertNotIn("Strict-Transport-Security", response.headers)
 
     def test_hsts_header_present_for_forwarded_https(self):
@@ -174,23 +183,27 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.text
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
-        self.assertIn("preview.style.color = '#dc3545';", html)
-
-if __name__ == '__main__':
-    unittest.main()
+        self.assertIn("setPreviewTone(preview, 'preview-error');", html)
 
     def test_shrink_media_invalid_content_type(self):
         file_content = b"fake data"
         files = {"file": ("test.mp4", file_content, "image/png")}
         data = {"target_bytes": 1000000}
-        response = client.post("/shrink", files=files, data=data)
+        with patch("saas_web.tempfile.mkdtemp") as mock_mkdtemp:
+            response = client.post("/shrink", files=files, data=data)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"error": "Invalid content type"})
+        mock_mkdtemp.assert_not_called()
 
-    def test_shrink_media_no_content_type(self):
+    def test_shrink_media_octet_stream_rejected_before_temp_dir(self):
         file_content = b"fake data"
-        files = {"file": ("test.mp4", file_content)}
+        files = {"file": ("test.bin", file_content, "application/octet-stream")}
         data = {"target_bytes": 1000000}
-        response = client.post("/shrink", files=files, data=data)
+        with patch("saas_web.tempfile.mkdtemp") as mock_mkdtemp:
+            response = client.post("/shrink", files=files, data=data)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"error": "Invalid content type"})
+        mock_mkdtemp.assert_not_called()
+
+if __name__ == '__main__':
+    unittest.main()
