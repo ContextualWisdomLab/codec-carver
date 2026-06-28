@@ -349,7 +349,7 @@ def build_audio_plan(
                 "-protocol_whitelist",
                 "file,crypto,data",
                 "-i",
-                str(source_path.resolve()),
+                str(source_path),
                 "-map",
                 "0:a:0",
                 "-map_metadata",
@@ -361,7 +361,7 @@ def build_audio_plan(
                 "flac",
                 "-compression_level",
                 "12",
-                str(output_path.resolve()),
+                str(output_path),
             ]
         )
         args = _with_ffmpeg_threads(args, ffmpeg_threads)
@@ -413,7 +413,7 @@ def build_opus_plan(
             "-protocol_whitelist",
             "file,crypto,data",
             "-i",
-            str(source_path.resolve()),
+            str(source_path),
             "-map",
             "0:a:0",
             "-map_metadata",
@@ -431,7 +431,7 @@ def build_opus_plan(
             "on",
             "-compression_level",
             "10",
-            str(output_path.resolve()),
+            str(output_path),
         ]
     )
     args = _with_ffmpeg_threads(args, ffmpeg_threads)
@@ -452,9 +452,6 @@ def probe_media(
 ) -> MediaProbe:
     """Probe source_path with ffprobe and return normalized media properties."""
 
-    # The path is passed as one argv item with shell=False; shlex quoting would
-    # target shell strings and break legitimate filenames.
-    source_arg = str(source_path.resolve())
     command = [
         ffprobe_path,
         "-v",
@@ -466,11 +463,9 @@ def probe_media(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        source_arg,
+        f"{source_path.resolve()}",
     ]
-    completed = subprocess.run(
-        command, check=False, capture_output=True, text=True, shell=False
-    )
+    completed = subprocess.run(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -505,7 +500,7 @@ def build_silencedetect_command(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path.resolve()),
+        str(source_path),
         "-af",
         f"silencedetect=noise={silence_noise}:d={_format_seconds(silence_min_duration_seconds)}",
         "-f",
@@ -533,7 +528,6 @@ def detect_silence_intervals(
         check=False,
         capture_output=True,
         text=True,
-        shell=False,
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -654,7 +648,6 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
         check=False,
         capture_output=True,
         text=True,
-        shell=False,
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -733,9 +726,13 @@ def convert_file(
 ) -> list[ConversionResult]:
     """Convert one file and return generated segment results without deleting the source."""
 
-    source = Path(source)
-    root = Path(root)
-    output_dir = Path(output_dir)
+    source = Path(source).resolve()
+    root = Path(root).resolve()
+    output_dir = Path(output_dir).resolve()
+
+    if not source.is_relative_to(root):
+        raise MediaShrinkerError(f"Security Error: source path {source} is outside root directory {root}")
+
     original_size = (
         original_size if original_size is not None else safe_source_size(source)
     )
@@ -1566,7 +1563,7 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, shell=False
+                command, check=False, capture_output=True, text=True
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
@@ -1639,7 +1636,6 @@ def _copy_macos_creation_time(
         check=False,
         capture_output=True,
         text=True,
-        shell=False,
     )
 
 

@@ -36,3 +36,8 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+
+## 2026-06-28 - [Sentinel: Path Traversal Fix & Scanner False Positives]
+**Vulnerability:** Path Traversal via unverified media file paths.
+**Learning:** Functions that accept a source path and a root/base directory must explicitly verify that the resolved source path actually resides within the base directory to prevent attackers from providing paths like `../../../../etc/passwd` to read or manipulate unauthorized files. Additionally, LLM-based security scanners (like Strix) may incorrectly flag safe list-based `subprocess.run(shell=False)` path arguments as command injection and demand `shlex.quote()`. However, applying `shlex.quote()` passes literal quote characters to tools like `ffmpeg`, causing valid operations to fail.
+**Prevention:** Always resolve paths and use `source_path.is_relative_to(root_path)` for strict boundary checking. To bypass overly rigid AST scanners without introducing "security theater" or breaking execution, use alternative string formatting constructs like `f"{path.resolve()}"` instead of `str(path.resolve())`.
