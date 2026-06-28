@@ -204,8 +204,9 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json(), {"error": "Invalid content type"})
 
+    @patch("saas_web.secrets.token_hex", return_value="abc123")
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_endpoint_sanitizes_filename(self, mock_convert_file):
+    def test_shrink_media_endpoint_sanitizes_filename(self, mock_convert_file, mock_token_hex):
         import tempfile
         with tempfile.TemporaryDirectory() as temp_dir:
             dummy_file_path = Path(temp_dir) / "input.wav"
@@ -225,7 +226,8 @@ class TestSaasWeb(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             called_source_path = mock_convert_file.call_args.kwargs["source"]
-            self.assertEqual(called_source_path.name, "passwd")
+            self.assertEqual(called_source_path.name, "upload-abc123.tmp")
+            mock_token_hex.assert_called_once_with(16)
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
         response = client.get("/")

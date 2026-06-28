@@ -1,6 +1,7 @@
-import tempfile
 import logging
+import secrets
 import shutil
+import tempfile
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -231,10 +232,10 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        safe_filename = "".join(c for c in safe_filename if c.isalnum() or c in ".-_")
-        if not safe_filename or safe_filename.startswith(".") or ".." in safe_filename:
-            safe_filename = "upload.tmp"
+        suffix = Path(file.filename).suffix.lower()
+        if not suffix or len(suffix) > 16 or not suffix[1:].isalnum():
+            suffix = ".tmp"
+        safe_filename = f"upload-{secrets.token_hex(16)}{suffix}"
 
         source_path = input_dir / safe_filename
         bytes_written = 0
