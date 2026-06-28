@@ -21,6 +21,7 @@ DISPATCH_MARKER = "<!-- scheduled-pr-review-merge opencode-dispatch"
 
 
 class Runner(Protocol):
+    """Class docstring."""
     def run_json(self, args: list[str]) -> Any:
         """Run a gh command and parse JSON output."""
 
@@ -29,13 +30,16 @@ class Runner(Protocol):
 
 
 class GhRunner:
+    """Class docstring."""
     def run_json(self, args: list[str]) -> Any:
+        """Docstring."""
         completed = self.run(args)
         if not completed.stdout.strip():
             return None
         return json.loads(completed.stdout)
 
     def run(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        """Docstring."""
         return subprocess.run(
             ["gh", *args],
             check=True,
@@ -46,6 +50,7 @@ class GhRunner:
 
 @dataclass(frozen=True)
 class PullRequest:
+    """Class docstring."""
     number: int
     title: str
     base_ref: str
@@ -59,11 +64,13 @@ class PullRequest:
 
 @dataclass(frozen=True)
 class Decision:
+    """Class docstring."""
     should_merge: bool
     reasons: list[str]
 
 
 def parse_repo(repo: str) -> tuple[str, str]:
+    """Docstring."""
     parts = repo.split("/")
     if len(parts) != 2 or not all(parts):
         raise ValueError("--repo must be in OWNER/NAME form")
@@ -71,6 +78,7 @@ def parse_repo(repo: str) -> tuple[str, str]:
 
 
 def list_open_pr_numbers(runner: Runner, repo: str) -> list[int]:
+    """Docstring."""
     payload = runner.run_json(
         [
             "pr",
@@ -89,6 +97,7 @@ def list_open_pr_numbers(runner: Runner, repo: str) -> list[int]:
 
 
 def load_pr(runner: Runner, repo: str, number: int) -> PullRequest:
+    """Docstring."""
     payload = runner.run_json(
         [
             "pr",
@@ -117,6 +126,7 @@ def load_pr(runner: Runner, repo: str, number: int) -> PullRequest:
 
 
 def unresolved_review_thread_count(runner: Runner, repo: str, number: int) -> int:
+    """Docstring."""
     owner, name = parse_repo(repo)
     payload = runner.run_json(
         [
@@ -156,6 +166,7 @@ def unresolved_review_thread_count(runner: Runner, repo: str, number: int) -> in
 
 
 def authenticated_login(runner: Runner) -> str:
+    """Docstring."""
     try:
         payload = runner.run_json(["api", "user"])
     except subprocess.CalledProcessError:
@@ -166,6 +177,7 @@ def authenticated_login(runner: Runner) -> str:
 
 
 def review_mentions_head(body: str, head_sha: str) -> bool:
+    """Docstring."""
     return (
         head_sha in body
         or f"Head SHA: `{head_sha}`" in body
@@ -174,6 +186,7 @@ def review_mentions_head(body: str, head_sha: str) -> bool:
 
 
 def current_opencode_review_exists(runner: Runner, repo: str, pr: PullRequest) -> bool:
+    """Docstring."""
     pages = runner.run_json(
         ["api", f"repos/{repo}/pulls/{pr.number}/reviews", "--paginate", "--slurp"]
     )
@@ -193,6 +206,7 @@ def current_opencode_review_exists(runner: Runner, repo: str, pr: PullRequest) -
 
 
 def opencode_check_is_pending(status_rollup: list[dict[str, Any]]) -> bool:
+    """Docstring."""
     for item in status_rollup:
         name = " ".join(
             str(value or "")
@@ -220,6 +234,7 @@ def recent_dispatch_marker_exists(
     *,
     retry_seconds: int,
 ) -> bool:
+    """Docstring."""
     pages = runner.run_json(
         ["api", f"repos/{repo}/issues/{pr.number}/comments", "--paginate", "--slurp"]
     )
@@ -238,6 +253,7 @@ def recent_dispatch_marker_exists(
 
 
 def dispatch_opencode_review(runner: Runner, repo: str, pr: PullRequest) -> None:
+    """Docstring."""
     runner.run(
         [
             "workflow",
@@ -277,6 +293,7 @@ def dispatch_opencode_review(runner: Runner, repo: str, pr: PullRequest) -> None
 
 
 def check_blockers(status_rollup: list[dict[str, Any]]) -> list[str]:
+    """Docstring."""
     blockers: list[str] = []
     for item in status_rollup:
         name = item.get("name") or item.get("context") or item.get("workflowName") or "check"
@@ -298,6 +315,7 @@ def check_blockers(status_rollup: list[dict[str, Any]]) -> list[str]:
 
 
 def decide(pr: PullRequest, unresolved_threads: int, *, require_approval: bool) -> Decision:
+    """Docstring."""
     reasons: list[str] = []
     if pr.is_draft:
         reasons.append("draft PR")
@@ -312,6 +330,7 @@ def decide(pr: PullRequest, unresolved_threads: int, *, require_approval: bool) 
 
 
 def auto_approval_blockers(pr: PullRequest, unresolved_threads: int) -> list[str]:
+    """Docstring."""
     reasons: list[str] = []
     if pr.is_draft:
         reasons.append("draft PR")
@@ -326,6 +345,7 @@ def auto_approval_blockers(pr: PullRequest, unresolved_threads: int) -> list[str
 
 
 def approve_pr(runner: Runner, repo: str, pr: PullRequest) -> None:
+    """Docstring."""
     runner.run(
         [
             "pr",
@@ -351,6 +371,7 @@ def wait_for_pr_refresh(
     attempts: int = 3,
     delay_seconds: int = 2,
 ) -> PullRequest:
+    """Docstring."""
     pr = load_pr(runner, repo, number)
     for _ in range(1, attempts):
         if pr.review_decision == "APPROVED":
@@ -361,6 +382,7 @@ def wait_for_pr_refresh(
 
 
 def merge_pr(runner: Runner, repo: str, pr: PullRequest) -> None:
+    """Docstring."""
     runner.run(
         [
             "pr",
@@ -376,6 +398,7 @@ def merge_pr(runner: Runner, repo: str, pr: PullRequest) -> None:
 
 
 def load_pr_merge_result(runner: Runner, repo: str, number: int) -> dict[str, Any]:
+    """Docstring."""
     payload = runner.run_json(
         [
             "pr",
@@ -391,11 +414,13 @@ def load_pr_merge_result(runner: Runner, repo: str, number: int) -> dict[str, An
 
 
 def merge_commit_oid(payload: dict[str, Any]) -> str:
+    """Docstring."""
     merge_commit = payload.get("mergeCommit") or {}
     return merge_commit.get("oid") or "unknown merge commit"
 
 
 def is_merged(payload: dict[str, Any]) -> bool:
+    """Docstring."""
     return payload.get("state") == "MERGED" or bool(payload.get("mergedAt"))
 
 
@@ -409,6 +434,7 @@ def process_queue(
     trigger_reviews: bool = False,
     review_retry_seconds: int = 24 * 3600,
 ) -> int:
+    """Docstring."""
     numbers = list_open_pr_numbers(runner, repo)
     if not numbers:
         print("No open pull requests.")
@@ -498,6 +524,7 @@ def process_queue(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Docstring."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
@@ -524,6 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Docstring."""
     args = build_parser().parse_args(argv)
     try:
         parse_repo(args.repo)

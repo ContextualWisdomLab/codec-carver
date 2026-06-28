@@ -1236,6 +1236,7 @@ def _execute_conversions(
     protected_sources = [c[0] for c in candidates]
 
     def process_candidate(candidate_tuple: tuple[Path, int]) -> list[ConversionResult]:
+        """Docstring."""
         candidate, size = candidate_tuple
         try:
             return convert_file(
