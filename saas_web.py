@@ -197,6 +197,12 @@ def secure_filename(filename: str) -> str:
     return f"upload-{secrets.token_hex(16)}{suffix}"
 
 
+def has_path_components(filename: str) -> bool:
+    """Return whether an upload filename tries to include directories."""
+    normalized = filename.replace("\\", "/")
+    return "/" in normalized or normalized in {".", ".."}
+
+
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
     if temp_dir_path.exists():
@@ -219,6 +225,9 @@ def shrink_media(
 
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
+
+    if has_path_components(file.filename):
+        return JSONResponse(status_code=400, content={"error": "Invalid upload filename"})
 
     # Create a temporary directory that will hold the input and output
     try:

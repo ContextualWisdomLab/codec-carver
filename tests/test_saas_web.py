@@ -175,6 +175,30 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(payload, {"error": "Processing failed or no output generated"})
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_rejects_filename_with_path_components(self, mock_convert_file):
+        response = client.post(
+            "/shrink",
+            files={"file": ("../../malicious.wav", b"dummy wav data", "audio/wav")},
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"error": "Invalid upload filename"})
+        mock_convert_file.assert_not_called()
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_rejects_windows_path_filename(self, mock_convert_file):
+        response = client.post(
+            "/shrink",
+            files={"file": ("..\\..\\boot.wav", b"dummy wav data", "audio/wav")},
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"error": "Invalid upload filename"})
+        mock_convert_file.assert_not_called()
+
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
         response = client.get("/")
