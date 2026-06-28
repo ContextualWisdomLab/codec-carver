@@ -74,8 +74,9 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"error": "Invalid Content-Length"})
 
+    @patch("saas_web.secrets.token_hex", return_value="abc123")
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_endpoint(self, mock_convert_file):
+    def test_shrink_media_endpoint(self, mock_convert_file, mock_token_hex):
         # Create a dummy output file for the FileResponse
         import tempfile
 
@@ -104,6 +105,11 @@ class TestSaasWeb(unittest.TestCase):
 
             # Verify the mock was called
             mock_convert_file.assert_called_once()
+            self.assertEqual(
+                mock_convert_file.call_args.kwargs["source"].name,
+                "upload-abc123.wav",
+            )
+            mock_token_hex.assert_called_once_with(16)
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_failure(self, mock_convert_file):
@@ -186,8 +192,21 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json(), {"error": "Invalid content type"})
 
+    def test_shrink_media_endpoint_rejects_spoofed_media_extension_before_temp_dir(self):
+        with patch("saas_web.tempfile.mkdtemp") as mock_mkdtemp:
+            response = client.post(
+                "/shrink",
+                files={"file": ("../../malicious.php", b"<?php", "audio/mp3")},
+                data={"target_bytes": 10000},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": "Invalid content type"})
+        mock_mkdtemp.assert_not_called()
+
+    @patch("saas_web.secrets.token_hex", return_value="abc123")
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_endpoint_sanitizes_filename(self, mock_convert_file):
+    def test_shrink_media_endpoint_sanitizes_filename(self, mock_convert_file, mock_token_hex):
         import tempfile
         with tempfile.TemporaryDirectory() as temp_dir:
             dummy_file_path = Path(temp_dir) / "input.wav"
@@ -201,13 +220,27 @@ class TestSaasWeb(unittest.TestCase):
             with open(dummy_file_path, "rb") as f:
                 response = client.post(
                     "/shrink",
-                    files={"file": ("../../etc/passwd", f, "audio/wav")},
+                    files={"file": ("../../etc/passwd.wav", f, "audio/wav")},
                     data={"target_bytes": 10000},
                 )
 
             self.assertEqual(response.status_code, 200)
             called_source_path = mock_convert_file.call_args.kwargs["source"]
-            self.assertEqual(called_source_path.name, "passwd")
+            self.assertEqual(called_source_path.name, "upload-abc123.wav")
+            mock_token_hex.assert_called_once_with(16)
+
+    def test_rate_limit_rejects_excess_requests(self):
+        saas_web._request_times.clear()
+        try:
+            with patch("saas_web.time.monotonic", return_value=1000.0):
+                for _ in range(saas_web.RATE_LIMIT_MAX_REQUESTS):
+                    self.assertEqual(client.get("/").status_code, 200)
+                response = client.get("/")
+
+            self.assertEqual(response.status_code, 429)
+            self.assertEqual(response.json(), {"error": "Too Many Requests"})
+        finally:
+            saas_web._request_times.clear()
 
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
