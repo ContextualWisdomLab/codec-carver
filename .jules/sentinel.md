@@ -38,6 +38,6 @@
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
 
 ## 2026-06-23 - Unrestricted File Uploads in SaaS
-**Vulnerability:** The /shrink endpoint did not validate the uploaded filename or content-type, allowing a path traversal attack to overwrite files (e.g. `../../etc/passwd`) or upload executable content (e.g. malicious scripts).
-**Learning:** File uploads are inherently dangerous and must be strictly validated. Relying only on `Path(filename).name` is insufficient if the client crafts a malicious path string that bypasses simple checks. Content-Type headers must also be verified to ensure the file matches expected formats.
-**Prevention:** Implemented strict filename sanitization by stripping non-alphanumeric characters (except dots, hyphens, and underscores) and added validation to ensure `file.content_type` starts with `audio/` or `video/`.
+**Vulnerability:** The /shrink endpoint accepted unexpected content types and ambiguous upload filenames before writing the upload into its temporary workspace.
+**Learning:** `Path(filename).name` prevents POSIX `../../` traversal from escaping the temp workspace, but upload handling still needs explicit media content-type checks and a conservative filename character set.
+**Prevention:** Validate that `file.content_type` starts with `audio/` or `video/`, then reduce the upload basename to alphanumeric characters, dots, hyphens, and underscores before writing it under the temp input directory.
