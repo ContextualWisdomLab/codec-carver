@@ -198,7 +198,6 @@ class FindCandidateTests(unittest.TestCase):
             # we can create a directory/file without read permissions, but Python tests running
             # as root might bypass it. Let's patch os.scandir instead.
 
-            original_scandir = os.scandir
             class FlakyDirEntry:
                 def __init__(self, entry):
                     self._entry = entry
@@ -210,20 +209,20 @@ class FindCandidateTests(unittest.TestCase):
                             return raise_os_error
                     return getattr(self._entry, name)
 
-            def flaky_scandir(path):
-                for entry in original_scandir(path):
-                    yield FlakyDirEntry(entry)
-
-            class FlakyScandirContext:
+            original_scandir = os.scandir
+            class FlakyScandirIterator:
                 def __init__(self, path):
-                    self.path = path
-                    self.it = flaky_scandir(path)
+                    self._it = original_scandir(path)
+                def __iter__(self):
+                    return self
+                def __next__(self):
+                    return FlakyDirEntry(next(self._it))
                 def __enter__(self):
-                    return self.it
+                    return self
                 def __exit__(self, *args):
-                    pass
+                    self._it.close()
 
-            with patch("os.scandir", FlakyScandirContext):
+            with patch("os.scandir", FlakyScandirIterator):
                 candidates = [
                     p[0].relative_to(root)
                     for p in find_candidates(root, include_under_limit=True)
@@ -1049,8 +1048,6 @@ class MetadataPreservationTests(unittest.TestCase):
                     setxattr(source, b"user.media_shrinker_test", b"recording-date")
                 except OSError:
                     xattr_supported = False
-            else:
-                xattr_supported = False
 
             preserve_file_attributes(source, dest, setfile_path=None)
 

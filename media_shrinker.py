@@ -231,7 +231,13 @@ def find_candidates(
                         # Original implementation did not follow symlinks
                         continue
 
-                    if entry.is_dir(follow_symlinks=False):
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                        is_file = entry.is_file(follow_symlinks=False) if not is_dir else False
+                    except OSError:
+                        continue
+
+                    if is_dir:
                         if name.casefold().startswith(excluded_prefixes):
                             continue
 
@@ -242,7 +248,7 @@ def find_candidates(
 
                         dirs_to_visit.append(entry.path)
 
-                    elif entry.is_file(follow_symlinks=False):
+                    elif is_file:
                         if not name.lower().endswith(SUPPORTED_EXTS_TUPLE):
                             continue
 
