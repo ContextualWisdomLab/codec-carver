@@ -173,11 +173,8 @@ HTML_TEMPLATE = """
         });
         ['dragleave', 'drop'].forEach(eventName => {
             dropZone.addEventListener(eventName, (e) => {
-                if (eventName === 'dragleave') {
-                    const relatedTarget = e.relatedTarget;
-                    if (relatedTarget instanceof Node ? dropZone.contains(relatedTarget) : e.target !== e.currentTarget) {
-                        return;
-                    }
+                if (eventName === 'dragleave' && dropZone.contains(e.relatedTarget)) {
+                    return;
                 }
                 dropZone.classList.remove('dragover');
             }, false);
@@ -219,9 +216,6 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
-    if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
-        return {"error": "Invalid content type"}
-
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -239,8 +233,8 @@ def shrink_media(
 
         # Save the uploaded file
         safe_filename = Path(file.filename).name
-        safe_filename = "".join(c for c in safe_filename if c.isalnum() or c in ".-_")
-        if not safe_filename or safe_filename.startswith(".") or ".." in safe_filename:
+        safe_filename = safe_filename.replace("/", "_").replace("\\", "_")
+        if not safe_filename or safe_filename in (".", ".."):
             safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename

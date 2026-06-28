@@ -39,10 +39,10 @@
 **Learning:** Added inline visual feedback to the 'target_bytes' input field for invalid inputs (e.g., negative or zero values) provides immediate context to the user. I saw the empty text in preview on invalid inputs in the UI test screenshots and in the code, and realized it would be better UX to display the error text in the preview span with red styling, rather than leaving it empty.
 **Action:** Add descriptive innerText and red color styling to the preview element on validation failure to enhance error visibility.
 
-## 2026-06-27 - Prevent drag-and-drop flickering
+## 2024-06-26 - Prevent drag-and-drop flickering
 **Learning:** Native drag-and-drop events (`dragenter`, `dragleave`) bubble up from child elements. Removing a visual `.dragover` state indiscriminately on `dragleave` causes heavy flickering when users drag files over inner elements within the drop zone.
-**Action:** When handling `dragleave`, guard `relatedTarget` before calling `contains()` and ignore bubbled child events when no usable related target exists, so the drop state is removed only when the cursor has actually left the parent container.
+**Action:** When handling `dragleave`, always check `dropZone.contains(e.relatedTarget)` to ensure the cursor has actually left the parent container before removing the drop state.
 
-## 2026-06-27 - Visual feedback for accessible invalid states
+## 2024-06-26 - Visual feedback for accessible invalid states
 **Learning:** Setting `aria-invalid="true"` provides essential feedback to screen readers, but sighted users might miss validation errors if the input lacks distinct visual styling (especially native HTML forms without custom component libraries).
 **Action:** Always pair `aria-invalid="true"` logic with corresponding CSS (e.g., `input[aria-invalid="true"]`) to provide a universal, immediate visual cue (like a red border) for validation errors.

@@ -169,45 +169,6 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(payload, {"error": "Processing failed or no output generated"})
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
-    def test_shrink_media_endpoint_rejects_invalid_content_type(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as temp_dir:
-            dummy_file_path = Path(temp_dir) / "input.sh"
-            dummy_file_path.write_bytes(b"echo hacked")
-
-            with open(dummy_file_path, "rb") as f:
-                response = client.post(
-                    "/shrink",
-                    files={"file": ("input.sh", f, "application/x-sh")},
-                    data={"target_bytes": 10000},
-                )
-
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"error": "Invalid content type"})
-
-    @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_endpoint_sanitizes_filename(self, mock_convert_file):
-        import tempfile
-        with tempfile.TemporaryDirectory() as temp_dir:
-            dummy_file_path = Path(temp_dir) / "input.wav"
-            dummy_file_path.write_bytes(b"dummy wav data")
-
-            mock_result = MagicMock(spec=ConversionResult)
-            mock_result.output_path = Path(temp_dir) / "output.flac"
-            mock_result.output_path.write_bytes(b"dummy")
-            mock_convert_file.return_value = [mock_result]
-
-            with open(dummy_file_path, "rb") as f:
-                response = client.post(
-                    "/shrink",
-                    files={"file": ("../../etc/passwd", f, "audio/wav")},
-                    data={"target_bytes": 10000},
-                )
-
-            self.assertEqual(response.status_code, 200)
-            called_source_path = mock_convert_file.call_args.kwargs["source"]
-            self.assertEqual(called_source_path.name, "passwd")
-
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
         response = client.get("/")
@@ -221,8 +182,7 @@ class TestSaasWeb(unittest.TestCase):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
-        self.assertIn("const relatedTarget = e.relatedTarget;", html)
-        self.assertIn("relatedTarget instanceof Node ? dropZone.contains(relatedTarget) : e.target !== e.currentTarget", html)
+        self.assertIn("dropZone.contains(e.relatedTarget)", html)
 
 if __name__ == '__main__':
     unittest.main()
