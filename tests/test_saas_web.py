@@ -26,6 +26,15 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
+    def test_get_ui_includes_tactile_and_invalid_feedback_css(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+
+        self.assertIn("transition: background-color 0.15s ease-in-out, transform 0.1s ease-in-out;", html)
+        self.assertIn("button:active:not(:disabled) { transform: scale(0.98); }", html)
+        self.assertIn('input[aria-invalid="true"] { outline: 2px solid #dc3545; outline-offset: 2px; }', html)
+
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
