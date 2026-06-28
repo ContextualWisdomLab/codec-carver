@@ -181,7 +181,7 @@ class TestSaasWeb(unittest.TestCase):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
-        self.assertIn('input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }', html)
+        self.assertIn('input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; outline-offset: 2px; }', html)
 
 if __name__ == '__main__':
     unittest.main()
