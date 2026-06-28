@@ -36,7 +36,7 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
-## 2024-05-27 - [Insecure Filename Handling / Path Traversal]
+## 2026-06-23 - [Insecure Filename Handling / Path Traversal]
 **Vulnerability:** The SaaS web interface used `Path(file.filename).name` to sanitize uploaded filenames. While `Path` handles standard `/` based paths, it fails to handle `\` based paths when running on a Linux server receiving files from a Windows client. This could lead to a path traversal vulnerability.
 **Learning:** `Path(filename).name` is not sufficient for complete filename sanitization, especially across different operating systems.
-**Prevention:** Use a dedicated `secure_filename` function that strips all unsafe characters (including `\` and `/`), replacing them with underscores, and ensuring the resulting filename contains only alphanumeric characters, dashes, dots, and underscores.
+**Prevention:** Use a dedicated `secure_filename` function that extracts the basename for POSIX and Windows-style separators, then normalizes remaining unsafe filename characters to underscores.
