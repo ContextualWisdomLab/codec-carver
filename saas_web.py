@@ -1,6 +1,8 @@
-import tempfile
 import logging
+import os
+import secrets
 import shutil
+import tempfile
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -211,6 +213,9 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
+    if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
+        return {"error": "Invalid content type"}
+
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -223,17 +228,19 @@ def shrink_media(
         # Setup paths
         input_dir = temp_dir_path / "input"
         output_dir = temp_dir_path / "output"
-        input_dir.mkdir()
-        output_dir.mkdir()
+        input_dir.mkdir(mode=0o700)
+        output_dir.mkdir(mode=0o700)
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
+        suffix = Path(file.filename).suffix.lower()
+        if not suffix or len(suffix) > 16 or not suffix[1:].isalnum():
+            suffix = ".tmp"
+        safe_filename = f"upload-{secrets.token_hex(16)}{suffix}"
 
         source_path = input_dir / safe_filename
         bytes_written = 0
-        with open(source_path, "wb") as f:
+        fd = os.open(source_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
             while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
                 bytes_written += len(chunk)
                 if bytes_written > MAX_UPLOAD_BYTES:
