@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import media_shrinker
+import mimetypes
 
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
@@ -72,6 +73,7 @@ HTML_TEMPLATE = """
         button:hover:not(:disabled) { background-color: #0056b3; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
         button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
+        input[aria-invalid="true"] { border-color: #dc3545; outline-color: #dc3545; }
         .required-star { color: #dc3545; }
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
@@ -171,7 +173,12 @@ HTML_TEMPLATE = """
             dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
         });
         ['dragleave', 'drop'].forEach(eventName => {
-            dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false);
+            dropZone.addEventListener(eventName, (e) => {
+                if (eventName === 'dragleave' && dropZone.contains(e.relatedTarget)) {
+                    return;
+                }
+                dropZone.classList.remove('dragover');
+            }, false);
         });
         dropZone.addEventListener('drop', (e) => {
             let dt = e.dataTransfer;
@@ -210,6 +217,10 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
+    content_type = file.content_type
+    if not content_type or not (content_type.startswith("video/") or content_type.startswith("audio/")):
+        return {"error": "Invalid file type. Only audio and video files are supported."}
+
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -226,8 +237,10 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
+        # ensure no slashes in filename are passed to Path().name
+        safe_filename = file.filename.replace("/", "_").replace("\\", "_")
+        safe_filename = Path(safe_filename).name
+        if not safe_filename or safe_filename in (".", "..") or ".." in safe_filename:
             safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename
@@ -276,4 +289,4 @@ def shrink_media(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
