@@ -210,13 +210,6 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
-    # Validate and sanitize filename before allocating any resources
-    safe_filename = Path(file.filename).name
-    if not safe_filename or safe_filename in (".", ".."):
-        safe_filename = "upload.tmp"
-    if not (file.content_type or "").startswith(("audio/", "video/")):
-        return {"error": "Unsupported media type. Upload an audio or video file."}
-
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -233,6 +226,10 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
+        safe_filename = Path(file.filename).name
+        if not safe_filename or safe_filename in (".", ".."):
+            safe_filename = "upload.tmp"
+
         source_path = input_dir / safe_filename
         bytes_written = 0
         with open(source_path, "wb") as f:
