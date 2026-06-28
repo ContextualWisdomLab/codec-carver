@@ -2350,6 +2350,10 @@ PY
 
 	printf "Strix run failed for model '%s' after %ds (exit code %d).\n" "$model" "$elapsed" "$rc" >&2
 
+	if is_transient_same_model_retry_error "$model"; then
+		return 1
+	fi
+
 	# Sticky flag: record that at least one attempt hit an infrastructure
 	# error.  STRIX_LOG is overwritten per-attempt, so without this flag the
 	# below-threshold guard in has_only_below_threshold_vulnerabilities()

@@ -201,18 +201,22 @@ def iter_json_objects(text: str) -> list[Any]:
 
     try:
         values.append(json.loads(text))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
-    for index, character in enumerate(text):
-        if character != "{":
+    pos = 0
+    text_len = len(text)
+    while pos < text_len:
+        if text[pos] != "{":
+            pos += 1
             continue
         try:
-            value, _ = decoder.raw_decode(text[index:])
-        except json.JSONDecodeError:
-            continue
-        values.append(value)
+            value, new_pos = decoder.raw_decode(text, pos)
+            values.append(value)
+            pos = new_pos
+        except (json.JSONDecodeError, ValueError):
+            pos += 1
 
     return values
 
