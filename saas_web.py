@@ -218,6 +218,9 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
+    if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
+        return {"error": "Invalid content type"}
+
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
