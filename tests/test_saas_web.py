@@ -1,10 +1,11 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
+import tempfile
 from fastapi.testclient import TestClient
 
 import saas_web
-from saas_web import app
+from saas_web import app, cleanup_temp_dir
 from media_shrinker import ConversionResult
 
 client = TestClient(app)
@@ -170,6 +171,22 @@ class TestSaasWeb(unittest.TestCase):
             payload = response.json()
             self.assertEqual(payload, {"error": "Processing failed or no output generated"})
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
+
+    def test_cleanup_temp_dir_allows_symlinked_temp_root(self):
+        with tempfile.TemporaryDirectory() as real_root:
+            link_root = Path(real_root).with_name(Path(real_root).name + "_link")
+            try:
+                link_root.symlink_to(real_root, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlink unavailable: {exc}")
+            try:
+                temp_dir = link_root / "codec_carver_test"
+                temp_dir.mkdir()
+                with patch("saas_web.tempfile.gettempdir", return_value=str(link_root)), patch("saas_web.shutil.rmtree") as mock_rmtree:
+                    cleanup_temp_dir(temp_dir)
+                mock_rmtree.assert_called_once_with(temp_dir, ignore_errors=True)
+            finally:
+                link_root.unlink(missing_ok=True)
 
 if __name__ == '__main__':
     unittest.main()

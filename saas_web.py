@@ -190,7 +190,7 @@ HTML_TEMPLATE = """
 
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
-    if temp_dir_path.exists() and temp_dir_path.resolve().is_relative_to(Path(tempfile.gettempdir())):
+    if temp_dir_path.exists() and temp_dir_path.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
