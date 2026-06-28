@@ -169,6 +169,21 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(payload, {"error": "Processing failed or no output generated"})
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
+    @patch("saas_web.tempfile.mkdtemp")
+    def test_shrink_media_rejects_non_media_upload_before_temp_dir(self, mock_mkdtemp):
+        response = client.post(
+            "/shrink",
+            files={"file": ("payload.txt", b"not media", "text/plain")},
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"error": "Unsupported media type. Upload an audio or video file."},
+        )
+        mock_mkdtemp.assert_not_called()
+
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
         response = client.get("/")

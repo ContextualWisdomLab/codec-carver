@@ -214,6 +214,8 @@ def shrink_media(
     safe_filename = Path(file.filename).name
     if not safe_filename or safe_filename in (".", ".."):
         safe_filename = "upload.tmp"
+    if not (file.content_type or "").startswith(("audio/", "video/")):
+        return {"error": "Unsupported media type. Upload an audio or video file."}
 
     # Create a temporary directory that will hold the input and output
     try:
