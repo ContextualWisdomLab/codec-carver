@@ -7,6 +7,7 @@
 **Vulnerability:** Use of `shutil.copymode(source, dest)` preserves potentially dangerous permission bits (setuid, setgid, sticky).
 **Learning:** Utilities that copy file metadata (like `shutil.copymode`) can inadvertently transfer elevated execution privileges from an untrusted source to a generated output. This can lead to privilege escalation if the destination file is later executed.
 **Prevention:** Explicitly mask file permissions when restoring metadata. Use `os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o777)` to ensure only standard read/write/execute permissions are copied, dropping the setuid, setgid, and sticky bits.
+
 ## 2026-05-31 - [Sentinel: Unhandled FastAPI Upload Vulnerability Leading to Temporary Directory Leak]
 **Vulnerability:** Path edge cases in uploaded filenames (`.`, `..`, or empty strings) triggering unhandled exceptions (`IsADirectoryError`) before reaching cleanup blocks, causing unbounded temporary directory accumulation on disk (CWE-400 / CWE-770 Resource Exhaustion / DoS).
 **Learning:** In FastAPI/Starlette, `file.filename` can be unsafe or empty. Using `Path(file.filename).name` may resolve to `.` or `..`, leading to OS-level exceptions when attempting to write data. If resource allocation (like `tempfile.mkdtemp()`) occurs outside the scope of the `try...finally` (or `BackgroundTasks` cleanup) that handles these errors, an attacker can intentionally leak resources by sending manipulated paths.
@@ -36,3 +37,8 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+
+## 2026-06-28 - [Sentinel: Missing Upload Content-Type Validation]
+**Vulnerability:** Missing server-side file type validation allowing arbitrary file upload bypasses (CWE-434).
+**Learning:** While the frontend had an `accept="audio/*,video/*"` attribute on the file input, the backend `/shrink` endpoint failed to validate the `Content-Type` of the uploaded file. An attacker could bypass the client-side restriction and upload non-media files (e.g., `.php` or executable files) by manipulating request headers, which might be processed or stored unsafely.
+**Prevention:** Always implement server-side validation of the `Content-Type` header (e.g., checking if it starts with `audio/` or `video/`) and ideally use file signature validation (magic bytes) to ensure uploaded files conform to expected types, defending against client-side bypasses.

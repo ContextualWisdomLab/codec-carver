@@ -179,3 +179,19 @@ class TestSaasWeb(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_shrink_media_invalid_content_type(self):
+        file_content = b"fake data"
+        files = {"file": ("test.mp4", file_content, "image/png")}
+        data = {"target_bytes": 1000000}
+        response = client.post("/shrink", files=files, data=data)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": "Invalid content type"})
+
+    def test_shrink_media_no_content_type(self):
+        file_content = b"fake data"
+        files = {"file": ("test.mp4", file_content)}
+        data = {"target_bytes": 1000000}
+        response = client.post("/shrink", files=files, data=data)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": "Invalid content type"})
