@@ -41,3 +41,8 @@
 **Vulnerability:** Missing strict HTTP security headers, specifically `Referrer-Policy`.
 **Learning:** While the FastAPI application had basic defense-in-depth security headers configured via middleware, it lacked a `Referrer-Policy` header. This could allow sensitive information present in URLs (like tokens or IDs) to be leaked via the `Referer` header to external domains if the application makes outgoing requests or links.
 **Prevention:** Always ensure a comprehensive suite of security headers is implemented, including `Referrer-Policy: no-referrer` or `strict-origin-when-cross-origin`, to minimize information leakage.
+
+## 2026-06-28 - [Sentinel: Security Header Enhancements]
+**Vulnerability:** Missing strict HTTP security headers, specifically `Referrer-Policy`.
+**Learning:** While the FastAPI application had basic defense-in-depth security headers configured via middleware, it lacked a `Referrer-Policy` header. This could allow sensitive information present in URLs (like tokens or IDs) to be leaked via the `Referer` header to external domains if the application makes outgoing requests or links.
+**Prevention:** Always ensure a comprehensive suite of security headers is implemented, including `Referrer-Policy: no-referrer` or `strict-origin-when-cross-origin`, to minimize information leakage.
