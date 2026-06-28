@@ -3,6 +3,7 @@ import logging
 import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
+from werkzeug.utils import secure_filename
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import media_shrinker
 
@@ -78,6 +79,7 @@ HTML_TEMPLATE = """
         @keyframes spinner-border { to { transform: rotate(360deg); } }
         .box { transition: background-color 0.2s, border-color 0.2s; }
         .box.dragover { background-color: #f8f9fa; border-color: #007bff; border-style: dashed; }
+        input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
     </style>
 </head>
 <body>
@@ -226,7 +228,7 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
+        safe_filename = secure_filename(file.filename)
         if not safe_filename or safe_filename in (".", ".."):
             safe_filename = "upload.tmp"
 
