@@ -185,19 +185,6 @@ class FindCandidateTests(unittest.TestCase):
 
             import os
 
-            original_lstat = os.lstat
-
-
-
-            # When using os.scandir, entry attributes (is_symlink, stat) don't call os.lstat
-            # in a way that can be mocked by patch("os.lstat"). We patch os.scandir to yield
-            # a mock entry that raises OSError when is_symlink or stat is called, or we just
-            # patch os.lstat and add a call to os.lstat in the code.
-            # A cleaner way is to patch the code to simulate the failure, but since we just
-            # want to verify that an OSError on checking a file causes it to be skipped,
-            # we can create a directory/file without read permissions, but Python tests running
-            # as root might bypass it. Let's patch os.scandir instead.
-
             class FlakyDirEntry:
                 def __init__(self, entry):
                     self._entry = entry
