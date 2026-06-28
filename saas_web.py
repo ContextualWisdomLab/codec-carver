@@ -12,6 +12,7 @@ import media_shrinker
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
+MAX_TARGET_BYTES = MAX_UPLOAD_BYTES
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = 60
 _request_times: dict[str, list[float]] = {}
@@ -207,6 +208,12 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def has_path_components(filename: str) -> bool:
+    """Return whether an upload filename tries to include directories."""
+    normalized = filename.replace("\\", "/")
+    return "/" in normalized or normalized in {".", ".."}
+
+
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
     temp_root = Path(tempfile.gettempdir()).resolve()
@@ -229,8 +236,14 @@ def shrink_media(
     if target_bytes <= 0:
         return {"error": "Invalid target_bytes value. Must be greater than 0."}
 
+    if target_bytes > MAX_TARGET_BYTES:
+        return {"error": "Invalid target_bytes value. Must not exceed maximum upload size."}
+
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
+
+    if has_path_components(file.filename):
+        return JSONResponse(status_code=400, content={"error": "Invalid upload filename"})
 
     if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
         return {"error": "Invalid content type"}

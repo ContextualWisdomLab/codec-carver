@@ -196,13 +196,40 @@ class TestSaasWeb(unittest.TestCase):
         with patch("saas_web.tempfile.mkdtemp") as mock_mkdtemp:
             response = client.post(
                 "/shrink",
-                files={"file": ("../../malicious.php", b"<?php", "audio/mp3")},
+                files={"file": ("malicious.php", b"<?php", "audio/mp3")},
                 data={"target_bytes": 10000},
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"error": "Invalid content type"})
         mock_mkdtemp.assert_not_called()
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_rejects_filename_with_path_components(self, mock_convert_file):
+        response = client.post(
+            "/shrink",
+            files={"file": ("../../malicious.wav", b"dummy wav data", "audio/wav")},
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"error": "Invalid upload filename"})
+        mock_convert_file.assert_not_called()
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_endpoint_rejects_excessive_target_bytes(self, mock_convert_file):
+        response = client.post(
+            "/shrink",
+            files={"file": ("input.wav", b"dummy wav data", "audio/wav")},
+            data={"target_bytes": saas_web.MAX_TARGET_BYTES + 1},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid target_bytes value. Must not exceed maximum upload size."},
+        )
+        mock_convert_file.assert_not_called()
 
     @patch("saas_web.secrets.token_hex", return_value="abc123")
     @patch("saas_web.media_shrinker.convert_file")
@@ -220,7 +247,7 @@ class TestSaasWeb(unittest.TestCase):
             with open(dummy_file_path, "rb") as f:
                 response = client.post(
                     "/shrink",
-                    files={"file": ("../../etc/passwd.wav", f, "audio/wav")},
+                    files={"file": ("unsafe name @123!.wav", f, "audio/wav")},
                     data={"target_bytes": 10000},
                 )
 
