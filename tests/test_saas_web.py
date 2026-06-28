@@ -182,7 +182,8 @@ class TestSaasWeb(unittest.TestCase):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
-        self.assertIn("dropZone.contains(e.relatedTarget)", html)
+        self.assertIn("const relatedTarget = e.relatedTarget;", html)
+        self.assertIn("relatedTarget instanceof Node ? dropZone.contains(relatedTarget) : e.target !== e.currentTarget", html)
 
 if __name__ == '__main__':
     unittest.main()

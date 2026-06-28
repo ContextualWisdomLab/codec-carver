@@ -173,8 +173,11 @@ HTML_TEMPLATE = """
         });
         ['dragleave', 'drop'].forEach(eventName => {
             dropZone.addEventListener(eventName, (e) => {
-                if (eventName === 'dragleave' && dropZone.contains(e.relatedTarget)) {
-                    return;
+                if (eventName === 'dragleave') {
+                    const relatedTarget = e.relatedTarget;
+                    if (relatedTarget instanceof Node ? dropZone.contains(relatedTarget) : e.target !== e.currentTarget) {
+                        return;
+                    }
                 }
                 dropZone.classList.remove('dragover');
             }, false);
