@@ -36,3 +36,7 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+## 2026-06-26 - Command injection in subprocess.run via file metadata
+**Vulnerability:** The `media_shrinker.py` script passed a user-controlled creation date directly to `subprocess.run(["setfile", "-d", creation_date, ...])` without validating its format.
+**Learning:** File metadata (like creation time or EXIF data) can be manipulated by attackers to contain shell metacharacters or other malicious payloads. If this metadata is later passed to command-line utilities without validation, it can lead to command injection.
+**Prevention:** Always validate user-controlled inputs, including file metadata, against an expected format (e.g. using a regular expression like `^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}$` for a date) before passing them to subprocesses.
