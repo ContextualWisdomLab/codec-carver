@@ -463,9 +463,9 @@ def probe_media(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path),
+        f"{source_path.resolve()}",
     ]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    completed = subprocess.run(command, check=False, capture_output=True, text=True, shell=False)
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -500,7 +500,7 @@ def build_silencedetect_command(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path),
+        f"{source_path.resolve()}",
         "-af",
         f"silencedetect=noise={silence_noise}:d={_format_seconds(silence_min_duration_seconds)}",
         "-f",
@@ -528,6 +528,7 @@ def detect_silence_intervals(
         check=False,
         capture_output=True,
         text=True,
+        shell=False,
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -633,7 +634,7 @@ def build_icloud_download_command(
 ) -> list[str]:
     """Build a safe iCloud download command for source_path."""
 
-    return [brctl_path, "download", str(source_path.resolve())]
+    return [brctl_path, "download", f"{source_path.resolve()}"]
 
 
 def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> None:
@@ -648,6 +649,7 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
         check=False,
         capture_output=True,
         text=True,
+        shell=False,
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -1561,7 +1563,7 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True
+                command, check=False, capture_output=True, text=True, shell=False
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
@@ -1630,10 +1632,11 @@ def _copy_macos_creation_time(
         "%m/%d/%Y %H:%M:%S"
     )
     subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest.resolve())],
+        [setfile_path, "-d", creation_date, f"{dest.resolve()}"],
         check=False,
         capture_output=True,
         text=True,
+        shell=False,
     )
 
 
