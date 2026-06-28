@@ -1,6 +1,9 @@
-import tempfile
 import logging
+import os
+import secrets
 import shutil
+import tempfile
+import time
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -9,10 +12,28 @@ import media_shrinker
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
+MAX_TARGET_BYTES = MAX_UPLOAD_BYTES
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_MAX_REQUESTS = 60
+_request_times: dict[str, list[float]] = {}
 
 
 class RequestTooLarge(Exception):
     pass
+
+
+@app.middleware("http")
+async def rate_limit_requests(request: Request, call_next):
+    client_host = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+    history = _request_times.setdefault(client_host, [])
+    history[:] = [timestamp for timestamp in history if timestamp > cutoff]
+    if len(history) >= RATE_LIMIT_MAX_REQUESTS:
+        return JSONResponse(status_code=429, content={"error": "Too Many Requests"})
+    history.append(now)
+    # ponytail: in-process limiter; use a shared store if multi-worker limits matter.
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -68,16 +89,16 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
         .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
-        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover:not(:disabled) { background-color: #0056b3; }
-        button:disabled { background-color: #6c757d; cursor: not-allowed; }
-        button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
-        .required-star { color: #dc3545; }
-        .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
+        button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover:not(:disabled) { background-color: #004085; }
+        button:disabled { background-color: #5c636a; cursor: not-allowed; }
+        button:focus-visible, input:focus-visible { outline: 2px solid #004085; outline-offset: 2px; }
+        .required-star { color: #b02a37; }
+        .help-text { color: #5c636a; font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
         @keyframes spinner-border { to { transform: rotate(360deg); } }
         .box { transition: background-color 0.2s, border-color 0.2s; }
-        .box.dragover { background-color: #f8f9fa; border-color: #007bff; border-style: dashed; }
+        .box.dragover { background-color: #f8f9fa; border-color: #0056b3; border-style: dashed; }
     </style>
 </head>
 <body>
@@ -88,13 +109,13 @@ HTML_TEMPLATE = """
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="updateFileSizePreview(this)">
                 <br><span id="file_help" class="help-text">Select an audio or video file to shrink, or drag and drop it here.</span>
-                <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #17a2b8;"></span>
+                <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0b7285;"></span>
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
-                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #28a745;">1.86 GiB</span>
+                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
@@ -115,7 +136,7 @@ HTML_TEMPLATE = """
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
-                preview.style.color = '#17a2b8';
+                preview.style.color = '#0b7285';
                 if (!file) {
                     preview.innerText = '';
                     return;
@@ -125,7 +146,7 @@ HTML_TEMPLATE = """
                     input.setCustomValidity('File exceeds 5 GiB limit.');
                     input.setAttribute('aria-invalid', 'true');
                     preview.innerText = 'Selected file size: ' + text + ' (exceeds 5 GiB limit)';
-                    preview.style.color = '#dc3545';
+                    preview.style.color = '#b02a37';
                     return;
                 }
                 preview.innerText = 'Selected file size: ' + text;
@@ -136,11 +157,11 @@ HTML_TEMPLATE = """
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
-                preview.style.color = '#28a745';
+                preview.style.color = '#1e7e34';
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
-                    preview.style.color = '#dc3545';
+                    preview.style.color = '#b02a37';
                     this.setCustomValidity('Must be greater than 0.');
                     this.setAttribute('aria-invalid', 'true');
                 } else {
@@ -187,9 +208,17 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def has_path_components(filename: str) -> bool:
+    """Return whether an upload filename tries to include directories."""
+    normalized = filename.replace("\\", "/")
+    return "/" in normalized or normalized in {".", ".."}
+
+
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
-    if temp_dir_path.exists():
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    resolved_path = temp_dir_path.resolve()
+    if temp_dir_path.exists() and (resolved_path == temp_root or temp_root in resolved_path.parents):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
@@ -207,8 +236,20 @@ def shrink_media(
     if target_bytes <= 0:
         return {"error": "Invalid target_bytes value. Must be greater than 0."}
 
+    if target_bytes > MAX_TARGET_BYTES:
+        return {"error": "Invalid target_bytes value. Must not exceed maximum upload size."}
+
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
+
+    if has_path_components(file.filename):
+        return JSONResponse(status_code=400, content={"error": "Invalid upload filename"})
+
+    if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
+        return {"error": "Invalid content type"}
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in media_shrinker.SUPPORTED_EXTENSIONS:
+        return {"error": "Invalid content type"}
 
     # Create a temporary directory that will hold the input and output
     try:
@@ -222,17 +263,16 @@ def shrink_media(
         # Setup paths
         input_dir = temp_dir_path / "input"
         output_dir = temp_dir_path / "output"
-        input_dir.mkdir()
-        output_dir.mkdir()
+        input_dir.mkdir(mode=0o700)
+        output_dir.mkdir(mode=0o700)
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
+        safe_filename = f"upload-{secrets.token_hex(16)}{suffix}"
 
         source_path = input_dir / safe_filename
         bytes_written = 0
-        with open(source_path, "wb") as f:
+        fd = os.open(source_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
             while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
                 bytes_written += len(chunk)
                 if bytes_written > MAX_UPLOAD_BYTES:
