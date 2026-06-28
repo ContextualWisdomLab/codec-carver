@@ -34,6 +34,8 @@ class FindCandidateTests(unittest.TestCase):
     def test_find_candidates_scandir_entries_exception(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            import os
+            original_scandir = os.scandir
 
             def flaky_scandir(path):
                 # Raise OSError when creating iterator
@@ -1258,6 +1260,10 @@ class CollisionResolutionTests(unittest.TestCase):
             self.assertEqual(resolved, path)
 
 
+if __name__ == "__main__":
+    unittest.main()
+
+
 class ConversionPlanTests(unittest.TestCase):
     def test_command_no_i_argument(self) -> None:
         plan = ConversionPlan(
@@ -1279,7 +1285,3 @@ class ConversionPlanTests(unittest.TestCase):
         cmd = plan.command(overwrite=False)
         self.assertIn("-n", cmd)
         self.assertNotIn("-y", cmd)
-
-
-if __name__ == "__main__":
-    unittest.main()

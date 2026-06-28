@@ -60,7 +60,3 @@
 ## 2023-10-27 - [os.walk vs os.scandir]
 **Learning:** Replacing `os.walk` with `os.scandir` yields 2-3x faster performance when walking directory trees, especially large ones, due to minimizing extra `lstat` calls. However, be extremely careful about tests that use `unittest.mock` to mock `os.lstat`—replacing `os.walk` with `os.scandir` may cause these tests to fail or bypass the intended mock, as `os.scandir` returns `os.DirEntry` objects. Do not introduce fake `os.lstat` calls just to please the mocks, as it defeats the entire performance optimization.
 **Action:** When swapping `os.walk` for `os.scandir`, ensure that you either rewrite the tests to correctly mock `os.scandir` (or its returned `DirEntry` wrapper), or handle test assertions appropriately without slowing down production code.
-
-## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
-**Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
-**Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
