@@ -1,4 +1,5 @@
 import logging
+import os
 import secrets
 import shutil
 import tempfile
@@ -10,6 +11,7 @@ import media_shrinker
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
+MAX_TARGET_BYTES = MAX_UPLOAD_BYTES
 
 
 class RequestTooLarge(Exception):
@@ -190,6 +192,12 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def has_path_components(filename: str) -> bool:
+    """Return whether an upload filename tries to include directories."""
+    normalized = filename.replace("\\", "/")
+    return "/" in normalized or normalized in {".", ".."}
+
+
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
     if temp_dir_path.exists() and temp_dir_path.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
@@ -210,8 +218,14 @@ def shrink_media(
     if target_bytes <= 0:
         return {"error": "Invalid target_bytes value. Must be greater than 0."}
 
+    if target_bytes > MAX_TARGET_BYTES:
+        return {"error": "Invalid target_bytes value. Must not exceed maximum upload size."}
+
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
+
+    if has_path_components(file.filename):
+        return JSONResponse(status_code=400, content={"error": "Invalid upload filename"})
 
     if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
         return {"error": "Invalid content type"}
@@ -228,8 +242,8 @@ def shrink_media(
         # Setup paths
         input_dir = temp_dir_path / "input"
         output_dir = temp_dir_path / "output"
-        input_dir.mkdir()
-        output_dir.mkdir()
+        input_dir.mkdir(mode=0o700)
+        output_dir.mkdir(mode=0o700)
 
         # Save the uploaded file
         suffix = Path(file.filename).suffix.lower()
@@ -239,7 +253,8 @@ def shrink_media(
 
         source_path = input_dir / safe_filename
         bytes_written = 0
-        with open(source_path, "wb") as f:
+        fd = os.open(source_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with open(fd, "wb") as f:
             while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
                 bytes_written += len(chunk)
                 if bytes_written > MAX_UPLOAD_BYTES:
