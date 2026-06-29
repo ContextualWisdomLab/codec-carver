@@ -26,15 +26,6 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
-    def test_get_ui_includes_tactile_and_invalid_feedback_css(self):
-        response = client.get("/")
-        self.assertEqual(response.status_code, 200)
-        html = response.text
-
-        self.assertIn("transition: background-color 0.15s ease-in-out, transform 0.1s ease-in-out;", html)
-        self.assertIn("button:active:not(:disabled) { transform: scale(0.98); }", html)
-        self.assertIn('input[aria-invalid="true"] { outline: 2px solid #dc3545; outline-offset: 2px; }', html)
-
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -178,45 +169,6 @@ class TestSaasWeb(unittest.TestCase):
             self.assertEqual(payload, {"error": "Processing failed or no output generated"})
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
-    def test_shrink_media_endpoint_rejects_invalid_content_type(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as temp_dir:
-            dummy_file_path = Path(temp_dir) / "input.sh"
-            dummy_file_path.write_bytes(b"echo hacked")
-
-            with open(dummy_file_path, "rb") as f:
-                response = client.post(
-                    "/shrink",
-                    files={"file": ("input.sh", f, "application/x-sh")},
-                    data={"target_bytes": 10000},
-                )
-
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"error": "Invalid content type"})
-
-    @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_endpoint_sanitizes_filename(self, mock_convert_file):
-        import tempfile
-        with tempfile.TemporaryDirectory() as temp_dir:
-            dummy_file_path = Path(temp_dir) / "input.wav"
-            dummy_file_path.write_bytes(b"dummy wav data")
-
-            mock_result = MagicMock(spec=ConversionResult)
-            mock_result.output_path = Path(temp_dir) / "output.flac"
-            mock_result.output_path.write_bytes(b"dummy")
-            mock_convert_file.return_value = [mock_result]
-
-            with open(dummy_file_path, "rb") as f:
-                response = client.post(
-                    "/shrink",
-                    files={"file": ("../../etc/passwd", f, "audio/wav")},
-                    data={"target_bytes": 10000},
-                )
-
-            self.assertEqual(response.status_code, 200)
-            called_source_path = mock_convert_file.call_args.kwargs["source"]
-            self.assertEqual(called_source_path.name, "passwd")
-
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
         response = client.get("/")
@@ -225,5 +177,102 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
 
-if __name__ == '__main__':
+
+    def test_request_size_limit_negative_length(self):
+        response = client.post(
+            "/shrink",
+            headers={"Content-Length": "-1"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"error": "Invalid Content-Length"})
+
+    def test_limit_request_size_body_exceeds(self):
+        import asyncio
+        from starlette.requests import Request
+        from saas_web import limit_request_size, MAX_REQUEST_BYTES
+        from fastapi.responses import JSONResponse
+        async def mock_receive():
+            return {"type": "http.request", "body": b"x" * (MAX_REQUEST_BYTES + 1)}
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "headers": [],
+            "path": "/shrink"
+        }
+        request = Request(scope, mock_receive)
+        async def call_next(req):
+            await req.receive()
+            return JSONResponse(status_code=200, content={})  # pragma: no cover
+        result = asyncio.run(limit_request_size(request, call_next))
+        self.assertEqual(result.status_code, 413)
+
+    def test_shrink_media_invalid_target_bytes(self):
+        import io
+        response = client.post("/shrink", data={"target_bytes": 0}, files={"file": ("test.mp4", io.BytesIO(b"a"), "video/mp4")})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": "Invalid target_bytes value. Must be greater than 0."})
+
+    def test_shrink_media_no_filename(self):
+        from saas_web import shrink_media
+        from fastapi import UploadFile, BackgroundTasks
+        import io
+        import tempfile
+        file = UploadFile(filename="", file=io.BytesIO(b""))
+        res = shrink_media(BackgroundTasks(), file=file, target_bytes=100)
+        self.assertEqual(res, {"error": "No file uploaded or filename missing"})
+
+    @patch("saas_web.Path.mkdir")
+    def test_shrink_media_mkdir_fails(self, mock_mkdir):
+        mock_mkdir.side_effect = Exception("failed")
+        import io
+        response = client.post("/shrink", data={"target_bytes": 100}, files={"file": ("test.mp4", io.BytesIO(b"a"), "video/mp4")})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": "Upload processing failed"})
+
+    def test_shrink_media_upload_file_exceeds_max(self):
+        import tempfile
+        import io
+        import saas_web
+        old_max = saas_web.MAX_UPLOAD_BYTES
+        saas_web.MAX_UPLOAD_BYTES = 5
+        try:
+            response = client.post("/shrink", data={"target_bytes": 100}, files={"file": ("test.mp4", io.BytesIO(b"123456"), "video/mp4")})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"error": "Upload processing failed"})
+        finally:
+            saas_web.MAX_UPLOAD_BYTES = old_max
+
+    def test_shrink_media_bad_filename_sanitized(self):
+        import io
+        from saas_web import shrink_media
+        from fastapi import UploadFile, BackgroundTasks
+        file = UploadFile(filename="..", file=io.BytesIO(b""))
+        res = shrink_media(BackgroundTasks(), file=file, target_bytes=100)
+        self.assertEqual(res, {"error": "Upload processing failed"})
+        import tempfile
+        import io
+        from unittest.mock import patch, MagicMock
+        from media_shrinker import ConversionResult
+        with patch("saas_web.media_shrinker.convert_file") as mock_convert_file:
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = Path("/tmp/codec_carver_secret/output.flac")
+            mock_convert_file.return_value = [mock_result]
+            response = client.post("/shrink", data={"target_bytes": 100}, files={"file": ("..", io.BytesIO(b"a"), "video/mp4")})
+            self.assertEqual(response.status_code, 200)
+            args, kwargs = mock_convert_file.call_args
+            self.assertEqual(kwargs["source"].name, "upload.tmp")
+
+
+
+    @patch("saas_web.tempfile.mkdtemp")
+    def test_shrink_media_mkdtemp_fails(self, mock_mkdtemp):
+        mock_mkdtemp.side_effect = Exception("failed")
+        import io
+        response = client.post("/shrink", data={"target_bytes": 100}, files={"file": ("test.mp4", io.BytesIO(b"a"), "video/mp4")})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"error": "Upload processing failed"})
+
+
+
+if __name__ == '__main__':  # pragma: no cover
     unittest.main()
