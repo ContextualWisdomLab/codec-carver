@@ -218,61 +218,66 @@ def shrink_media(
         logger.exception("Failed to create upload workspace")
         return {"error": "Upload processing failed"}
 
+    cleanup_handled = False
     try:
-        # Setup paths
-        input_dir = temp_dir_path / "input"
-        output_dir = temp_dir_path / "output"
-        input_dir.mkdir()
-        output_dir.mkdir()
+        try:
+            # Setup paths
+            input_dir = temp_dir_path / "input"
+            output_dir = temp_dir_path / "output"
+            input_dir.mkdir()
+            output_dir.mkdir()
 
-        # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
+            # Save the uploaded file
+            safe_filename = Path(file.filename).name
+            if not safe_filename or safe_filename in (".", ".."):
+                safe_filename = "upload.tmp"
 
-        source_path = input_dir / safe_filename
-        bytes_written = 0
-        with open(source_path, "wb") as f:
-            while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
-                bytes_written += len(chunk)
-                if bytes_written > MAX_UPLOAD_BYTES:
-                    raise ValueError("File exceeds maximum allowed upload size")
-                f.write(chunk)
-    except Exception:
-        cleanup_temp_dir(temp_dir_path)
-        logger.exception("Failed to prepare uploaded media")
-        return {"error": "Upload processing failed"}
+            source_path = input_dir / safe_filename
+            bytes_written = 0
+            with open(source_path, "wb") as f:
+                while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
+                    bytes_written += len(chunk)
+                    if bytes_written > MAX_UPLOAD_BYTES:
+                        raise ValueError("File exceeds maximum allowed upload size")
+                    f.write(chunk)
+        except Exception:
+            logger.exception("Failed to prepare uploaded media")
+            return {"error": "Upload processing failed"}
 
-    # Process the file using media_shrinker
-    try:
-        results = media_shrinker.convert_file(
-            source=source_path,
-            root=input_dir,
-            output_dir=output_dir,
-            target_bytes=target_bytes,
-        )
+        # Process the file using media_shrinker
+        try:
+            results = media_shrinker.convert_file(
+                source=source_path,
+                root=input_dir,
+                output_dir=output_dir,
+                target_bytes=target_bytes,
+            )
 
-        # Determine the generated output file.
-        # For simplicity, returning the first output file found.
-        # Handling multiple outputs (e.g. from splitting) would require zipping in a real scenario.
-        if results and results[0].output_path and results[0].output_path.exists():
-             output_file_path = results[0].output_path
-             # Schedule cleanup after response
-             background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
-             return FileResponse(
-                 path=output_file_path,
-                 filename=output_file_path.name,
-                 media_type="application/octet-stream"
-             )
-        else:
-            background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
-            logger.error("Processing produced no output: %r", results)
-            return {"error": "Processing failed or no output generated"}
+            # Determine the generated output file.
+            # For simplicity, returning the first output file found.
+            # Handling multiple outputs (e.g. from splitting) would require zipping in a real scenario.
+            if results and results[0].output_path and results[0].output_path.exists():
+                 output_file_path = results[0].output_path
+                 # Schedule cleanup after response
+                 background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+                 cleanup_handled = True
+                 return FileResponse(
+                     path=output_file_path,
+                     filename=output_file_path.name,
+                     media_type="application/octet-stream"
+                 )
+            else:
+                background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+                cleanup_handled = True
+                logger.error("Processing produced no output: %r", results)
+                return {"error": "Processing failed or no output generated"}
 
-    except Exception:
-        cleanup_temp_dir(temp_dir_path)
-        logger.exception("Media processing failed")
-        return {"error": "Upload processing failed"}
+        except Exception:
+            logger.exception("Media processing failed")
+            return {"error": "Upload processing failed"}
+    finally:
+        if not cleanup_handled:
+            cleanup_temp_dir(temp_dir_path)
 
 if __name__ == "__main__":
     import uvicorn
