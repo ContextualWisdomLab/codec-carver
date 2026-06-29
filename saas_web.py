@@ -1,6 +1,7 @@
 import tempfile
 import logging
 import shutil
+import uuid
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -53,6 +54,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -138,10 +141,10 @@ HTML_TEMPLATE = """
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#28a745';
 
-                if (isNaN(val) || val <= 0) {
-                    preview.innerText = 'Must be greater than 0.';
+                if (isNaN(val) || val <= 0 || val > 5 * 1024 * 1024 * 1024) {
+                    preview.innerText = 'Must be between 1 and 5 GiB.';
                     preview.style.color = '#dc3545';
-                    this.setCustomValidity('Must be greater than 0.');
+                    this.setCustomValidity('Must be between 1 and 5 GiB.');
                     this.setAttribute('aria-invalid', 'true');
                 } else {
                     preview.innerText = formatBinaryBytes(val);
@@ -189,7 +192,7 @@ HTML_TEMPLATE = """
 
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
-    if temp_dir_path.exists():
+    if temp_dir_path.exists() and temp_dir_path.resolve().is_relative_to(Path(tempfile.gettempdir())):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
@@ -204,8 +207,8 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
-    if target_bytes <= 0:
-        return {"error": "Invalid target_bytes value. Must be greater than 0."}
+    if not (1 <= target_bytes <= 5 * 1024 * 1024 * 1024):
+        return {"error": "Invalid target_bytes value. Must be between 1 and 5 GiB."}
 
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
@@ -226,9 +229,16 @@ def shrink_media(
         output_dir.mkdir()
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
+        original_filename = Path(file.filename).name
+        safe_filename = original_filename.replace("..", "").replace("/", "_").replace("\\", "_")
+        if not safe_filename or safe_filename.startswith("."):
+            safe_filename = f"upload_{uuid.uuid4().hex}.tmp"
+        else:
+            ext = ''.join(Path(safe_filename).suffixes)
+            if ext:
+                safe_filename = f"{uuid.uuid4().hex}{ext}"
+            else:
+                safe_filename = f"{uuid.uuid4().hex}.tmp"
 
         source_path = input_dir / safe_filename
         bytes_written = 0

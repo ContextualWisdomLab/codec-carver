@@ -47,6 +47,8 @@ class TestSaasWeb(unittest.TestCase):
             response.headers["Content-Security-Policy"],
             "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
         )
+        self.assertEqual(response.headers["Referrer-Policy"], "strict-origin-when-cross-origin")
+        self.assertEqual(response.headers["Permissions-Policy"], "geolocation=(), microphone=(), camera=()")
         self.assertNotIn("Strict-Transport-Security", response.headers)
 
     def test_hsts_header_present_for_forwarded_https(self):
@@ -170,11 +172,38 @@ class TestSaasWeb(unittest.TestCase):
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
 
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_filename_sanitization(self, mock_convert_file):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_output = Path(temp_dir) / "output.flac"
+            temp_output.write_bytes(b"dummy")
+            mock_result = MagicMock()
+            mock_result.output_path = temp_output
+            mock_convert_file.return_value = [mock_result]
+
+            dummy_file_path = Path(temp_dir) / "input.wav"
+            dummy_file_path.write_bytes(b"dummy wav data")
+
+            with open(dummy_file_path, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": ("../../etc/passwd", f, "audio/wav")},
+                    data={"target_bytes": 10000}
+                )
+            self.assertEqual(response.status_code, 200)
+
+            called_args = mock_convert_file.call_args.kwargs
+            source_path = called_args['source']
+            self.assertFalse(".." in str(source_path))
+            pass
+
     def test_get_ui_includes_target_bytes_validation_feedback(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
-        self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
+        self.assertIn("preview.innerText = 'Must be between 1 and 5 GiB.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
 
 if __name__ == '__main__':
