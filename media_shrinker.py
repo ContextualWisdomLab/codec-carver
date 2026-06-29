@@ -132,9 +132,9 @@ class ConversionPlan:
                 raise MediaShrinkerError(
                     "ffmpeg argument template is missing '-i'"
                 ) from exc
-            args[input_index] = str(input_path.resolve())
+            args[input_index] = str(input_path.absolute())
         if output_path is not None:
-            args[-1] = str(output_path.resolve())
+            args[-1] = str(output_path.absolute())
 
         if overwrite:
             args = ["-y" if arg == "-n" else arg for arg in args]
@@ -193,7 +193,7 @@ def find_candidates(
     """
 
     root = Path(root)
-    excluded = tuple(Path(item).resolve() for item in exclude_paths)
+    excluded = tuple(Path(item).absolute() for item in exclude_paths)
     excluded_prefixes = tuple(prefix.casefold() for prefix in exclude_dir_prefixes)
     candidates: list[tuple[Path, int]] = []
 
@@ -633,7 +633,7 @@ def build_icloud_download_command(
 ) -> list[str]:
     """Build a safe iCloud download command for source_path."""
 
-    return [brctl_path, "download", str(source_path.resolve())]
+    return [brctl_path, "download", str(source_path.absolute())]
 
 
 def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> None:
@@ -755,7 +755,7 @@ def convert_file(
 
     resolved_sources = resolved_protected_sources
     if resolved_sources is None:
-        resolved_sources = frozenset(Path(item).resolve() for item in protected_sources)
+        resolved_sources = frozenset(Path(item).absolute() for item in protected_sources)
 
     return [
         _convert_segment(
@@ -1233,7 +1233,7 @@ def _execute_conversions(
     workers = choose_worker_count(args.workers)
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
 
-    resolved_candidates = frozenset(Path(item[0]).resolve() for item in candidates)
+    resolved_candidates = frozenset(Path(item[0]).absolute() for item in candidates)
     protected_sources = [c[0] for c in candidates]
 
     def process_candidate(candidate_tuple: tuple[Path, int]) -> list[ConversionResult]:
@@ -1288,7 +1288,7 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
 
     args = parse_args(argv)
-    root = args.root.resolve()
+    root = args.root.absolute()
     output_dir = (
         args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
     )
@@ -1388,7 +1388,7 @@ def _ensure_not_protected_source_path(
     protected_sources: frozenset[Path], output: Path
 ) -> None:
     """Raise MediaShrinkerError if output would overwrite a protected source."""
-    resolved_output = output.resolve()
+    resolved_output = output.absolute()
     if resolved_output in protected_sources:
         raise MediaShrinkerError(
             f"Refusing to use protected source path as generated output: {output}"
@@ -1584,7 +1584,7 @@ def _execute_plan(
 def _ensure_not_source_path(source: Path, output: Path) -> None:
     """Reject generated paths that would overwrite or delete the source file."""
 
-    if source.resolve() == output.resolve():
+    if source.absolute() == output.absolute():
         raise MediaShrinkerError(
             f"Refusing to use source path as generated output: {output}"
         )
@@ -1630,7 +1630,7 @@ def _copy_macos_creation_time(
         "%m/%d/%Y %H:%M:%S"
     )
     subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest.resolve())],
+        [setfile_path, "-d", creation_date, str(dest.absolute())],
         check=False,
         capture_output=True,
         text=True,
