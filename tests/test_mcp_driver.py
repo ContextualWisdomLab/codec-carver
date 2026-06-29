@@ -49,5 +49,19 @@ class TestMCPDriver(unittest.TestCase):
 
             self.assertIn("Conversion failed with error: Test FFmpeg error", result_str)
 
+    @patch("mcp_driver.media_shrinker.convert_file")
+    def test_shrink_media_handles_empty_result(self, mock_convert_file):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            source_file = temp_dir_path / "source.wav"
+            source_file.touch()
+
+            mock_convert_file.return_value = []
+
+            result_str = shrink_media(str(source_file), str(temp_dir_path / "output"))
+
+            self.assertEqual(result_str, "No conversion results generated.")
+
 if __name__ == '__main__':
     unittest.main()

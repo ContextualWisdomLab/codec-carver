@@ -1178,5 +1178,509 @@ class CollisionResolutionTests(unittest.TestCase):
             self.assertEqual(resolved, path)
 
 
+class CliTests(unittest.TestCase):
+    def test_normalize_argv_handles_silence_noise_values(self) -> None:
+        self.assertIsNone(media_shrinker._normalize_argv(None))
+        self.assertEqual(
+            media_shrinker._normalize_argv(["--silence-noise", "quiet"]),
+            ["--silence-noise", "quiet"],
+        )
+        self.assertEqual(
+            media_shrinker._normalize_argv(["--silence-noise"]),
+            ["--silence-noise"],
+        )
+
+    def test_parse_args_sets_conversion_options(self) -> None:
+        args = media_shrinker.parse_args(
+            [
+                "media",
+                "--size-limit-bytes",
+                "10",
+                "--target-bytes",
+                "9",
+                "--max-duration-seconds",
+                "8.5",
+                "--output-dir",
+                "out",
+                "--report",
+                "report.json",
+                "--ffmpeg",
+                "ff",
+                "--ffprobe",
+                "probe",
+                "--brctl",
+                "br",
+                "--download-icloud",
+                "--over-limit-only",
+                "--exclude-dir-prefix",
+                "split_",
+                "--flac-all",
+                "--workers",
+                "2",
+                "--ffmpeg-threads",
+                "-1",
+                "--silence-noise",
+                "-40dB",
+                "--silence-min-duration-seconds",
+                "3.5",
+                "--execute",
+                "--overwrite",
+            ]
+        )
+
+        self.assertEqual(args.root, Path("media"))
+        self.assertEqual(args.size_limit_bytes, 10)
+        self.assertEqual(args.target_bytes, 9)
+        self.assertEqual(args.max_duration_seconds, 8.5)
+        self.assertEqual(args.output_dir, Path("out"))
+        self.assertEqual(args.report, Path("report.json"))
+        self.assertEqual(args.ffmpeg, "ff")
+        self.assertEqual(args.ffprobe, "probe")
+        self.assertEqual(args.brctl, "br")
+        self.assertTrue(args.download_icloud)
+        self.assertFalse(args.include_under_limit)
+        self.assertEqual(args.exclude_dir_prefix, ["split_"])
+        self.assertTrue(args.flac_all)
+        self.assertEqual(args.workers, 2)
+        self.assertEqual(args.ffmpeg_threads, -1)
+        self.assertEqual(args.silence_noise, "-40dB")
+        self.assertEqual(args.silence_min_duration_seconds, 3.5)
+        self.assertTrue(args.execute)
+        self.assertTrue(args.overwrite)
+
+    def test_main_dry_run_lists_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.wav"
+            source.write_bytes(b"1234")
+
+            with patch("builtins.print") as mock_print:
+                rc = media_shrinker.main([str(root), "--size-limit-bytes", "1"])
+
+        self.assertEqual(rc, 0)
+        printed = ["\t".join(map(str, call.args)) for call in mock_print.call_args_list]
+        self.assertIn(f"DRY-RUN\t4\t{source.name}", printed)
+        self.assertIn("TOTAL_SELECTED=1", printed)
+
+    def test_main_execute_writes_report_and_returns_success(self) -> None:
+        result = media_shrinker.ConversionResult(
+            source_path=Path("/scan/b.wav"),
+            output_path=Path("/scan/out/b.flac"),
+            status="converted",
+            original_size_bytes=4,
+            output_size_bytes=2,
+            strategy="flac-lossless",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "b.wav").write_bytes(b"1234")
+            report = root / "report.json"
+            with patch("media_shrinker._execute_conversions", return_value=[result]):
+                rc = media_shrinker.main(
+                    [str(root), "--execute", "--report", str(report)]
+                )
+
+            payload = json.loads(report.read_text(encoding="utf-8"))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(payload[0]["status"], "converted")
+
+    def test_main_execute_returns_failure_when_any_result_failed(self) -> None:
+        result = media_shrinker.ConversionResult(
+            source_path=Path("/scan/a.wav"),
+            output_path=None,
+            status="failed",
+            original_size_bytes=4,
+            message="boom",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "a.wav").write_bytes(b"1234")
+            with patch("media_shrinker._execute_conversions", return_value=[result]):
+                rc = media_shrinker.main([str(root), "--execute"])
+
+        self.assertEqual(rc, 1)
+
+    def test_execute_conversions_records_success_and_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            ok = root / "ok.wav"
+            bad = root / "bad.wav"
+            ok.write_bytes(b"ok")
+            bad.write_bytes(b"bad")
+            args = media_shrinker.parse_args([str(root), "--workers", "1"])
+            result = media_shrinker.ConversionResult(
+                source_path=ok,
+                output_path=root / "out" / "ok.flac",
+                status="converted",
+                original_size_bytes=2,
+                output_size_bytes=1,
+                strategy="flac-lossless",
+            )
+
+            def fake_convert_file(source: Path, **_kwargs):
+                if source == bad:
+                    raise RuntimeError("boom")
+                return [result]
+
+            with patch("media_shrinker.convert_file", side_effect=fake_convert_file):
+                results = media_shrinker._execute_conversions(
+                    [(ok, 2), (bad, 3)], args, root, root / "out"
+                )
+
+        statuses = sorted(item.status for item in results)
+        self.assertEqual(statuses, ["converted", "failed"])
+        self.assertEqual(
+            [item.message for item in results if item.status == "failed"], ["boom"]
+        )
+
+    def test_small_segment_returns_single_segment(self) -> None:
+        segments = build_segments(duration_seconds=1.0, max_segment_duration_seconds=2.0)
+        self.assertEqual(segments, [MediaSegment(1, 0.0, 1.0, 1)])
+
+    def test_build_segments_rejects_invalid_durations(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duration_seconds must be positive"):
+            build_segments(duration_seconds=0, max_segment_duration_seconds=2)
+        with self.assertRaisesRegex(
+            ValueError, "max_segment_duration_seconds must be greater than"
+        ):
+            build_segments(duration_seconds=10, max_segment_duration_seconds=0.001)
+
+    def test_calculate_audio_bitrate_rejects_invalid_inputs(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duration_seconds must be positive"):
+            calculate_audio_bitrate(0, 1000, None)
+        with self.assertRaisesRegex(ValueError, "target_bytes must be positive"):
+            calculate_audio_bitrate(10, 0, None)
+        with self.assertRaises(MediaShrinkerError):
+            calculate_audio_bitrate(10_000, 1, None)
+
+    def test_download_from_icloud_requires_brctl_and_reports_failure(self) -> None:
+        with patch("media_shrinker.shutil.which", return_value=None):
+            with self.assertRaisesRegex(MediaShrinkerError, "was not found"):
+                media_shrinker.download_from_icloud(Path("source.wav"))
+
+        completed = MagicMock(returncode=1, stderr="no cloud")
+        with patch("media_shrinker.shutil.which", return_value="/usr/bin/brctl"):
+            with patch("media_shrinker.subprocess.run", return_value=completed):
+                with self.assertRaisesRegex(MediaShrinkerError, "no cloud"):
+                    media_shrinker.download_from_icloud(Path("source.wav"))
+
+    def test_conversion_plan_command_rejects_missing_input_placeholder(self) -> None:
+        plan = ConversionPlan("bad", Path("in.wav"), Path("out.flac"), ["-n", "out"])
+        with self.assertRaisesRegex(MediaShrinkerError, "missing '-i'"):
+            plan.command(input_path=Path("other.wav"))
+
+    def test_conversion_plan_command_can_disable_overwrite(self) -> None:
+        plan = ConversionPlan(
+            "test",
+            Path("in.wav"),
+            Path("out.flac"),
+            ["-y", "-i", "in.wav", "out.flac"],
+        )
+        self.assertIn("-n", plan.command(overwrite=False))
+
+    def test_convert_file_calls_segment_conversion_with_protected_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.wav"
+            source.write_bytes(b"1234")
+            result = media_shrinker.ConversionResult(
+                source_path=source,
+                output_path=root / "out/source.wav.flac",
+                status="converted",
+                original_size_bytes=4,
+            )
+            probe = MediaProbe(1.0, 4, "pcm_s16le", 128_000, False, "wav")
+
+            with patch("media_shrinker.probe_media", return_value=probe):
+                with patch("media_shrinker._convert_segment", return_value=result) as mocked:
+                    results = media_shrinker.convert_file(
+                        source,
+                        root=root,
+                        output_dir=root / "out",
+                        original_size=4,
+                    )
+
+        self.assertEqual(results, [result])
+        self.assertEqual(mocked.call_args.kwargs["original_size"], 4)
+
+    def test_convert_file_downloads_icloud_and_detects_silence_for_long_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.wav"
+            source.write_bytes(b"1234")
+            result = media_shrinker.ConversionResult(
+                source_path=source,
+                output_path=root / "out/source.wav.flac",
+                status="converted",
+                original_size_bytes=4,
+            )
+            probe = MediaProbe(3.0, 4, "pcm_s16le", 128_000, False, "wav")
+
+            with patch("media_shrinker.download_from_icloud") as mock_download:
+                with patch("media_shrinker.probe_media", return_value=probe):
+                    with patch("media_shrinker.detect_silence_intervals", return_value=[]):
+                        with patch("media_shrinker._convert_segment", return_value=result):
+                            results = media_shrinker.convert_file(
+                                source,
+                                root=root,
+                                output_dir=root / "out",
+                                download_icloud=True,
+                                max_segment_duration_seconds=2,
+                                original_size=4,
+                            )
+
+        self.assertEqual([item.status for item in results], ["converted", "converted"])
+        mock_download.assert_called_once_with(source, brctl_path="brctl")
+
+    def test_build_audio_plan_rejects_video_and_missing_audio(self) -> None:
+        with self.assertRaisesRegex(MediaShrinkerError, "contains video"):
+            build_audio_plan(
+                Path("clip.mp4"),
+                MediaProbe(10, 100, "aac", 96_000, True, "mp4"),
+                target_bytes=100,
+                output_dir=Path("out"),
+            )
+        with self.assertRaisesRegex(MediaShrinkerError, "has no audio stream"):
+            build_audio_plan(
+                Path("silent.wav"),
+                MediaProbe(10, 100, None, None, False, "wav"),
+                target_bytes=100,
+                output_dir=Path("out"),
+            )
+
+    def test_find_candidates_skips_excluded_roots_files_and_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            excluded_root = root / "excluded"
+            excluded_root.mkdir()
+            (excluded_root / "source.wav").write_bytes(b"1234")
+            source = root / "source.wav"
+            source.write_bytes(b"1234")
+            target = root / "target.wav"
+            target.write_bytes(b"1234")
+            try:
+                (root / "link.wav").symlink_to(target)
+                symlink_created = True
+            except OSError:
+                symlink_created = False
+
+            self.assertEqual(
+                find_candidates(excluded_root, exclude_paths=[excluded_root]), []
+            )
+            candidates = find_candidates(root, exclude_paths=[source])
+            self.assertIn((target, 4), candidates)
+            self.assertNotIn((source, 4), candidates)
+            if symlink_created:
+                self.assertNotIn((root / "link.wav", 4), candidates)
+
+    def test_find_candidates_ignores_symlink_dir_realpath_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target_dir = root / "target"
+            target_dir.mkdir()
+            link_dir = root / "linked"
+            try:
+                link_dir.symlink_to(target_dir, target_is_directory=True)
+            except OSError:
+                return
+            original_realpath = os.path.realpath
+
+            def flaky_realpath(path, *_args, **_kwargs):
+                if Path(path) == link_dir:
+                    raise OSError("bad link")
+                return original_realpath(path)
+
+            with patch("media_shrinker.os.path.realpath", side_effect=flaky_realpath):
+                self.assertEqual(find_candidates(root, exclude_paths=[target_dir]), [])
+
+    def test_probe_media_reports_ffprobe_failure(self) -> None:
+        completed = MagicMock(returncode=1, stderr="bad probe")
+        with patch("media_shrinker.subprocess.run", return_value=completed):
+            with self.assertRaisesRegex(MediaShrinkerError, "bad probe"):
+                probe_media(Path("source.wav"))
+
+    def test_parse_probe_payload_rejects_missing_audio_and_duration(self) -> None:
+        with self.assertRaisesRegex(MediaShrinkerError, "has no audio stream"):
+            media_shrinker._parse_probe_payload(
+                {"streams": [{"codec_type": "video"}], "format": {}},
+                Path("silent.mp4"),
+            )
+        with self.assertRaisesRegex(MediaShrinkerError, "has no usable duration"):
+            media_shrinker._parse_probe_payload(
+                {
+                    "streams": [
+                        {"codec_type": "audio", "codec_name": "aac", "duration": "0"}
+                    ],
+                    "format": {},
+                },
+                Path("zero.wav"),
+            )
+        probe = media_shrinker._parse_probe_payload(
+            {
+                "streams": [
+                    {"codec_type": "video"},
+                    {"codec_type": "audio", "codec_name": "aac", "duration": "1"},
+                ],
+                "format": {"size": "10"},
+            },
+            Path("video.mp4"),
+        )
+        self.assertTrue(probe.has_video)
+
+    def test_execute_plan_reports_ffmpeg_failures_and_existing_output(self) -> None:
+        plan = ConversionPlan(
+            "test",
+            Path("in.wav"),
+            Path("out.flac"),
+            ["-n", "-i", "in.wav", "out.flac"],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.wav"
+            source.write_bytes(b"source")
+            output = root / "out.flac"
+
+            with patch("media_shrinker.subprocess.run", side_effect=FileNotFoundError):
+                with self.assertRaisesRegex(MediaShrinkerError, "ffmpeg not found"):
+                    media_shrinker._execute_plan(
+                        plan, source, output, ffmpeg_path="missing", overwrite=True
+                    )
+
+            completed = MagicMock(returncode=1, stderr="bad ffmpeg")
+            with patch("media_shrinker.subprocess.run", return_value=completed):
+                with self.assertRaisesRegex(MediaShrinkerError, "bad ffmpeg"):
+                    media_shrinker._execute_plan(
+                        plan, source, output, ffmpeg_path="ffmpeg", overwrite=True
+                    )
+
+            output.write_bytes(b"existing")
+            completed = MagicMock(returncode=0, stderr="")
+            with patch("media_shrinker.subprocess.run", return_value=completed):
+                with self.assertRaisesRegex(FileExistsError, "already exists"):
+                    media_shrinker._execute_plan(
+                        plan, source, output, ffmpeg_path="ffmpeg", overwrite=False
+                    )
+
+    def test_execute_segment_conversion_falls_back_to_opus_then_discards_oversize(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.wav"
+            source.write_bytes(b"source")
+            probe = MediaProbe(1.0, 10, "pcm_s16le", 128_000, False, "wav")
+            segment = MediaSegment(1, 0.0, 1.0, 1)
+
+            def fake_execute_plan(_plan, _source, final_output, **_kwargs):
+                final_output.parent.mkdir(parents=True, exist_ok=True)
+                final_output.write_bytes(b"0" * 5000)
+                return final_output
+
+            with patch("media_shrinker._execute_plan", side_effect=fake_execute_plan):
+                with patch("media_shrinker._probe_output_duration", return_value=1.0):
+                    with patch("media_shrinker.preserve_file_attributes"):
+                        result = media_shrinker._execute_segment_conversion(
+                            source,
+                            rel_source=Path("source.wav"),
+                            probe=probe,
+                            segment=segment,
+                            output_dir=root / "out",
+                            target_bytes=3000,
+                            original_size=10,
+                            ffmpeg_path="ffmpeg",
+                            ffprobe_path="ffprobe",
+                            prefer_flac=False,
+                            ffmpeg_threads=None,
+                            overwrite=False,
+                            max_segment_duration_seconds=2,
+                            resolved_protected_sources=frozenset({source.resolve()}),
+                        )
+
+        self.assertEqual(result.status, "too_large")
+        self.assertIsNone(result.output_path)
+
+    def test_remove_invalid_legacy_outputs_skips_canonical_and_removes_oversize(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            source = root / "source.wav"
+            source.write_bytes(b"source")
+            oversized_legacy = output_dir / "source.flac"
+            oversized_legacy.write_bytes(b"0123456789")
+            probe = MediaProbe(1.0, 10, "pcm_s16le", 128_000, False, "wav")
+
+            media_shrinker._remove_invalid_legacy_outputs(
+                source,
+                rel_source=Path("source"),
+                probe=probe,
+                output_dir=output_dir,
+                suffixes=[".flac"],
+                target_bytes=5,
+                ffprobe_path="ffprobe",
+                max_segment_duration_seconds=2,
+                protected_sources=frozenset({source.resolve()}),
+            )
+            media_shrinker._remove_invalid_legacy_outputs(
+                source,
+                rel_source=Path("source.wav"),
+                probe=probe,
+                output_dir=output_dir,
+                suffixes=[".flac"],
+                target_bytes=5,
+                ffprobe_path="ffprobe",
+                max_segment_duration_seconds=2,
+                protected_sources=frozenset({source.resolve()}),
+            )
+
+        self.assertFalse(oversized_legacy.exists())
+
+    def test_build_segments_guards_nonadvancing_split_points(self) -> None:
+        with patch("media_shrinker._choose_silence_split_point", return_value=0.0):
+            segments = build_segments(
+                duration_seconds=3.0, max_segment_duration_seconds=2.0
+            )
+
+        self.assertGreater(segments[0].duration_seconds, 0)
+
+    def test_resolve_collision_reports_exhausted_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "existing.flac"
+            path.write_bytes(b"data")
+            with patch("pathlib.Path.exists", return_value=True):
+                with self.assertRaisesRegex(FileExistsError, "Could not find free"):
+                    media_shrinker._resolve_collision(path, overwrite=False)
+
+    def test_attribute_copy_helpers_ignore_platform_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.wav"
+            dest = Path(tmp) / "dest.wav"
+            source.write_bytes(b"source")
+            dest.write_bytes(b"dest")
+
+            with patch("media_shrinker.os.chmod", side_effect=OSError):
+                preserve_file_attributes(source, dest, setfile_path=None)
+
+            with patch("media_shrinker.os.listxattr", side_effect=OSError, create=True):
+                with patch("media_shrinker.os.getxattr", return_value=b"", create=True):
+                    with patch("media_shrinker.os.setxattr", create=True):
+                        media_shrinker._copy_extended_attributes(source, dest)
+
+            with patch("media_shrinker.os.listxattr", return_value=["user.test"], create=True):
+                with patch("media_shrinker.os.getxattr", side_effect=OSError, create=True):
+                    with patch("media_shrinker.os.setxattr", create=True):
+                        media_shrinker._copy_extended_attributes(source, dest)
+
+            with patch("media_shrinker.os.listxattr", return_value=["user.test"], create=True):
+                with patch("media_shrinker.os.getxattr", return_value=b"value", create=True):
+                    with patch("media_shrinker.os.setxattr", side_effect=OSError, create=True):
+                        media_shrinker._copy_extended_attributes(source, dest)
+
+            stat_result = os.stat(source)
+            media_shrinker._copy_macos_creation_time(stat_result, dest, "SetFile")
+            media_shrinker._copy_macos_creation_time(MagicMock(spec=[]), dest, "SetFile")
+
+
 if __name__ == "__main__":
     unittest.main()

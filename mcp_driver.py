@@ -1,3 +1,5 @@
+"""MCP server wrapper for Codec Carver media shrinking."""
+
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 import media_shrinker
@@ -53,5 +55,5 @@ def shrink_media(source_path: str, output_dir: str, target_bytes: int = 2_000_00
     except Exception as e:
         return f"Conversion failed with error: {str(e)}"
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     mcp.run()

@@ -1,3 +1,5 @@
+"""FastAPI upload UI for shrinking one media file through Codec Carver."""
+
 import tempfile
 import logging
 import shutil
@@ -12,11 +14,15 @@ MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
 
 
 class RequestTooLarge(Exception):
+    """Raised when streamed request bytes exceed the accepted upload envelope."""
+
     pass
 
 
 @app.middleware("http")
 async def limit_request_size(request: Request, call_next):
+    """Reject declared or streamed request bodies above the service limit."""
+
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
@@ -32,6 +38,8 @@ async def limit_request_size(request: Request, call_next):
     receive = request._receive
 
     async def limited_receive():
+        """Count streamed request bytes before handing them to FastAPI."""
+
         nonlocal received
         message = await receive()
         if message.get("type") == "http.request":
@@ -48,6 +56,8 @@ async def limit_request_size(request: Request, call_next):
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    """Attach conservative browser security headers to every response."""
+
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -195,6 +205,8 @@ def cleanup_temp_dir(temp_dir_path: Path):
 
 @app.get("/", response_class=HTMLResponse)
 async def get_ui():
+    """Return the single-page upload form."""
+
     return HTML_TEMPLATE
 
 
@@ -204,6 +216,8 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
+    """Persist an uploaded media file, shrink it, and return the generated file."""
+
     if target_bytes <= 0:
         return {"error": "Invalid target_bytes value. Must be greater than 0."}
 
@@ -274,6 +288,6 @@ def shrink_media(
         logger.exception("Media processing failed")
         return {"error": "Upload processing failed"}
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
