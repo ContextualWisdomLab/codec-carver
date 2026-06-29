@@ -38,3 +38,6 @@
 ## 2026-06-23 - Improve Error Message Clarity
 **Learning:** Added inline visual feedback to the 'target_bytes' input field for invalid inputs (e.g., negative or zero values) provides immediate context to the user. I saw the empty text in preview on invalid inputs in the UI test screenshots and in the code, and realized it would be better UX to display the error text in the preview span with red styling, rather than leaving it empty.
 **Action:** Add descriptive innerText and red color styling to the preview element on validation failure to enhance error visibility.
+## 2024-06-28 - WCAG Color Contrast Compliance
+**Learning:** Default Bootstrap-style colors (like `#17a2b8`, `#28a745`, `#dc3545`, `#007bff`) often fail the WCAG AA 4.5:1 contrast ratio against white backgrounds. This makes text unreadable for visually impaired users.
+**Action:** Always verify color contrast using a luminance calculation. Use darker variants like `#0f6674`, `#1e7e34`, `#b02a37`, and `#0b5ed7` (or similar) to ensure WCAG AA compliance for UI text and buttons.

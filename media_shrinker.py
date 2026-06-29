@@ -690,7 +690,7 @@ def preserve_file_attributes(
     source_stat = source.stat()
 
     try:
-        os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o777)
+        os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o644)
     except OSError:
         pass
 
@@ -1237,6 +1237,7 @@ def _execute_conversions(
     protected_sources = [c[0] for c in candidates]
 
     def process_candidate(candidate_tuple: tuple[Path, int]) -> list[ConversionResult]:
+        """Process a single candidate tuple containing the path and size."""
         candidate, size = candidate_tuple
         try:
             return convert_file(

@@ -36,3 +36,7 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+## 2026-06-28 - Insecure File Permissions
+**Vulnerability:** Output files were inheriting unsafe permissions (`0o777`) from the source files using `os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o777)`, leading to world-writable files (CWE-732).
+**Learning:** Copying permission bits blindly from user-uploaded or unvalidated source files violates the principle of least privilege, allowing attackers to potentially tamper with generated artifacts.
+**Prevention:** Apply a secure permission mask (e.g., `0o644` for files) when setting permissions, using `os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o644)`.
