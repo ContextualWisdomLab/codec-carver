@@ -15,6 +15,12 @@ class SecurityTests(unittest.TestCase):
             with self.assertRaises(MediaShrinkerError):
                 build_silencedetect_command(Path("test.wav"), silence_noise=noise)
 
+    def test_convert_file_rejects_path_traversal(self):
+        from media_shrinker import convert_file
+        with self.assertRaises(MediaShrinkerError) as ctx:
+            convert_file(Path("/etc/passwd"), root=Path("/app/safe"), output_dir=Path("/app/safe/out"))
+        self.assertIn("is outside root directory", str(ctx.exception))
+
     @patch("media_shrinker.subprocess.run")
     def test_probe_media_uses_explicit_input_flag_for_dash_prefixed_path(
         self, mock_run: MagicMock
@@ -31,7 +37,7 @@ class SecurityTests(unittest.TestCase):
 
         command = mock_run.call_args.args[0]
         input_index = command.index("-i")
-        self.assertEqual(command[input_index + 1], str(source_path))
+        self.assertEqual(command[input_index + 1], str(source_path.resolve()))
 
 if __name__ == "__main__":
     unittest.main()

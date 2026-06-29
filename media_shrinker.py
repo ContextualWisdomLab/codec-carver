@@ -463,7 +463,7 @@ def probe_media(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path),
+        f"{source_path.resolve()}",
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
@@ -726,9 +726,13 @@ def convert_file(
 ) -> list[ConversionResult]:
     """Convert one file and return generated segment results without deleting the source."""
 
-    source = Path(source)
-    root = Path(root)
-    output_dir = Path(output_dir)
+    source = Path(source).resolve()
+    root = Path(root).resolve()
+    output_dir = Path(output_dir).resolve()
+
+    if not source.is_relative_to(root):
+        raise MediaShrinkerError(f"Security Error: source path {source} is outside root directory {root}")
+
     original_size = (
         original_size if original_size is not None else safe_source_size(source)
     )
