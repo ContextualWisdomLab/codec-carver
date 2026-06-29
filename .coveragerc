@@ -1,0 +1,9 @@
+[run]
+source =
+    mcp_driver
+    media_shrinker
+    saas_web
+
+[report]
+fail_under = 100
+show_missing = true

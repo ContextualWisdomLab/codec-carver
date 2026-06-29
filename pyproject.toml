@@ -1,0 +1,6 @@
+[tool.interrogate]
+fail-under = 100
+exclude = [
+    "scripts",
+    "tests",
+]
