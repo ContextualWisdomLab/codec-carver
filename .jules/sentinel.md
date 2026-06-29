@@ -36,3 +36,8 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+
+## 2026-06-23 - Unrestricted File Uploads in SaaS
+**Vulnerability:** The /shrink endpoint accepted unexpected content types and ambiguous upload filenames before writing the upload into its temporary workspace.
+**Learning:** `Path(filename).name` prevents POSIX `../../` traversal from escaping the temp workspace, but upload handling still needs explicit media content-type checks and a conservative filename character set.
+**Prevention:** Validate that `file.content_type` starts with `audio/` or `video/`, then reduce the upload basename to alphanumeric characters, dots, hyphens, and underscores before writing it under the temp input directory.
