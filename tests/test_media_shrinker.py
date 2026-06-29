@@ -1179,6 +1179,17 @@ class CollisionResolutionTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def test_normalize_argv_handles_silence_noise_values(self) -> None:
+        self.assertIsNone(media_shrinker._normalize_argv(None))
+        self.assertEqual(
+            media_shrinker._normalize_argv(["--silence-noise", "quiet"]),
+            ["--silence-noise", "quiet"],
+        )
+        self.assertEqual(
+            media_shrinker._normalize_argv(["--silence-noise"]),
+            ["--silence-noise"],
+        )
+
     def test_parse_args_sets_conversion_options(self) -> None:
         args = media_shrinker.parse_args(
             [

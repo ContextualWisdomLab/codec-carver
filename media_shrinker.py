@@ -1114,6 +1114,30 @@ def write_report(results: Iterable[ConversionResult], report_path: Path) -> None
     )
 
 
+def _normalize_argv(argv: list[str] | None) -> list[str] | None:
+    """Normalize option values that older argparse versions treat as options."""
+
+    if argv is None:
+        return None
+
+    normalized: list[str] = []
+    iterator = iter(argv)
+    for arg in iterator:
+        if arg == "--silence-noise":
+            try:
+                value = next(iterator)
+            except StopIteration:
+                normalized.append(arg)
+                break
+            if value.startswith("-"):
+                normalized.append(f"{arg}={value}")
+            else:
+                normalized.extend((arg, value))
+            continue
+        normalized.append(arg)
+    return normalized
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
 
@@ -1219,7 +1243,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow overwriting generated output paths",
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(_normalize_argv(argv))
 
 
 def _execute_conversions(
