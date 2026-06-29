@@ -38,7 +38,7 @@ class GhRunner:
     def run(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["gh", *args],
-            check=True,
+            check=True, shell=False,
             capture_output=True,
             text=True,
         )
