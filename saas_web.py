@@ -1,6 +1,8 @@
 import tempfile
 import logging
 import shutil
+import re
+import os
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -187,6 +189,18 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def secure_filename(filename: str) -> str:
+    """Sanitize the filename to prevent path traversal and ensure safe characters."""
+    name = Path(filename).name
+    if "\\" in name:
+        name = name.split("\\")[-1]
+    name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', name)
+    name = name.strip(' .')
+    if not name:
+        return "upload.tmp"
+    return name
+
+
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
     if temp_dir_path.exists():
@@ -215,24 +229,24 @@ def shrink_media(
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
         temp_dir_path = Path(temp_dir)
     except Exception:
-        logger.exception("Failed to create upload workspace")
+        logger.error("Failed to create upload workspace")
         return {"error": "Upload processing failed"}
 
     try:
         # Setup paths
         input_dir = temp_dir_path / "input"
         output_dir = temp_dir_path / "output"
-        input_dir.mkdir()
-        output_dir.mkdir()
+        input_dir.mkdir(mode=0o700)
+        output_dir.mkdir(mode=0o700)
 
         # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
+        safe_filename = secure_filename(file.filename)
 
         source_path = input_dir / safe_filename
         bytes_written = 0
-        with open(source_path, "wb") as f:
+
+        fd = os.open(source_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with open(fd, "wb") as f:
             while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
                 bytes_written += len(chunk)
                 if bytes_written > MAX_UPLOAD_BYTES:
@@ -240,7 +254,7 @@ def shrink_media(
                 f.write(chunk)
     except Exception:
         cleanup_temp_dir(temp_dir_path)
-        logger.exception("Failed to prepare uploaded media")
+        logger.error("Failed to prepare uploaded media")
         return {"error": "Upload processing failed"}
 
     # Process the file using media_shrinker
@@ -271,7 +285,7 @@ def shrink_media(
 
     except Exception:
         cleanup_temp_dir(temp_dir_path)
-        logger.exception("Media processing failed")
+        logger.error("Media processing failed")
         return {"error": "Upload processing failed"}
 
 if __name__ == "__main__":
