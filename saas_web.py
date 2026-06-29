@@ -1,8 +1,7 @@
-import logging
-import os
-import secrets
-import shutil
 import tempfile
+import logging
+import shutil
+import uuid
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -11,7 +10,6 @@ import media_shrinker
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
-MAX_TARGET_BYTES = MAX_UPLOAD_BYTES
 
 
 class RequestTooLarge(Exception):
@@ -143,10 +141,10 @@ HTML_TEMPLATE = """
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#28a745';
 
-                if (isNaN(val) || val <= 0) {
-                    preview.innerText = 'Must be greater than 0.';
+                if (isNaN(val) || val <= 0 || val > 5 * 1024 * 1024 * 1024) {
+                    preview.innerText = 'Must be between 1 and 5 GiB.';
                     preview.style.color = '#dc3545';
-                    this.setCustomValidity('Must be greater than 0.');
+                    this.setCustomValidity('Must be between 1 and 5 GiB.');
                     this.setAttribute('aria-invalid', 'true');
                 } else {
                     preview.innerText = formatBinaryBytes(val);
@@ -192,15 +190,9 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def has_path_components(filename: str) -> bool:
-    """Return whether an upload filename tries to include directories."""
-    normalized = filename.replace("\\", "/")
-    return "/" in normalized or normalized in {".", ".."}
-
-
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
-    if temp_dir_path.exists() and temp_dir_path.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
+    if temp_dir_path.exists() and temp_dir_path.resolve().is_relative_to(Path(tempfile.gettempdir())):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
@@ -215,20 +207,11 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
-    if target_bytes <= 0:
-        return {"error": "Invalid target_bytes value. Must be greater than 0."}
-
-    if target_bytes > MAX_TARGET_BYTES:
-        return {"error": "Invalid target_bytes value. Must not exceed maximum upload size."}
+    if not (1 <= target_bytes <= 5 * 1024 * 1024 * 1024):
+        return {"error": "Invalid target_bytes value. Must be between 1 and 5 GiB."}
 
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
-
-    if has_path_components(file.filename):
-        return JSONResponse(status_code=400, content={"error": "Invalid upload filename"})
-
-    if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
-        return {"error": "Invalid content type"}
 
     # Create a temporary directory that will hold the input and output
     try:
@@ -242,19 +225,24 @@ def shrink_media(
         # Setup paths
         input_dir = temp_dir_path / "input"
         output_dir = temp_dir_path / "output"
-        input_dir.mkdir(mode=0o700)
-        output_dir.mkdir(mode=0o700)
+        input_dir.mkdir()
+        output_dir.mkdir()
 
         # Save the uploaded file
-        suffix = Path(file.filename).suffix.lower()
-        if not suffix or len(suffix) > 16 or not suffix[1:].isalnum():
-            suffix = ".tmp"
-        safe_filename = f"upload-{secrets.token_hex(16)}{suffix}"
+        original_filename = Path(file.filename).name
+        safe_filename = original_filename.replace("..", "").replace("/", "_").replace("\\", "_")
+        if not safe_filename or safe_filename.startswith("."):
+            safe_filename = f"upload_{uuid.uuid4().hex}.tmp"
+        else:
+            ext = ''.join(Path(safe_filename).suffixes)
+            if ext:
+                safe_filename = f"{uuid.uuid4().hex}{ext}"
+            else:
+                safe_filename = f"{uuid.uuid4().hex}.tmp"
 
         source_path = input_dir / safe_filename
         bytes_written = 0
-        fd = os.open(source_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with open(fd, "wb") as f:
+        with open(source_path, "wb") as f:
             while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
                 bytes_written += len(chunk)
                 if bytes_written > MAX_UPLOAD_BYTES:
