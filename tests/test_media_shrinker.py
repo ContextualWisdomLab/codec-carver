@@ -950,6 +950,8 @@ class SilenceDetectionTests(unittest.TestCase):
         self.assertEqual(kwargs.get("check"), False)
         self.assertEqual(kwargs.get("capture_output"), True)
         self.assertEqual(kwargs.get("text"), True)
+        self.assertEqual(kwargs.get("shell", False), False)
+
 
     @patch("media_shrinker.subprocess.run")
     def test_detect_silence_intervals_failure_raises_error(
