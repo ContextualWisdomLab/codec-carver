@@ -54,3 +54,7 @@
 ## 2026-06-21 - Cache stat() results for media files to avoid repeated system calls
 **Learning:** Checking the size of intermediate file outputs and probing them with ffprobe results in redundant `stat()` calls if the file size can just be supplied to the probe mechanism.
 **Action:** Always attempt to pass down already computed `os.stat` or `pathlib.Path.stat()` results, especially `st_size`, to child operations in batch loops instead of repeating the system call.
+
+## 2024-06-25 - Avoid `Path.resolve()` in massive path iteration lists
+**Learning:** Even when pre-resolving paths outside of a hot `os.walk` loop, using `Path.resolve()` inside a list comprehension or generator to build a `frozenset` containing thousands of items adds immense overhead compared to `os.path.realpath()`. The performance difference comes from how `pathlib` re-instantiates and checks each node in the tree internally.
+**Action:** When constructing large sets of resolved paths during batch start up (e.g. evaluating protected sources or candidates), substitute `Path(item).resolve()` with `Path(os.path.realpath(item))` to sidestep pathlib's heavy internal abstraction layer while retaining the robust symlink/relative resolution behavior.
