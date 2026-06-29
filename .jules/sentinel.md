@@ -36,3 +36,8 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+
+## 2026-06-25 - [Sentinel: Security Headers Defense-in-Depth]
+**Vulnerability:** Missing `Referrer-Policy` and `Permissions-Policy` security headers.
+**Learning:** Even if a web application doesn't currently use sensitive browser APIs (geolocation, camera, microphone) or leak data via referrers, omitting these headers leaves the application unnecessarily exposed to future XSS or architecture changes.
+**Prevention:** As a defense-in-depth measure, explicitly define strict `Referrer-Policy` (e.g., `strict-origin-when-cross-origin`) and `Permissions-Policy` (disabling unused hardware APIs) in the global HTTP middleware.
