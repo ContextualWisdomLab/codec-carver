@@ -690,7 +690,7 @@ def preserve_file_attributes(
     source_stat = source.stat()
 
     try:
-        os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o777)
+        os.chmod(dest, stat.S_IMODE(source_stat.st_mode) & 0o644)
     except OSError:
         pass
 
