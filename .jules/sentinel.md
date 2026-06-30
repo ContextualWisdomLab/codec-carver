@@ -36,3 +36,7 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+## 2024-06-25 - [Sentinel: Uncontrolled Resource Consumption in Subprocesses]
+**Vulnerability:** Uncontrolled Resource Consumption (CWE-400) / DoS via hung external processes.
+**Learning:** When using `subprocess.run` to execute external binaries (like `ffmpeg`, `ffprobe`, or `brctl`), the application can hang indefinitely if the external process stalls. This leads to resource exhaustion (e.g., worker threads/processes blocked) and potential Denial of Service.
+**Prevention:** Always configure an explicit `timeout` parameter and handle `subprocess.TimeoutExpired` exceptions for all `subprocess.run` calls. Tailor the timeout duration to the specific task (e.g., 60s for `ffprobe`, 3600s for `ffmpeg` transcoding).
