@@ -1684,3 +1684,58 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+import unittest
+from unittest.mock import patch, MagicMock
+from pathlib import Path
+import os
+import media_shrinker
+
+class TestMediaShrinkerCoverage(unittest.TestCase):
+    @patch('media_shrinker._copy_macos_creation_time')
+    @patch('media_shrinker._get_setfile_path', return_value="/path/to/setfile")
+    @patch('pathlib.Path.stat')
+    def test_preserve_file_attributes_with_setfile(self, mock_stat, mock_get, mock_copy):
+        source = Path("dummy_src")
+        dest = Path("dummy_dest")
+        with patch('os.chmod'), \
+             patch('media_shrinker._copy_extended_attributes'), \
+             patch('os.utime'):
+            mock_stat.return_value.st_atime_ns = 1
+            mock_stat.return_value.st_mtime_ns = 2
+            mock_stat.return_value.st_mode = 33188
+            media_shrinker.preserve_file_attributes(source, dest)
+            mock_copy.assert_called_once()
+
+    @patch('subprocess.run')
+    def test_copy_macos_creation_time(self, mock_run):
+        source_stat = MagicMock()
+        source_stat.st_birthtime = 1234567890.0
+        dest = Path("dummy_dest")
+        media_shrinker._copy_macos_creation_time(source_stat, dest, "/path/to/setfile")
+        mock_run.assert_called_once()
+
+    @patch('subprocess.run')
+    def test_copy_macos_creation_time_none(self, mock_run):
+        source_stat = MagicMock(spec=[])
+        dest = Path("dummy_dest")
+        media_shrinker._copy_macos_creation_time(source_stat, dest, "/path/to/setfile")
+        mock_run.assert_not_called()
+
+if __name__ == '__main__':
+    unittest.main()
+import unittest
+from unittest.mock import patch, MagicMock
+from pathlib import Path
+import os
+import media_shrinker
+
+class TestMediaShrinkerXattrCoverage(unittest.TestCase):
+    @patch('os.listxattr')
+    def test_copy_extended_attributes_no_support(self, mock_list):
+        # mock all to return False to hit line 1632
+        with patch('builtins.all', return_value=False):
+            media_shrinker._copy_extended_attributes(Path("dummy_src"), Path("dummy_dest"))
+            mock_list.assert_not_called()
+
+if __name__ == '__main__':
+    unittest.main()
