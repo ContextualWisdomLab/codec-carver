@@ -19,8 +19,8 @@ def shrink_media(source_path: str, output_dir: str, target_bytes: int = 2_000_00
     Returns:
         A string summarizing the result of the conversion.
     """
-    source = Path(source_path).resolve()
-    out_dir = Path(output_dir).resolve()
+    source = Path(source_path).absolute()
+    out_dir = Path(output_dir).absolute()
 
     if not source.exists():
         return f"Error: Source file does not exist: {source}"
