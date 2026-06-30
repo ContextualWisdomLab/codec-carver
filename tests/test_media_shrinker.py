@@ -185,15 +185,31 @@ class FindCandidateTests(unittest.TestCase):
 
             import os
 
-            original_lstat = os.lstat
+            class FlakyDirEntry:
+                def __init__(self, entry):
+                    self._entry = entry
+                def __getattr__(self, name):
+                    if name in ('is_symlink', 'is_dir', 'is_file', 'stat'):
+                        if self._entry.name in {"bad.mp3", "bad_dir"}:
+                            def raise_os_error(*args, **kwargs):
+                                raise OSError("cannot inspect state")
+                            return raise_os_error
+                    return getattr(self._entry, name)
 
-            def flaky_lstat(path):
-                name = os.path.basename(str(path))
-                if name in {"bad.mp3", "bad_dir"}:
-                    raise OSError("cannot inspect symlink state")
-                return original_lstat(path)
+            original_scandir = os.scandir
+            class FlakyScandirIterator:
+                def __init__(self, path):
+                    self._it = original_scandir(path)
+                def __iter__(self):
+                    return self
+                def __next__(self):
+                    return FlakyDirEntry(next(self._it))
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    self._it.close()
 
-            with patch("os.lstat", flaky_lstat):
+            with patch("os.scandir", FlakyScandirIterator):
                 candidates = [
                     p[0].relative_to(root)
                     for p in find_candidates(root, include_under_limit=True)

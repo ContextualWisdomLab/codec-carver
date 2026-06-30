@@ -57,6 +57,10 @@
 ## 2024-06-22 - Optimize FFprobe payload parsing with single pass iteration
 **Learning:** Using multiple generator expressions (`next` and `any`) to search through the same list (like FFprobe streams) requires iterating through the list multiple times. In `_parse_probe_payload`, parsing out both the audio stream and checking for a video stream with separate generator expressions introduces unnecessary loop overhead, which is measurable in batch processes.
 **Action:** Combine multiple searches over the same list into a single standard `for` loop, extracting all necessary information in one pass. This provides measurable CPU savings and avoids multiple iterator instantiations.
+## 2025-02-12 - File traversal optimization in `media_shrinker.py`
+**Learning:** Using `os.walk` paired with `os.lstat` for each file is significantly slower than using `os.scandir`. `os.scandir` caches directory entries and their stat structures inherently reducing the number of system calls needed to traverse a directory hierarchy.
+**Action:** When performing file discovery or traversing directories, particularly with a need for file metadata (like size or checking symlinks), prefer `os.scandir()` or `Path.rglob()` over `os.walk()` to avoid redundant `stat` system calls.
+
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
