@@ -82,6 +82,7 @@ HTML_TEMPLATE = """
         button:hover:not(:disabled) { background-color: #004085; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
         button:focus-visible, input:focus-visible { outline: 2px solid #004085; outline-offset: 2px; }
+        input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
         .required-star { color: #dc3545; }
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
