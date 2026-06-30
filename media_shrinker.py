@@ -228,15 +228,11 @@ def find_candidates(
             except OSError:
                 continue
 
-            if excluded_exact_strs:
-                if not is_symlink:
-                    resolved_d_str = os.path.join(resolved_dir_str, d)
-                else:
-                    try:
-                        resolved_d_str = os.path.realpath(d_path_str)
-                    except OSError:
-                        continue
+            if is_symlink:
+                continue
 
+            if excluded_exact_strs:
+                resolved_d_str = os.path.join(resolved_dir_str, d)
                 if resolved_d_str in excluded_exact_set or resolved_d_str.startswith(
                     excluded_prefix_strs
                 ):
