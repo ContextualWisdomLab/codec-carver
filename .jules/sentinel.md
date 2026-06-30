@@ -36,8 +36,7 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
-
-## 2026-06-30 - [Sentinel: Prevent Uncontrolled Resource Consumption (DoS) via subprocess timeout]
-**Vulnerability:** Uncontrolled Resource Consumption (DoS) via `subprocess.run` calls without explicit timeouts (CWE-400).
-**Learning:** Using `subprocess.run` to execute external binaries like `ffmpeg`, `ffprobe`, or `brctl` without a `timeout` can hang the application indefinitely if the binary deadlocks or encounters malformed media.
-**Prevention:** Always configure an explicit `timeout` parameter tailored to the specific binary (e.g., 60s for fast metadata reads, 3600s+ for slow conversions) and handle `subprocess.TimeoutExpired` exceptions when using `subprocess.run` to execute external binaries, ensuring the application does not hang indefinitely.
+## 2024-06-25 - [Sentinel: Uncontrolled Resource Consumption in Subprocesses]
+**Vulnerability:** Uncontrolled Resource Consumption (CWE-400) / DoS via hung external processes.
+**Learning:** When using `subprocess.run` to execute external binaries (like `ffmpeg`, `ffprobe`, or `brctl`), the application can hang indefinitely if the external process stalls. This leads to resource exhaustion (e.g., worker threads/processes blocked) and potential Denial of Service.
+**Prevention:** Always configure an explicit `timeout` parameter and handle `subprocess.TimeoutExpired` exceptions for all `subprocess.run` calls. Tailor the timeout duration to the specific task (e.g., 60s for `ffprobe`, 3600s for `ffmpeg` transcoding).

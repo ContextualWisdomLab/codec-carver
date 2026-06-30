@@ -466,13 +466,9 @@ def probe_media(
         str(source_path),
     ]
     try:
-        completed = subprocess.run(
-            command, check=False, capture_output=True, text=True, timeout=60
-        )
+        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired as exc:
-        raise MediaShrinkerError(
-            f"ffprobe timed out after 60s for {source_path}"
-        ) from exc
+        raise MediaShrinkerError(f"ffprobe timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -536,12 +532,10 @@ def detect_silence_intervals(
             check=False,
             capture_output=True,
             text=True,
-            timeout=3600,
+            timeout=600,
         )
     except subprocess.TimeoutExpired as exc:
-        raise MediaShrinkerError(
-            f"silencedetect timed out after 3600s for {source_path}"
-        ) from exc
+        raise MediaShrinkerError(f"silencedetect timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"silencedetect failed for {source_path}: {completed.stderr.strip()}"
@@ -662,12 +656,10 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
             check=False,
             capture_output=True,
             text=True,
-            timeout=3600,
+            timeout=600,
         )
     except subprocess.TimeoutExpired as exc:
-        raise MediaShrinkerError(
-            f"iCloud download timed out after 3600s for {source_path}"
-        ) from exc
+        raise MediaShrinkerError(f"iCloud download timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"iCloud download failed for {source_path}: {completed.stderr.strip()}"
@@ -1605,12 +1597,12 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, timeout=14400
+                command, check=False, capture_output=True, text=True, timeout=3600
             )
+        except subprocess.TimeoutExpired as exc:
+            raise MediaShrinkerError(f"ffmpeg timed out for {source}") from exc
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise MediaShrinkerError(f"ffmpeg timed out after 14400s for {source}") from exc
 
         if completed.returncode != 0:
             raise MediaShrinkerError(
@@ -1681,7 +1673,7 @@ def _copy_macos_creation_time(
             check=False,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=10,
         )
     except subprocess.TimeoutExpired:
         pass
