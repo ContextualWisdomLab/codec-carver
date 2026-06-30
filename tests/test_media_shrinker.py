@@ -196,7 +196,7 @@ class FindCandidateTests(unittest.TestCase):
             with patch("os.lstat", flaky_lstat):
                 candidates = [
                     p[0].relative_to(root)
-                    for p in find_candidates(root, include_under_limit=True)
+                    for p in find_candidates(root, include_under_limit=True, exclude_paths=[root / "some_exclude"])
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])

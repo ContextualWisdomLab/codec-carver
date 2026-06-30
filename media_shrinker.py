@@ -222,13 +222,13 @@ def find_candidates(
 
             d_path_str = os.path.join(dirpath_str, d)
 
-            try:
-                d_stat = os.lstat(d_path_str)
-                is_symlink = stat.S_ISLNK(d_stat.st_mode)
-            except OSError:
-                continue
-
             if excluded_exact_strs:
+                try:
+                    d_stat = os.lstat(d_path_str)
+                    is_symlink = stat.S_ISLNK(d_stat.st_mode)
+                except OSError:
+                    continue
+
                 if not is_symlink:
                     resolved_d_str = os.path.join(resolved_dir_str, d)
                 else:

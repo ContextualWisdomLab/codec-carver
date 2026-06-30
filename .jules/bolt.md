@@ -60,3 +60,6 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+## 2024-06-27 - [Avoid unnecessary lstat calls when filtering directories]
+**Learning:** During directory traversal optimization (e.g. `os.walk`), doing system calls like `os.lstat()` unconditionally just to check for symlinks causes substantial I/O overhead. In `find_candidates`, `is_symlink` was only needed if exact exclusions were configured (`excluded_exact_strs`), yet `os.lstat()` ran for every single subdirectory.
+**Action:** Always move heavy filesystem checks (`stat`, `lstat`, `realpath`) inside conditional blocks that actually require them. Don't pre-compute metadata if there's a chance the downstream logic will skip it.
