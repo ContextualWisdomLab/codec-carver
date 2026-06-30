@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import subprocess
 from media_shrinker import build_silencedetect_command, MediaShrinkerError, probe_media
 
 class SecurityTests(unittest.TestCase):
@@ -32,6 +33,15 @@ class SecurityTests(unittest.TestCase):
         command = mock_run.call_args.args[0]
         input_index = command.index("-i")
         self.assertEqual(command[input_index + 1], str(source_path.resolve()))
+
+    @patch("media_shrinker.subprocess.run")
+    def test_probe_media_enforces_timeout(self, mock_run: MagicMock):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=30.0)
+        with patch.object(Path, "stat") as mock_stat:
+            mock_stat.return_value = MagicMock(st_size=10)
+            with self.assertRaises(MediaShrinkerError) as cm:
+                probe_media(Path("test.wav"))
+        self.assertIn("timed out", str(cm.exception))
 
 if __name__ == "__main__":
     unittest.main()
