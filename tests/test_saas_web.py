@@ -295,5 +295,17 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         self.assertEqual(response.body, b'{"error":"Payload Too Large"}')
 
+    def test_get_ui_includes_preset_buttons(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+
+        self.assertIn('class="preset-container"', html)
+        self.assertIn('onclick="setTargetBytes(26214400)"', html)
+        self.assertIn('onclick="setTargetBytes(104857600)"', html)
+        self.assertIn('onclick="setTargetBytes(524288000)"', html)
+        self.assertIn('onclick="setTargetBytes(1073741824)"', html)
+        self.assertIn('function setTargetBytes(bytes)', html)
+
 if __name__ == '__main__':
     unittest.main()

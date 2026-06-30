@@ -88,6 +88,9 @@ HTML_TEMPLATE = """
         @keyframes spinner-border { to { transform: rotate(360deg); } }
         .box { transition: background-color 0.2s, border-color 0.2s; }
         .box.dragover { background-color: #f8f9fa; border-color: #0056b3; border-style: dashed; }
+        .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
+        .preset-btn:hover { background-color: #dde2e6; color: #212529; }
     </style>
 </head>
 <body>
@@ -102,9 +105,15 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview preset_buttons_container" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
+                <div id="preset_buttons_container" class="preset-container">
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)">25 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)">100 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)">500 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)">1 GiB</button>
+                </div>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
@@ -120,6 +129,12 @@ HTML_TEMPLATE = """
                 }
                 return unit === 0 ? size + ' ' + units[unit] : size.toFixed(2) + ' ' + units[unit];
             }
+            function setTargetBytes(bytes) {
+                const input = document.getElementById('target_bytes');
+                input.value = bytes;
+                input.dispatchEvent(new Event('input'));
+            }
+
             function updateFileSizePreview(input) {
                 const file = input.files[0];
                 const preview = document.getElementById('file_size_preview');

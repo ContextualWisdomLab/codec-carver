@@ -42,3 +42,7 @@
 ## 2024-06-29 - UI 색상 대비(WCAG AA) 개선
 **Learning:** `#007bff`, `#17a2b8`, `#28a745` 등 기본 Bootstrap 색상들은 하얀 배경에서 사용할 때 종종 WCAG AA 색상 대비 가이드라인을 통과하지 못하며, 이는 시각 장애가 있는 사용자들의 가독성을 떨어뜨립니다.
 **Action:** 충분한 명암비를 보장하기 위해 기본 Bootstrap 색상을 어둡고 접근성 높은 대안 색상(예: 기본 색상은 `#0056b3`, 정보 색상은 `#0f6674`, 성공 색상은 `#1e7e34`)으로 교체하십시오.
+
+## 2024-06-30 - Quick Preset Buttons for Raw Inputs
+**Learning:** Large raw byte inputs create high cognitive load and increase magnitude errors. Providing accessible quick preset buttons allows users to quickly select common values with confidence, reducing errors and reliance on manual typing.
+**Action:** Add quick preset buttons for common values near raw inputs (especially bytes), ensuring they are accessible via keyboard and properly associated with `aria-describedby`.
