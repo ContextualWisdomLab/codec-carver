@@ -1681,6 +1681,24 @@ class CliTests(unittest.TestCase):
             media_shrinker._copy_macos_creation_time(stat_result, dest, "SetFile")
             media_shrinker._copy_macos_creation_time(MagicMock(spec=[]), dest, "SetFile")
 
+            with patch("media_shrinker._get_setfile_path", return_value="SetFile"):
+                with patch("media_shrinker._copy_macos_creation_time") as mock_copy:
+                    media_shrinker.preserve_file_attributes(source, dest)
+                    mock_copy.assert_called_once()
+
+            with patch("media_shrinker.os.listxattr", side_effect=OSError):
+                media_shrinker._copy_extended_attributes(source, dest)
+
+            # Test unsupported OS for extended attributes
+            with patch("builtins.hasattr", return_value=False):
+                media_shrinker._copy_extended_attributes(source, dest)
+
+            # Test macos creation time logic when birthtime is present
+            with patch("media_shrinker.subprocess.run") as mock_run:
+                mock_stat = MagicMock()
+                mock_stat.st_birthtime = 1234567890.0
+                media_shrinker._copy_macos_creation_time(mock_stat, dest, "SetFile")
+                mock_run.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()
