@@ -1721,61 +1721,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
             output_path=Path("dummy.flac"),
             ffmpeg_args=["-i", "dummy.wav", "-c:a", "flac", "dummy.flac"]
         )
-        with self.assertRaisesRegex(MediaShrinkerError, "ffmpeg timed out for dummy.wav"):
-            _execute_plan(
-                plan, ffmpeg_path="ffmpeg", overwrite=True
-            )
-
-    @patch("media_shrinker.subprocess.run")
-    def test_setfile_timeout(self, mock_run) -> None:
-        from media_shrinker import _copy_macos_creation_time
-        import subprocess
-        import os
-        from unittest.mock import Mock
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="SetFile", timeout=60)
-
-        stat_mock = Mock(spec=os.stat_result)
-        stat_mock.st_birthtime = 1000.0
-
-        _copy_macos_creation_time(stat_mock, Path("dummy.wav"), "SetFile")
-        # Should catch and ignore the timeout, so no exception is raised
-
-class TestSubprocessTimeouts(unittest.TestCase):
-    @patch("media_shrinker.subprocess.run")
-    def test_ffprobe_timeout(self, mock_run) -> None:
-        from media_shrinker import probe_media, MediaShrinkerError
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ffprobe", timeout=60)
-        with self.assertRaisesRegex(MediaShrinkerError, "ffprobe timed out for"):
-            probe_media(Path("dummy.wav"))
-
-    @patch("media_shrinker.subprocess.run")
-    def test_silencedetect_timeout(self, mock_run) -> None:
-        from media_shrinker import detect_silence_intervals, MediaShrinkerError
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ffmpeg", timeout=3600)
-        with self.assertRaisesRegex(MediaShrinkerError, "silencedetect timed out for"):
-            detect_silence_intervals(Path("dummy.wav"))
-
-    @patch("media_shrinker.subprocess.run")
-    def test_icloud_download_timeout(self, mock_run) -> None:
-        from media_shrinker import download_from_icloud, MediaShrinkerError
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="brctl", timeout=3600)
-        with self.assertRaisesRegex(MediaShrinkerError, "iCloud download timed out for"):
-            download_from_icloud(Path("dummy.wav"), brctl_path="ls")
-
-    @patch("media_shrinker.subprocess.run")
-    def test_ffmpeg_timeout(self, mock_run) -> None:
-        from media_shrinker import _execute_plan, ConversionPlan, MediaShrinkerError
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ffmpeg", timeout=3600)
-        plan = ConversionPlan(
-            strategy="flac-lossless",
-            input_path=Path("dummy.wav"),
-            output_path=Path("dummy.flac"),
-            ffmpeg_args=["-i", "dummy.wav", "-c:a", "flac", "dummy.flac"]
-        )
         with self.assertRaisesRegex(MediaShrinkerError, "ffmpeg timed out for"):
             _execute_plan(
                 plan, ffmpeg_path="ffmpeg", source=Path("dummy.wav"), final_output=Path("dummy.flac"),
