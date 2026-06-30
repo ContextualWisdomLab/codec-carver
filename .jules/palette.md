@@ -42,3 +42,6 @@
 ## 2024-06-29 - UI 색상 대비(WCAG AA) 개선
 **Learning:** `#007bff`, `#17a2b8`, `#28a745` 등 기본 Bootstrap 색상들은 하얀 배경에서 사용할 때 종종 WCAG AA 색상 대비 가이드라인을 통과하지 못하며, 이는 시각 장애가 있는 사용자들의 가독성을 떨어뜨립니다.
 **Action:** 충분한 명암비를 보장하기 위해 기본 Bootstrap 색상을 어둡고 접근성 높은 대안 색상(예: 기본 색상은 `#0056b3`, 정보 색상은 `#0f6674`, 성공 색상은 `#1e7e34`)으로 교체하십시오.
+## 2023-10-27 - Added CSS rule for `aria-invalid`
+**Learning:** When client-side validation dynamically sets `aria-invalid="true"`, sighted users might not realize the input is invalid if there is no corresponding CSS to style it (e.g., adding a red border). This is especially important for custom validation logic.
+**Action:** Always ensure there is a CSS rule like `input[aria-invalid="true"] { border-color: red; }` paired with dynamic `aria-invalid` attribute toggling to provide immediate visual feedback.
