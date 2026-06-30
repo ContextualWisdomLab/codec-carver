@@ -60,3 +60,6 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+## 2026-06-30 - [Optimize Path.resolve() overhead]
+**Learning:** `Path.resolve()` is significantly slower than `os.path.realpath()` because it incurs heavy object instantiation and system call overhead. When used in tight loops or for frequent collision/protection checks in batch processes, replacing `Path.resolve()` with `os.path.realpath()` speeds up execution. It is especially impactful when checking properties against a set of paths.
+**Action:** Replace `Path.resolve()` with `os.path.realpath()` (or `Path(os.path.realpath(...))` if a Path object is still required) in performance-critical sections like batch processing and path collision checking.
