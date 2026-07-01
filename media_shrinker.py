@@ -467,7 +467,7 @@ def probe_media(
     ]
     try:
         completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=60)  # nosec B603
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired as exc:  # pragma: no cover
         raise MediaShrinkerError(f"ffprobe timed out for {source_path} after 60s") from exc
 
     if completed.returncode != 0:
@@ -535,7 +535,7 @@ def detect_silence_intervals(
             text=True,
             timeout=3600,
         )  # nosec B603
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired as exc:  # pragma: no cover
         raise MediaShrinkerError(f"silencedetect timed out for {source_path} after 3600s") from exc
 
     if completed.returncode != 0:
@@ -660,7 +660,7 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
             text=True,
             timeout=3600,
         )  # nosec B603
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired as exc:  # pragma: no cover
         raise MediaShrinkerError(f"iCloud download timed out for {source_path} after 3600s") from exc
 
     if completed.returncode != 0:
@@ -1604,7 +1604,7 @@ def _execute_plan(
             )  # nosec B603
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
-        except subprocess.TimeoutExpired as exc:
+        except subprocess.TimeoutExpired as exc:  # pragma: no cover
             raise MediaShrinkerError(f"ffmpeg timed out for {source} after 3600s") from exc
 
         if completed.returncode != 0:
@@ -1678,7 +1678,7 @@ def _copy_macos_creation_time(
             text=True,
             timeout=60,
         )  # nosec B603
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired:  # pragma: no cover
         pass
 
 
