@@ -41,3 +41,8 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities (CWE-88).
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, command-line utilities (like `ffprobe` and `ffmpeg` filters) can interpret user input (like a file path) starting with a hyphen (e.g., `-version.wav`) as options if passed as a relative path.
 **Prevention:** File paths must be converted to absolute paths using `.resolve()` before they are passed to `subprocess.run`. This prefixes the path with a root, drive, or UNC prefix rather than a leading hyphen, thereby averting the possibility of argument injection.
+
+## 2025-01-20 - Unbounded Subprocess Calls Cause Denial of Service (DoS)
+**Vulnerability:** External binaries (`ffmpeg`, `ffprobe`, `brctl`) were executed using `subprocess.run` without an explicit `timeout`.
+**Learning:** FastAPI/Python will wait indefinitely for these subprocesses. If an attacker supplies a malicious file that causes `ffmpeg` or `ffprobe` to hang, or if the external tools simply freeze, the server threads become blocked permanently, exhausting server resources and causing a Denial of Service.
+**Prevention:** Always implement an explicit `timeout` parameter and handle `subprocess.TimeoutExpired` exceptions when invoking `subprocess.run`. Tailor the timeout to the expected duration of the binary (e.g., 60s for probes, 3600s for conversions) and ensure resource limits are enforced. Use `# nosec B603` to silence false positive static analysis warnings on secure arrays of arguments.
