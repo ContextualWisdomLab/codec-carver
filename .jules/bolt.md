@@ -60,3 +60,6 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+## 2026-06-26 - [Minimize os.lstat() overhead during directory traversal]
+**Learning:** During directory traversal (e.g., using `os.walk`), performing filesystem I/O operations like `os.lstat()` unconditionally on every directory introduces significant overhead, especially on slow network drives or deeply nested structures, even when the results are only needed for specific conditional logic (like exclude patterns).
+**Action:** Always place heavy filesystem operations like `os.lstat()` strictly inside the conditional blocks that actually require their output to avoid taxing the filesystem unnecessarily.
