@@ -214,21 +214,22 @@ def find_candidates(
                 dirnames[:] = []
                 continue
 
-        # Prune excluded directories
+        # ⚡ Bolt: Prune excluded directories while minimizing I/O overhead.
+        # Moved os.lstat strictly inside the excluded_exact_strs block to prevent
+        # unnecessary filesystem calls during traversal when no exclusions are specified.
         valid_dirs = []
         for d in dirnames:
             if d.casefold().startswith(excluded_prefixes):
                 continue
 
-            d_path_str = os.path.join(dirpath_str, d)
-
-            try:
-                d_stat = os.lstat(d_path_str)
-                is_symlink = stat.S_ISLNK(d_stat.st_mode)
-            except OSError:
-                continue
-
             if excluded_exact_strs:
+                d_path_str = os.path.join(dirpath_str, d)
+                try:
+                    d_stat = os.lstat(d_path_str)
+                    is_symlink = stat.S_ISLNK(d_stat.st_mode)
+                except OSError:
+                    continue
+
                 if not is_symlink:
                     resolved_d_str = os.path.join(resolved_dir_str, d)
                 else:

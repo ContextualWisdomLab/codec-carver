@@ -196,7 +196,8 @@ class FindCandidateTests(unittest.TestCase):
             with patch("os.lstat", flaky_lstat):
                 candidates = [
                     p[0].relative_to(root)
-                    for p in find_candidates(root, include_under_limit=True)
+                    # We pass exclude_paths so that directory symlink checks are evaluated
+                    for p in find_candidates(root, include_under_limit=True, exclude_paths=[root / "dummy"])
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])
