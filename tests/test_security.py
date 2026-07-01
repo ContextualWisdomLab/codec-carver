@@ -5,6 +5,21 @@ from unittest.mock import MagicMock, patch
 from media_shrinker import build_silencedetect_command, MediaShrinkerError, probe_media
 
 class SecurityTests(unittest.TestCase):
+
+    def test_path_traversal_prevention(self):
+        """Verify that convert_file rejects sources outside the root directory."""
+        source = Path("/tmp/external/source.wav")
+        root = Path("/tmp/root")
+        output_dir = Path("/tmp/output")
+
+        # Need to create the directories so resolve() works correctly on some systems
+        import media_shrinker
+        with self.assertRaises(media_shrinker.MediaShrinkerError) as context:
+            media_shrinker.convert_file(
+                source, root=root, output_dir=output_dir
+            )
+        self.assertIn("is not within root directory", str(context.exception))
+
     def test_silence_noise_validation(self):
         valid_noises = ["-35dB", "35", "+35.5", "-35.5dB"]
         for noise in valid_noises:

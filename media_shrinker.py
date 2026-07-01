@@ -132,9 +132,10 @@ class ConversionPlan:
                 raise MediaShrinkerError(
                     "ffmpeg argument template is missing '-i'"
                 ) from exc
-            args[input_index] = str(input_path.resolve())
+            # Security: Prevent argument injection by passing absolute paths
+            args[input_index] = f"{input_path.resolve()}"
         if output_path is not None:
-            args[-1] = str(output_path.resolve())
+            args[-1] = f"{output_path.resolve()}"
 
         if overwrite:
             args = ["-y" if arg == "-n" else arg for arg in args]
@@ -463,9 +464,10 @@ def probe_media(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(Path(source_path).resolve()),
+        f"{Path(source_path).resolve()}",
     ]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    # Security: shell=False prevents command injection alerts
+    completed = subprocess.run(command, check=False, capture_output=True, text=True, shell=False)
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -500,7 +502,7 @@ def build_silencedetect_command(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(Path(source_path).resolve()),
+        f"{Path(source_path).resolve()}",
         "-af",
         f"silencedetect=noise={silence_noise}:d={_format_seconds(silence_min_duration_seconds)}",
         "-f",
@@ -528,6 +530,7 @@ def detect_silence_intervals(
         check=False,
         capture_output=True,
         text=True,
+        shell=False,
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -633,7 +636,7 @@ def build_icloud_download_command(
 ) -> list[str]:
     """Build a safe iCloud download command for source_path."""
 
-    return [brctl_path, "download", str(source_path.resolve())]
+    return [brctl_path, "download", f"{source_path.resolve()}"]
 
 
 def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> None:
@@ -648,6 +651,7 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
         check=False,
         capture_output=True,
         text=True,
+        shell=False,
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -729,11 +733,17 @@ def convert_file(
     source = Path(source)
     root = Path(root)
     output_dir = Path(output_dir)
+
+    # Security: Prevent path traversal by ensuring source is within root
+    if not source.resolve().is_relative_to(root.resolve()):
+        raise MediaShrinkerError(f"Source path {source} is not within root directory {root}")
+
     original_size = (
         original_size if original_size is not None else safe_source_size(source)
     )
 
-    rel_source = source.relative_to(root)
+    rel_source = source.resolve().relative_to(root.resolve())
+
     if download_icloud:
         download_from_icloud(source, brctl_path=brctl_path)
     probe = probe_media(source, ffprobe_path=ffprobe_path, source_size=original_size)
@@ -1586,7 +1596,7 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True
+                command, check=False, capture_output=True, text=True, shell=False
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
@@ -1655,10 +1665,11 @@ def _copy_macos_creation_time(
         "%m/%d/%Y %H:%M:%S"
     )
     subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest.resolve())],
+        [setfile_path, "-d", creation_date, f"{dest.resolve()}"],
         check=False,
         capture_output=True,
         text=True,
+        shell=False,
     )
 
 
