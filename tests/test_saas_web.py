@@ -307,5 +307,12 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('onclick="setTargetBytes(1073741824)"', html)
         self.assertIn('function setTargetBytes(bytes)', html)
 
+        # Verify active states UX
+        self.assertIn('data-bytes="26214400"', html)
+        self.assertIn('aria-pressed="false"', html)
+        self.assertIn('.preset-btn.active', html)
+        self.assertIn('btn.setAttribute(\'aria-pressed\', \'true\')', html)
+        self.assertIn('DOMContentLoaded', html)
+
 if __name__ == '__main__':
     unittest.main()
