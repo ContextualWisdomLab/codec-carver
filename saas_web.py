@@ -91,6 +91,7 @@ HTML_TEMPLATE = """
         .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
         .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
+        .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; }
     </style>
 </head>
 <body>
@@ -109,10 +110,10 @@ HTML_TEMPLATE = """
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="preset_buttons_container" class="preset-container">
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)">25 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)">100 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)">500 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)">1 GiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)" data-value="26214400" aria-pressed="false">25 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)" data-value="104857600" aria-pressed="false">100 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)" data-value="524288000" aria-pressed="false">500 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)" data-value="1073741824" aria-pressed="false">1 GiB</button>
                 </div>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
@@ -171,6 +172,14 @@ HTML_TEMPLATE = """
                 } else {
                     preview.innerText = formatBinaryBytes(val);
                 }
+
+                document.querySelectorAll('.preset-btn').forEach(btn => {
+                    if (btn.getAttribute('data-value') === this.value) {
+                        btn.setAttribute('aria-pressed', 'true');
+                    } else {
+                        btn.setAttribute('aria-pressed', 'false');
+                    }
+                });
             });
 
             document.getElementById('shrink-form').addEventListener('submit', function() {
