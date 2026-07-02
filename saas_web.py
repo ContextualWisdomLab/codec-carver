@@ -157,6 +157,10 @@ HTML_TEMPLATE = """
                 preview.innerText = 'Selected file size: ' + text;
             }
 
+            const presetBtns = Array.from(document.getElementById('preset_buttons_container').querySelectorAll('.preset-btn')).map(btn => {
+                return { el: btn, bytes: parseInt(btn.getAttribute('data-bytes'), 10) };
+            });
+
             document.getElementById('target_bytes').addEventListener('input', function() {
                 const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
@@ -173,16 +177,15 @@ HTML_TEMPLATE = """
                     preview.innerText = formatBinaryBytes(val);
                 }
 
-                document.querySelectorAll('.preset-btn').forEach(btn => {
-                    const btnBytes = parseInt(btn.getAttribute('data-bytes'), 10);
-                    if (!isNaN(btnBytes)) {
-                        btn.setAttribute('aria-pressed', btnBytes === val ? 'true' : 'false');
+                presetBtns.forEach(item => {
+                    if (!isNaN(item.bytes)) {
+                        item.el.setAttribute('aria-pressed', item.bytes === val ? 'true' : 'false');
                     }
                 });
             });
 
             window.addEventListener('DOMContentLoaded', () => {
-                document.getElementById('target_bytes').dispatchEvent(new Event('input'));
+                document.getElementById('target_bytes').dispatchEvent(new Event('input', { bubbles: true }));
             });
 
             document.getElementById('shrink-form').addEventListener('submit', function() {
