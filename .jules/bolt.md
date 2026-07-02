@@ -60,3 +60,6 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+## 2024-07-02 - FFmpeg log processing memory exhaustion
+**Learning:** `stderr.splitlines()` on huge ffmpeg string outputs can consume extreme amounts of memory (O(N)), leading to high garbage collection overhead and potential OOMs in CLI tools.
+**Action:** Use `re.finditer` to scan through the massive strings sequentially without materializing large line arrays in memory.
