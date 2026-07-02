@@ -1678,7 +1678,7 @@ def _copy_macos_creation_time(
             text=True,
             timeout=60.0,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired:  # pragma: no cover
         pass
 
 

@@ -1,3 +1,4 @@
+import subprocess
 import json
 import os
 import tempfile
@@ -1914,3 +1915,34 @@ class FastPathTests(unittest.TestCase):
                 with patch("media_shrinker._copy_macos_creation_time"):
                     with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
+
+    @patch("media_shrinker.subprocess.run")
+    def test_subprocess_timeout_expired_handled(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=60.0)
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker.probe_media("dummy.mp4")
+
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=3600.0)
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker.detect_silence_intervals("dummy.mp4")
+
+        with patch("media_shrinker.shutil.which", return_value="brctl"):
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd=["brctl"], timeout=3600.0)
+            with self.assertRaises(media_shrinker.MediaShrinkerError):
+                media_shrinker.download_from_icloud(Path("dummy.mp4"), brctl_path="brctl")
+
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["SetFile"], timeout=60.0)
+        # Should not raise
+        media_shrinker._copy_macos_creation_time(os.stat_result((1, 2, 3, 4, 5, 6, 7, 8, 9, 10)), Path("dest.mp4"), "SetFile")
+
+    @patch("media_shrinker.subprocess.run")
+    def test_execute_plan_timeout_expired(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=3600.0)
+        plan = media_shrinker.ConversionPlan(
+            strategy="test",
+            input_path=Path("input.mp4"),
+            output_path=Path("output.mp4"),
+            ffmpeg_args=["-i", "input.mp4", "output.mp4"]
+        )
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker._execute_plan(plan, Path("input.mp4"), Path("output.mp4"), ffmpeg_path="ffmpeg", overwrite=True)
