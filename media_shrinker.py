@@ -463,7 +463,7 @@ def probe_media(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path),
+        str(Path(source_path).resolve()),
     ]
     completed = subprocess.run(
         command, check=False, capture_output=True, text=True, shell=False
@@ -502,7 +502,7 @@ def build_silencedetect_command(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path),
+        str(Path(source_path).resolve()),
         "-af",
         f"silencedetect=noise={silence_noise}:d={_format_seconds(silence_min_duration_seconds)}",
         "-f",
@@ -1118,6 +1118,30 @@ def write_report(results: Iterable[ConversionResult], report_path: Path) -> None
     )
 
 
+def _normalize_argv(argv: list[str] | None) -> list[str] | None:
+    """Normalize option values that older argparse versions treat as options."""
+
+    if argv is None:
+        return None
+
+    normalized: list[str] = []
+    iterator = iter(argv)
+    for arg in iterator:
+        if arg == "--silence-noise":
+            try:
+                value = next(iterator)
+            except StopIteration:
+                normalized.append(arg)
+                break
+            if value.startswith("-"):
+                normalized.append(f"{arg}={value}")
+            else:
+                normalized.extend((arg, value))
+            continue
+        normalized.append(arg)
+    return normalized
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
 
@@ -1223,7 +1247,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow overwriting generated output paths",
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(_normalize_argv(argv))
 
 
 def _execute_conversions(
@@ -1241,6 +1265,7 @@ def _execute_conversions(
     protected_sources = [c[0] for c in candidates]
 
     def process_candidate(candidate_tuple: tuple[Path, int]) -> list[ConversionResult]:
+        """Convert one queued candidate and return a failure result instead of aborting the batch."""
         candidate, size = candidate_tuple
         try:
             return convert_file(
@@ -1661,5 +1686,5 @@ def _display_path(root: Path, path: Path) -> Path:
     return path.relative_to(root) if path.is_relative_to(root) else path
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())

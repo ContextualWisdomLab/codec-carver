@@ -1,3 +1,5 @@
+"""FastAPI upload UI for shrinking one media file through Codec Carver."""
+
 import tempfile
 import logging
 import shutil
@@ -12,11 +14,15 @@ MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
 
 
 class RequestTooLarge(Exception):
+    """Raised when streamed request bytes exceed the accepted upload envelope."""
+
     pass
 
 
 @app.middleware("http")
 async def limit_request_size(request: Request, call_next):
+    """Reject declared or streamed request bodies above the service limit."""
+
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
@@ -32,6 +38,8 @@ async def limit_request_size(request: Request, call_next):
     receive = request._receive
 
     async def limited_receive():
+        """Count streamed request bytes before handing them to FastAPI."""
+
         nonlocal received
         message = await receive()
         if message.get("type") == "http.request":
@@ -48,6 +56,8 @@ async def limit_request_size(request: Request, call_next):
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    """Attach conservative browser security headers to every response."""
+
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -68,16 +78,19 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
         .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
-        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover:not(:disabled) { background-color: #0056b3; }
+        button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover:not(:disabled) { background-color: #004085; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
-        button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
+        button:focus-visible, input:focus-visible { outline: 2px solid #004085; outline-offset: 2px; }
         .required-star { color: #dc3545; }
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
         @keyframes spinner-border { to { transform: rotate(360deg); } }
         .box { transition: background-color 0.2s, border-color 0.2s; }
-        .box.dragover { background-color: #f8f9fa; border-color: #007bff; border-style: dashed; }
+        .box.dragover { background-color: #f8f9fa; border-color: #0056b3; border-style: dashed; }
+        .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
+        .preset-btn:hover { background-color: #dde2e6; color: #212529; }
     </style>
 </head>
 <body>
@@ -88,13 +101,19 @@ HTML_TEMPLATE = """
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="updateFileSizePreview(this)">
                 <br><span id="file_help" class="help-text">Select an audio or video file to shrink, or drag and drop it here.</span>
-                <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #17a2b8;"></span>
+                <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview preset_buttons_container" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
-                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #28a745;">1.86 GiB</span>
+                <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
+                <div id="preset_buttons_container" class="preset-container">
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)">25 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)">100 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)">500 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)">1 GiB</button>
+                </div>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
@@ -110,12 +129,18 @@ HTML_TEMPLATE = """
                 }
                 return unit === 0 ? size + ' ' + units[unit] : size.toFixed(2) + ' ' + units[unit];
             }
+            function setTargetBytes(bytes) {
+                const input = document.getElementById('target_bytes');
+                input.value = bytes;
+                input.dispatchEvent(new Event('input'));
+            }
+
             function updateFileSizePreview(input) {
                 const file = input.files[0];
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
-                preview.style.color = '#17a2b8';
+                preview.style.color = '#0f6674';
                 if (!file) {
                     preview.innerText = '';
                     return;
@@ -136,7 +161,7 @@ HTML_TEMPLATE = """
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
-                preview.style.color = '#28a745';
+                preview.style.color = '#1e7e34';
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
@@ -195,6 +220,8 @@ def cleanup_temp_dir(temp_dir_path: Path):
 
 @app.get("/", response_class=HTMLResponse)
 async def get_ui():
+    """Return the single-page upload form."""
+
     return HTML_TEMPLATE
 
 
@@ -204,6 +231,8 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
+    """Persist an uploaded media file, shrink it, and return the generated file."""
+
     if target_bytes <= 0:
         return {"error": "Invalid target_bytes value. Must be greater than 0."}
 
@@ -274,6 +303,6 @@ def shrink_media(
         logger.exception("Media processing failed")
         return {"error": "Upload processing failed"}
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
