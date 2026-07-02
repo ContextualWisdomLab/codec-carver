@@ -193,7 +193,7 @@ def find_candidates(
     """
 
     root = Path(root)
-    excluded = tuple(Path(item).resolve() for item in exclude_paths)
+    excluded = tuple(Path(os.path.realpath(item)) for item in exclude_paths)
     excluded_prefixes = tuple(prefix.casefold() for prefix in exclude_dir_prefixes)
     candidates: list[tuple[Path, int]] = []
 
@@ -755,7 +755,7 @@ def convert_file(
 
     resolved_sources = resolved_protected_sources
     if resolved_sources is None:
-        resolved_sources = frozenset(Path(item).resolve() for item in protected_sources)
+        resolved_sources = frozenset(Path(os.path.realpath(item)) for item in protected_sources)
 
     return [
         _convert_segment(
@@ -1257,7 +1257,7 @@ def _execute_conversions(
     workers = choose_worker_count(args.workers)
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
 
-    resolved_candidates = frozenset(Path(item[0]).resolve() for item in candidates)
+    resolved_candidates = frozenset(Path(os.path.realpath(item[0])) for item in candidates)
     protected_sources = [c[0] for c in candidates]
 
     def process_candidate(candidate_tuple: tuple[Path, int]) -> list[ConversionResult]:
@@ -1413,7 +1413,7 @@ def _ensure_not_protected_source_path(
     protected_sources: frozenset[Path], output: Path
 ) -> None:
     """Raise MediaShrinkerError if output would overwrite a protected source."""
-    resolved_output = output.resolve()
+    resolved_output = Path(os.path.realpath(output))
     if resolved_output in protected_sources:
         raise MediaShrinkerError(
             f"Refusing to use protected source path as generated output: {output}"
@@ -1609,7 +1609,7 @@ def _execute_plan(
 def _ensure_not_source_path(source: Path, output: Path) -> None:
     """Reject generated paths that would overwrite or delete the source file."""
 
-    if source.resolve() == output.resolve():
+    if os.path.realpath(source) == os.path.realpath(output):
         raise MediaShrinkerError(
             f"Refusing to use source path as generated output: {output}"
         )

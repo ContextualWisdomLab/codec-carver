@@ -60,3 +60,6 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+## 2024-07-02 - [Avoid pathlib.Path.resolve() in performance critical paths]
+**Learning:** `pathlib.Path.resolve()` is significantly slower than `os.path.realpath()` because it instantiates a new `Path` object and resolves symlinks explicitly. In tight loops or batch processing involving thousands of files, this overhead is noticeable.
+**Action:** Use `os.path.realpath(path_str)` directly instead of `pathlib.Path(path_str).resolve()` when performance is a priority and you only need the resolved path string. Convert to a `Path` object only when necessary.
