@@ -46,3 +46,6 @@
 ## 2024-06-30 - Quick Preset Buttons for Raw Inputs
 **Learning:** Large raw byte inputs create high cognitive load and increase magnitude errors. Providing accessible quick preset buttons allows users to quickly select common values with confidence, reducing errors and reliance on manual typing.
 **Action:** Add quick preset buttons for common values near raw inputs (especially bytes), ensuring they are accessible via keyboard and properly associated with `aria-describedby`.
+## 2024-07-03 - Added active visual state to preset buttons and invalid outline to form fields
+**Learning:** Adding preset buttons is helpful, but if they lack visual feedback on which one is active, it causes confusion. Additionally, when a custom invalid state is implemented in JS, we need to explicitly style the `[aria-invalid="true"]` attribute so users get immediate visual cues matching the screen reader experience.
+**Action:** Always dynamically toggle the `aria-pressed` attribute in tandem with JS validation, and include corresponding CSS rules (e.g., `input[aria-invalid="true"] { outline: 2px solid #dc3545; }` and `.preset-btn[aria-pressed="true"]`) to provide immediate, distinct visual feedback to all users.
