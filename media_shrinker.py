@@ -546,7 +546,13 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
 
     # Fast path: Use finditer to avoid materializing large arrays with splitlines()
     # when ffmpeg outputs megabytes of log lines.
+    last_newline_idx = -2
     for match in SILENCE_RE.finditer(stderr):
+        line_start_idx = stderr.rfind('\n', 0, match.start())
+        if line_start_idx == last_newline_idx:
+            continue
+        last_newline_idx = line_start_idx
+
         kind, value_str = match.groups()
         value = float(value_str)
         if kind == "start":

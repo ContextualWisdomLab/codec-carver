@@ -1914,3 +1914,13 @@ class FastPathTests(unittest.TestCase):
                 with patch("media_shrinker._copy_macos_creation_time"):
                     with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
+
+    def test_parse_silencedetect_multi_event_line(self):
+        # The reviewer noted that old code with splitlines() and `continue` would skip
+        # a subsequent event on the *same line* if it matched the first regex.
+        # Ensure our new regex implementation handles that edge case correctly.
+        stderr = "silence_start: 1.0 silence_end: 2.0\nsilence_end: 3.0\n"
+        intervals = media_shrinker.parse_silencedetect_intervals(stderr)
+        self.assertEqual(len(intervals), 1)
+        self.assertEqual(intervals[0].start_seconds, 1.0)
+        self.assertEqual(intervals[0].end_seconds, 3.0)
