@@ -60,3 +60,7 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+
+## 2024-07-03 - [Handling FFmpeg logs with Carriage Returns]
+**Learning:** `ffmpeg` outputs progress lines using carriage returns (`\r`) rather than newlines (`\n`). While `splitlines()` handles this, it causes massive memory allocation on multi-megabyte logs. Manually searching for `\n` to slice lines causes severe bugs because a single "line" between two `\n` chars can contain hundreds of `\r`-separated progress updates.
+**Action:** Use `re.finditer()` directly on the `stderr` string. It completely avoids the large array allocation of `splitlines()` while robustly finding pattern matches regardless of how `\n` or `\r` are interspersed in the buffer, providing a safe and readable speedup.

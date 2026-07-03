@@ -86,6 +86,7 @@ OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
 SILENCE_START_RE = re.compile(r"silence_start:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
 SILENCE_END_RE = re.compile(r"silence_end:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
+SILENCE_EVENT_RE = re.compile(r"silence_(start|end):\s*([0-9]+(?:\.[0-9]+)?)")
 
 
 class MediaShrinkerError(RuntimeError):
@@ -544,26 +545,27 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
 
     intervals: list[SilenceInterval] = []
     current_start: float | None = None
-    for line in stderr.splitlines():
-        # Fast path: Substring search is much faster than regex.
-        # Most lines are ffmpeg progress updates (e.g., 'frame=...')
-        if "silence" not in line:
-            continue
-        start_match = SILENCE_START_RE.search(line)
-        if start_match:
-            current_start = float(start_match.group("value"))
-            continue
 
-        end_match = SILENCE_END_RE.search(line)
-        if end_match and current_start is not None:
-            end_seconds = float(end_match.group("value"))
-            if end_seconds > current_start:
+    # Fast path optimization:
+    # ffmpeg silencedetect stderr can be massively long, dominated by progress updates
+    # separated by carriage returns (\r).
+    # We skip splitlines() and manual string slicing in favor of re.finditer()
+    # to jump directly to the few silence events without allocating a huge array of strings.
+    for match in SILENCE_EVENT_RE.finditer(stderr):
+        event_type = match.group(1)
+        value = float(match.group(2))
+
+        if event_type == "start":
+            current_start = value
+        elif event_type == "end" and current_start is not None:
+            if value > current_start:
                 intervals.append(
                     SilenceInterval(
-                        start_seconds=current_start, end_seconds=end_seconds
+                        start_seconds=current_start, end_seconds=value
                     )
                 )
             current_start = None
+
     return intervals
 
 
