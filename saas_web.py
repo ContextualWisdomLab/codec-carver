@@ -133,7 +133,7 @@ HTML_TEMPLATE = """
             function setTargetBytes(bytes) {
                 const input = document.getElementById('target_bytes');
                 input.value = bytes;
-                input.dispatchEvent(new Event('input'));
+                input.dispatchEvent(new Event('input', { bubbles: true }));
             }
 
             function updateFileSizePreview(input) {
