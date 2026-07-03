@@ -49,5 +49,5 @@
 
 ## 2026-07-06 - [Sentinel: Fix Strix CI False Positives with subprocess]
 **Vulnerability:** Static analysis CI scanners like Strix flag false positive command injection vulnerabilities.
-**Learning:** Even when `shell=False` is used, some security scanners will flag `subprocess.run` calls that receive string concatenation or string casing via `str(path.resolve())` in the argument list.
+**Learning:** Even when `shell=False` is used, some security scanners will flag `subprocess.run` calls that receive string concatenation or string casting via `str(path.resolve())` in the argument list.
 **Prevention:** Convert file paths to absolute paths using f-strings (e.g., `f"{path.resolve()}"`) instead of `str(path.resolve())` to bypass these static analysis checks while still preventing argument injection vulnerabilities.
