@@ -110,10 +110,10 @@ HTML_TEMPLATE = """
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="preset_buttons_container" class="preset-container" role="group" aria-label="Target size presets">
-                    <button type="button" class="preset-btn" data-bytes="26214400" aria-pressed="false" onclick="setTargetBytes(26214400)">25 MiB</button>
-                    <button type="button" class="preset-btn" data-bytes="104857600" aria-pressed="false" onclick="setTargetBytes(104857600)">100 MiB</button>
-                    <button type="button" class="preset-btn" data-bytes="524288000" aria-pressed="false" onclick="setTargetBytes(524288000)">500 MiB</button>
-                    <button type="button" class="preset-btn" data-bytes="1073741824" aria-pressed="false" onclick="setTargetBytes(1073741824)">1 GiB</button>
+                    <button type="button" class="preset-btn" data-bytes="26214400" aria-pressed="false" onclick="setTargetBytes(this.dataset.bytes)">25 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="104857600" aria-pressed="false" onclick="setTargetBytes(this.dataset.bytes)">100 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="524288000" aria-pressed="false" onclick="setTargetBytes(this.dataset.bytes)">500 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="1073741824" aria-pressed="false" onclick="setTargetBytes(this.dataset.bytes)">1 GiB</button>
                 </div>
             </div>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
@@ -164,7 +164,7 @@ HTML_TEMPLATE = """
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
 
-                const buttons = document.querySelectorAll('.preset-btn');
+                const buttons = document.getElementById('preset_buttons_container').querySelectorAll('.preset-btn');
                 buttons.forEach(btn => {
                     if (parseInt(btn.getAttribute('data-bytes'), 10) === val) {
                         btn.setAttribute('aria-pressed', 'true');
