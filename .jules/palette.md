@@ -1,3 +1,7 @@
+## 2024-07-03 - Button Groups and Excessive Verbosity
+**Learning:** Pointing `aria-describedby` to a container of interactive elements (like a group of buttons) causes screen readers to read the entire container's text upon focusing the input, resulting in extreme verbosity. Additionally, un-grouped related buttons without state indication confuse screen reader users about their context and active status.
+**Action:** Remove interactive element containers from `aria-describedby`. Instead, group related buttons using `role="group"` with an `aria-label` on the container, and use `aria-pressed` attributes on the buttons to clearly convey their active state.
+
 ## 2024-05-24 - CLI Arguments as UX
 **Learning:** In headless or CLI-only applications, the command-line help interface serves as the primary UI. Missing help strings and lack of default value visibility severely impacts developer/user experience and accessibility.
 **Action:** Always ensure `argparse` leverages `ArgumentDefaultsHelpFormatter` and that every argument has a descriptive `help` parameter to provide an intuitive "interface" for CLI tools.
