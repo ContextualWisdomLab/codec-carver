@@ -8,6 +8,7 @@ metadata on generated files.
 """
 
 import argparse
+import logging
 import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
@@ -87,6 +88,11 @@ OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
 SILENCE_START_RE = re.compile(r"silence_start:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
 SILENCE_END_RE = re.compile(r"silence_end:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
 
+
+PROBE_TIMEOUT_SECONDS = 60.0
+PROCESS_TIMEOUT_SECONDS = 3600.0
+
+logger = logging.getLogger(__name__)
 
 class MediaShrinkerError(RuntimeError):
     """Raised when a media file cannot be processed safely."""
@@ -466,9 +472,11 @@ def probe_media(
         str(Path(source_path).resolve()),
     ]
     try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=60.0)
+        completed = subprocess.run(
+            command, check=False, capture_output=True, text=True, shell=False, timeout=PROBE_TIMEOUT_SECONDS
+        )
     except subprocess.TimeoutExpired as exc:
-        raise MediaShrinkerError(f"ffprobe timed out for {source_path}") from exc
+        raise MediaShrinkerError(f"ffprobe exceeded {PROBE_TIMEOUT_SECONDS}s timeout for {source_path}") from exc
 
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -533,10 +541,11 @@ def detect_silence_intervals(
             check=False,
             capture_output=True,
             text=True,
-            timeout=3600.0,
+            shell=False,
+            timeout=PROCESS_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
-        raise MediaShrinkerError(f"silencedetect timed out for {source_path}") from exc
+        raise MediaShrinkerError(f"silencedetect exceeded {PROCESS_TIMEOUT_SECONDS}s timeout for {source_path}") from exc
 
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -658,10 +667,11 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
             check=False,
             capture_output=True,
             text=True,
-            timeout=3600.0,
+            shell=False,
+            timeout=PROCESS_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
-        raise MediaShrinkerError(f"iCloud download timed out for {source_path}") from exc
+        raise MediaShrinkerError(f"iCloud download exceeded {PROCESS_TIMEOUT_SECONDS}s timeout for {source_path}") from exc
 
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -1600,12 +1610,12 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, timeout=3600.0
+                command, check=False, capture_output=True, text=True, shell=False, timeout=PROCESS_TIMEOUT_SECONDS
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
         except subprocess.TimeoutExpired as exc:
-            raise MediaShrinkerError(f"ffmpeg timed out for {source}") from exc
+            raise MediaShrinkerError(f"ffmpeg exceeded {PROCESS_TIMEOUT_SECONDS}s timeout for {source}") from exc
 
         if completed.returncode != 0:
             raise MediaShrinkerError(
@@ -1676,10 +1686,11 @@ def _copy_macos_creation_time(
             check=False,
             capture_output=True,
             text=True,
-            timeout=60.0,
+            shell=False,
+            timeout=PROBE_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:  # pragma: no cover
-        pass
+        logger.warning(f"SetFile exceeded {PROBE_TIMEOUT_SECONDS}s timeout copying macOS timestamps for {dest}")
 
 
 def _format_result(root: Path, result: ConversionResult) -> str:
