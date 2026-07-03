@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from media_shrinker import build_silencedetect_command, MediaShrinkerError, probe_media
+from media_shrinker import build_silencedetect_command, MediaShrinkerError, probe_media, build_audio_plan, build_opus_plan, MediaProbe
 
 class SecurityTests(unittest.TestCase):
     def test_silence_noise_validation(self):
@@ -32,6 +32,26 @@ class SecurityTests(unittest.TestCase):
         command = mock_run.call_args.args[0]
         input_index = command.index("-i")
         self.assertEqual(command[input_index + 1], str(source_path.resolve()))
+
+    def test_build_audio_plan_uses_absolute_path_for_input(self):
+        source_path = Path("-test.wav")
+        probe = MediaProbe(has_video=False, audio_codec="flac", duration_seconds=10, size_bytes=100, audio_bit_rate=None, format_name="wav")
+        plan = build_audio_plan(source_path, probe, target_bytes=1000, output_dir=Path("/tmp"))
+
+        args = plan.ffmpeg_args
+        self.assertIn("-i", args)
+        input_index = args.index("-i")
+        self.assertEqual(args[input_index + 1], str(source_path.resolve()))
+
+    def test_build_opus_plan_uses_absolute_path_for_input(self):
+        source_path = Path("-test.wav")
+        probe = MediaProbe(has_video=False, audio_codec="flac", duration_seconds=10, size_bytes=100, audio_bit_rate=None, format_name="wav")
+        plan = build_opus_plan(source_path, probe, target_bytes=1000000000, output_dir=Path("/tmp"))
+
+        args = plan.ffmpeg_args
+        self.assertIn("-i", args)
+        input_index = args.index("-i")
+        self.assertEqual(args[input_index + 1], str(source_path.resolve()))
 
 if __name__ == "__main__":
     unittest.main()
