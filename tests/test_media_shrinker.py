@@ -1705,7 +1705,6 @@ if __name__ == "__main__":
 
 class FastPathTests(unittest.TestCase):
     def test_copy_extended_attributes_dummy(self) -> None:
-        import os
         from media_shrinker import _copy_extended_attributes
 
         # We need to hit lines 703-704
@@ -1720,7 +1719,6 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_macos_creation_time_dummy(self) -> None:
         from media_shrinker import _copy_macos_creation_time
-        import stat
 
         # Hit 1632
         class MockStat:
@@ -1747,7 +1745,6 @@ class FastPathTests(unittest.TestCase):
         self.assertIn("foo.txt", s)
 
     def test_copy_extended_attributes_dummy_success(self) -> None:
-        import os
         from media_shrinker import _copy_extended_attributes
 
         # Hit 703-704
@@ -1763,7 +1760,6 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_macos_creation_time_dummy_none(self) -> None:
         from media_shrinker import _copy_macos_creation_time
-        import stat
 
         # Hit 1632
         class MockStat:
@@ -1775,7 +1771,6 @@ class FastPathTests(unittest.TestCase):
             _copy_macos_creation_time(MockStat(), dest, "/bin/echo")
 
     def test_copy_extended_attributes_dummy_set_fail(self) -> None:
-        import os
         from media_shrinker import _copy_extended_attributes
 
         # Hit 703-704
@@ -1792,7 +1787,6 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_macos_creation_time_dummy_not_found(self) -> None:
         from media_shrinker import _copy_macos_creation_time
-        import stat
 
         # Hit 1632
         class MockStat:
@@ -1807,7 +1801,6 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_macos_creation_time_dummy_success(self) -> None:
         from media_shrinker import _copy_macos_creation_time
-        import stat
 
         # Hit 1632
         class MockStat:
@@ -1838,7 +1831,6 @@ class FastPathTests(unittest.TestCase):
                     preserve_file_attributes(src, dest)
 
     def test_copy_extended_attributes_dummy_success_branch(self) -> None:
-        import os
         from media_shrinker import _copy_extended_attributes
 
         # Hit 703-704
@@ -1856,7 +1848,6 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_extended_attributes_dummy_listxattr_missing(self) -> None:
         import builtins
-        import os
         from media_shrinker import _copy_extended_attributes
 
         # Hit early return inside _copy_extended_attributes when OS doesn't support it
@@ -1877,7 +1868,6 @@ class FastPathTests(unittest.TestCase):
 
     def test_preserve_file_attributes_chmod_error(self) -> None:
         from media_shrinker import preserve_file_attributes
-        import stat
 
         # Hit 703-704
         class MockStat:
@@ -1897,7 +1887,6 @@ class FastPathTests(unittest.TestCase):
 
     def test_preserve_file_attributes_with_setfile(self) -> None:
         from media_shrinker import preserve_file_attributes
-        import stat
 
         # Hit 703-704
         class MockStat:
