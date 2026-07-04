@@ -60,3 +60,6 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+## 2024-07-04 - [Optimize ffmpeg stderr parsing with re.finditer]
+**Learning:** Parsing massive ffmpeg log outputs (which frequently use carriage returns `\r` for progress updates) using `str.splitlines()` followed by multiple sequential string and regex checks per line is extremely inefficient. `splitlines()` causes massive memory allocations and string copying, creating an intermediate list of millions of lines just to find a few silence intervals.
+**Action:** When parsing large text streams or command outputs for sparse events, compile a unified regular expression and apply `re.finditer()` directly to the raw string. This pushes the search into the optimized C regex engine and completely bypasses the costly memory allocations of `splitlines()`.
