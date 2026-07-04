@@ -46,3 +46,6 @@
 ## 2024-06-30 - Quick Preset Buttons for Raw Inputs
 **Learning:** Large raw byte inputs create high cognitive load and increase magnitude errors. Providing accessible quick preset buttons allows users to quickly select common values with confidence, reducing errors and reliance on manual typing.
 **Action:** Add quick preset buttons for common values near raw inputs (especially bytes), ensuring they are accessible via keyboard and properly associated with `aria-describedby`.
+## 2024-07-04 - Active States for Preset Buttons
+**Learning:** Preset buttons for form inputs lack clear visual and accessibility states out-of-the-box, making it difficult for users to know if their selection is currently active, especially if they later edit the input field manually.
+**Action:** Always implement `aria-pressed` toggle states for preset buttons linked to form inputs, and provide a clear CSS visual active state (e.g., `[aria-pressed="true"]`) to complement it. Ensure the state is cleared when the user manually modifies the input.
