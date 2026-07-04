@@ -46,3 +46,7 @@
 ## 2024-06-30 - Quick Preset Buttons for Raw Inputs
 **Learning:** Large raw byte inputs create high cognitive load and increase magnitude errors. Providing accessible quick preset buttons allows users to quickly select common values with confidence, reducing errors and reliance on manual typing.
 **Action:** Add quick preset buttons for common values near raw inputs (especially bytes), ensuring they are accessible via keyboard and properly associated with `aria-describedby`.
+
+## 2024-07-04 - Semantic Button Groups and State
+**Learning:** Using `aria-describedby` to link an input to a container of buttons can cause excessive screen reader verbosity every time the input is focused. Additionally, independent preset buttons lacked semantic grouping and state feedback.
+**Action:** Group related preset buttons using `role="group"` and `aria-label` on the container. Avoid pointing `aria-describedby` to the container itself. Ensure buttons communicate their state dynamically via `aria-pressed` rather than relying solely on visual styling.
