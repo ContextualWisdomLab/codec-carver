@@ -923,9 +923,29 @@ def _execute_segment_conversion(
         plan = opus_plan
         output_size = first_result.stat().st_size
 
-    output_duration = _probe_output_duration(
-        first_result, ffprobe_path=ffprobe_path, output_size=output_size
-    )
+    try:
+        output_duration = _probe_output_duration(
+            first_result, ffprobe_path=ffprobe_path, output_size=output_size
+        )
+    except MediaShrinkerError as exc:
+        return _discard_invalid_generated_output(
+            source,
+            first_result,
+            {
+                "source_path": source,
+                "output_path": first_result,
+                "original_size_bytes": original_size,
+                "output_size_bytes": output_size,
+                "strategy": plan.strategy,
+                "segment_index": segment.index,
+                "segment_count": segment.total_segments,
+                "start_seconds": segment.start_seconds,
+                "duration_seconds": None,
+            },
+            status="duration_mismatch",
+            message=f"Generated output has no usable duration: {exc}",
+            protected_sources=resolved_protected_sources,
+        )
     preserve_file_attributes(source, first_result)
     common_fields = {
         "source_path": source,
