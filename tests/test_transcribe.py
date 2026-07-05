@@ -1,0 +1,123 @@
+"""Tests for the optional transcription sidecar and its conversion-pipeline seam.
+
+No real speech model is ever loaded here: the faster-whisper backend is either
+injected as a fake or forced unavailable by patching ``sys.modules``.
+"""
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import media_shrinker
+import transcribe
+from media_shrinker import (
+    ConversionResult,
+    _build_transcription_hook,
+    _run_post_process,
+)
+from transcribe import (
+    TranscriptResult,
+    TranscriptSegment,
+    TranscriptionUnavailableError,
+    transcribe_file,
+    transcribe_output,
+    write_sidecars,
+)
+
+
+def _fake_result() -> TranscriptResult:
+    return TranscriptResult(
+        text="hello world",
+        segments=[TranscriptSegment(start=0.0, end=1.5, text="hello world")],
+        language="en",
+    )
+
+
+class TranscribeModuleTests(unittest.TestCase):
+    def test_write_sidecars_creates_txt_and_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "recording.wav.flac"
+            audio.write_bytes(b"x")
+            txt, js = write_sidecars(_fake_result(), audio)
+            self.assertEqual(txt.name, "recording.wav.flac.txt")
+            self.assertEqual(js.name, "recording.wav.flac.json")
+            self.assertEqual(txt.read_text(encoding="utf-8").strip(), "hello world")
+            data = json.loads(js.read_text(encoding="utf-8"))
+            self.assertEqual(data["language"], "en")
+            self.assertEqual(data["segments"][0]["text"], "hello world")
+
+    def test_transcribe_file_backend_is_injectable(self) -> None:
+        result = transcribe_file("a.flac", backend=lambda path, model: _fake_result())
+        self.assertEqual(result.text, "hello world")
+
+    def test_transcribe_output_uses_injected_fn_and_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "clip.flac"
+            audio.write_bytes(b"x")
+            calls: dict = {}
+
+            def fake(path, *, model="base"):
+                calls["path"] = Path(path)
+                calls["model"] = model
+                return _fake_result()
+
+            txt, js = transcribe_output(audio, model="small", transcribe_fn=fake)
+            self.assertEqual(calls["model"], "small")
+            self.assertEqual(calls["path"], audio)
+            self.assertTrue(txt.exists() and js.exists())
+
+    def test_default_backend_raises_unavailable_when_missing(self) -> None:
+        # Force `import faster_whisper` to fail regardless of the environment.
+        with patch.dict(sys.modules, {"faster_whisper": None}):
+            with self.assertRaises(TranscriptionUnavailableError):
+                transcribe_file("a.flac")
+
+
+class PostProcessSeamTests(unittest.TestCase):
+    def _result(self, status: str, output_path) -> ConversionResult:
+        return ConversionResult(
+            source_path=Path("source.wav"),
+            output_path=output_path,
+            status=status,
+            original_size_bytes=1,
+        )
+
+    def test_run_post_process_only_for_converted_with_output(self) -> None:
+        seen: list = []
+        results = [
+            self._result("converted", Path("a.flac")),
+            self._result("failed", None),
+            self._result("converted", None),  # converted but no path -> skipped
+            self._result("skipped_existing", Path("b.flac")),  # not "converted"
+        ]
+        _run_post_process(results, lambda r: seen.append(r.output_path))
+        self.assertEqual(seen, [Path("a.flac")])
+
+    def test_run_post_process_none_is_noop(self) -> None:
+        _run_post_process([self._result("converted", Path("a.flac"))], None)
+
+    def test_build_hook_absent_without_flag(self) -> None:
+        args = media_shrinker.parse_args([tempfile.gettempdir()])
+        self.assertFalse(args.transcribe)
+        self.assertIsNone(_build_transcription_hook(args))
+
+    def test_build_hook_present_and_survives_missing_backend(self) -> None:
+        args = media_shrinker.parse_args([tempfile.gettempdir(), "--transcribe"])
+        hook = _build_transcription_hook(args)
+        self.assertIsNotNone(hook)
+        # With faster-whisper unavailable the hook must NOT raise (it prints a skip).
+        with patch.dict(sys.modules, {"faster_whisper": None}):
+            hook(self._result("converted", Path("out.flac")))
+
+    def test_transcribe_model_flag_parsed(self) -> None:
+        args = media_shrinker.parse_args(
+            [tempfile.gettempdir(), "--transcribe", "--transcribe-model", "tiny"]
+        )
+        self.assertEqual(args.transcribe_model, "tiny")
+
+
+if __name__ == "__main__":
+    unittest.main()
