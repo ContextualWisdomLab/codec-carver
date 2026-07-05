@@ -65,3 +65,21 @@ class TestMCPDriver(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MCPDriverValidationTests(unittest.TestCase):
+    """Trust-boundary input validation for the MCP shrink_media tool."""
+
+    def test_rejects_directory_source(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = shrink_media(temp_dir, temp_dir + "/out")
+        self.assertIn("is not a file", result)
+
+    def test_rejects_nonpositive_target_bytes(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "s.wav"
+            source.touch()
+            result = shrink_media(str(source), str(Path(temp_dir) / "out"), 0)
+        self.assertIn("target_bytes must be greater than 0", result)
