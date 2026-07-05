@@ -302,13 +302,17 @@ def calculate_audio_bitrate(
 
     fitting_bitrate = int((target_bytes * 8 * safety_margin) / duration_seconds)
     bitrate = min(fitting_bitrate, OPUS_MAX_BITRATE_BPS)
-    if source_bitrate_bps and source_bitrate_bps > 0:
-        bitrate = min(bitrate, source_bitrate_bps)
+    # The floor guards against targets too small to fit at a usable quality.
+    # It must be applied to the target-driven bitrate only: a source that is
+    # already below the floor (e.g. a 12 kbps voice recording) still fits the
+    # target and should be transcoded at its own bitrate, not rejected.
     if bitrate < OPUS_MIN_REASONABLE_BITRATE_BPS:
         raise MediaShrinkerError(
             f"Target size requires {bitrate} bps, below the safe floor of "
             f"{OPUS_MIN_REASONABLE_BITRATE_BPS} bps"
         )
+    if source_bitrate_bps and source_bitrate_bps > 0:
+        bitrate = min(bitrate, source_bitrate_bps)
     return bitrate
 
 

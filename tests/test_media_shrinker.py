@@ -342,6 +342,20 @@ class PlanningTests(unittest.TestCase):
 
         self.assertEqual(bitrate, 96_000)
 
+    def test_low_bitrate_source_that_fits_target_is_not_rejected(self) -> None:
+        # A source already encoded below the reasonable floor (e.g. a 12 kbps
+        # opus voice recording) fits a generous target with huge margin. The
+        # floor guard exists to reject targets too small to fit, not sources
+        # that are simply low bitrate, so this must return the source bitrate
+        # rather than raise.
+        bitrate = calculate_audio_bitrate(
+            duration_seconds=1_000.0,
+            target_bytes=1_900_000_000,
+            source_bitrate_bps=12_000,
+        )
+
+        self.assertEqual(bitrate, 12_000)
+
     def test_same_stem_sources_keep_unique_output_paths(self) -> None:
         wav_probe = MediaProbe(
             duration_seconds=60.0,
