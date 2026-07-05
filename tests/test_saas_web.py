@@ -457,3 +457,39 @@ class JobModelTests(unittest.TestCase):
         saas_web._cleanup_job("c")
         self.assertFalse(temp_dir.exists())
         self.assertNotIn("c", saas_web._JOBS)
+
+
+class UploadValidationTests(unittest.TestCase):
+    """Input hardening surfaced by the SAST review: target bound + content type."""
+
+    def test_shrink_rejects_oversized_target_bytes(self):
+        response = client.post(
+            "/shrink",
+            files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+            data={"target_bytes": saas_web.MAX_TARGET_BYTES + 1},
+        )
+        self.assertEqual(response.json(), {"error": "Invalid target_bytes value. Exceeds the maximum allowed size."})
+
+    def test_shrink_rejects_non_media_content_type(self):
+        response = client.post(
+            "/shrink",
+            files={"file": ("shell.php", io.BytesIO(b"<?php ?>"), "application/x-php")},
+            data={"target_bytes": 10000},
+        )
+        self.assertEqual(response.json(), {"error": "Unsupported content type; upload an audio or video file."})
+
+    def test_submit_rejects_non_media_content_type(self):
+        response = client.post(
+            "/jobs",
+            files={"file": ("shell.php", io.BytesIO(b"<?php ?>"), "application/x-php")},
+            data={"target_bytes": 10000},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_video_content_type_accepted_by_validator(self):
+        self.assertIsNone(
+            saas_web._validate_request(
+                SimpleNamespace(filename="clip.mp4", content_type="video/mp4"),
+                10000,
+            )
+        )
