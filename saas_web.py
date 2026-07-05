@@ -3,6 +3,7 @@
 import tempfile
 import logging
 import shutil
+import uuid
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -218,6 +219,40 @@ def cleanup_temp_dir(temp_dir_path: Path):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
+def _persist_upload(file: UploadFile) -> tuple[Path, Path, Path, Path]:
+    """Save an uploaded file into a fresh temp workspace.
+
+    Returns ``(temp_dir_path, input_dir, output_dir, source_path)``. Any
+    filesystem or size-limit failure raises after cleaning up its own partial
+    workspace, so callers can map it to an error response.
+    """
+    temp_dir_path: Path | None = None
+    try:
+        temp_dir_path = Path(tempfile.mkdtemp(prefix="codec_carver_"))
+        input_dir = temp_dir_path / "input"
+        output_dir = temp_dir_path / "output"
+        input_dir.mkdir()
+        output_dir.mkdir()
+
+        safe_filename = Path(file.filename).name
+        if not safe_filename or safe_filename in (".", ".."):
+            safe_filename = "upload.tmp"
+
+        source_path = input_dir / safe_filename
+        bytes_written = 0
+        with open(source_path, "wb") as f:
+            while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
+                bytes_written += len(chunk)
+                if bytes_written > MAX_UPLOAD_BYTES:
+                    raise ValueError("File exceeds maximum allowed upload size")
+                f.write(chunk)
+        return temp_dir_path, input_dir, output_dir, source_path
+    except Exception:
+        if temp_dir_path is not None:
+            cleanup_temp_dir(temp_dir_path)
+        raise
+
+
 @app.get("/", response_class=HTMLResponse)
 async def get_ui():
     """Return the single-page upload form."""
@@ -239,36 +274,9 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
-    # Create a temporary directory that will hold the input and output
     try:
-        temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
-        temp_dir_path = Path(temp_dir)
+        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file)
     except Exception:
-        logger.exception("Failed to create upload workspace")
-        return {"error": "Upload processing failed"}
-
-    try:
-        # Setup paths
-        input_dir = temp_dir_path / "input"
-        output_dir = temp_dir_path / "output"
-        input_dir.mkdir()
-        output_dir.mkdir()
-
-        # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
-
-        source_path = input_dir / safe_filename
-        bytes_written = 0
-        with open(source_path, "wb") as f:
-            while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
-                bytes_written += len(chunk)
-                if bytes_written > MAX_UPLOAD_BYTES:
-                    raise ValueError("File exceeds maximum allowed upload size")
-                f.write(chunk)
-    except Exception:
-        cleanup_temp_dir(temp_dir_path)
         logger.exception("Failed to prepare uploaded media")
         return {"error": "Upload processing failed"}
 
@@ -302,6 +310,125 @@ def shrink_media(
         cleanup_temp_dir(temp_dir_path)
         logger.exception("Media processing failed")
         return {"error": "Upload processing failed"}
+
+# --- Async job model --------------------------------------------------------
+# The synchronous /shrink endpoint blocks for the whole conversion, which is
+# impractical for long recordings. These endpoints let a client submit a job,
+# poll its status, and download the result when ready (Upload -> Processing ->
+# Result). The store is in-memory and per-process; swap for a shared store to
+# scale horizontally.
+_JOBS: dict[str, dict] = {}
+
+
+def _run_job(
+    job_id: str,
+    source_path: Path,
+    input_dir: Path,
+    output_dir: Path,
+    target_bytes: int,
+    temp_dir_path: Path,
+) -> None:
+    """Background worker: shrink one uploaded file and record the outcome."""
+    _JOBS[job_id]["status"] = "processing"
+    try:
+        results = media_shrinker.convert_file(
+            source=source_path,
+            root=input_dir,
+            output_dir=output_dir,
+            target_bytes=target_bytes,
+        )
+    except Exception:
+        logger.exception("Job processing failed")
+        _JOBS[job_id].update(status="failed", error="Processing failed")
+        cleanup_temp_dir(temp_dir_path)
+        return
+
+    if results and results[0].output_path and results[0].output_path.exists():
+        output_path = results[0].output_path
+        _JOBS[job_id].update(
+            status="done",
+            output_path=str(output_path),
+            output_name=output_path.name,
+        )
+    else:
+        logger.error("Job produced no output: %r", results)
+        _JOBS[job_id].update(
+            status="failed", error="Processing failed or no output generated"
+        )
+        cleanup_temp_dir(temp_dir_path)
+
+
+@app.post("/jobs")
+def submit_job(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    target_bytes: int = Form(2_000_000_000),
+):
+    """Enqueue a shrink job and return its id for asynchronous status polling."""
+    if target_bytes <= 0:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid target_bytes value. Must be greater than 0."},
+        )
+    if not file.filename:
+        return JSONResponse(
+            status_code=400, content={"error": "No file uploaded or filename missing"}
+        )
+
+    try:
+        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file)
+    except Exception:
+        logger.exception("Failed to prepare uploaded media")
+        return JSONResponse(
+            status_code=500, content={"error": "Upload processing failed"}
+        )
+
+    job_id = uuid.uuid4().hex
+    _JOBS[job_id] = {"status": "queued", "temp_dir": str(temp_dir_path)}
+    background_tasks.add_task(
+        _run_job, job_id, source_path, input_dir, output_dir, target_bytes, temp_dir_path
+    )
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/jobs/{job_id}")
+def job_status(job_id: str):
+    """Return the current status of a previously submitted job."""
+    job = _JOBS.get(job_id)
+    if job is None:
+        return JSONResponse(status_code=404, content={"error": "Unknown job"})
+    return {"job_id": job_id, "status": job["status"], "error": job.get("error")}
+
+
+def _cleanup_job(job_id: str) -> None:
+    """Forget a job and remove its temporary workspace."""
+    job = _JOBS.pop(job_id, None)
+    if job is not None and job.get("temp_dir"):
+        cleanup_temp_dir(Path(job["temp_dir"]))
+
+
+@app.get("/jobs/{job_id}/result")
+def job_result(job_id: str, background_tasks: BackgroundTasks):
+    """Download a finished job's output, then clean up its workspace."""
+    job = _JOBS.get(job_id)
+    if job is None:
+        return JSONResponse(status_code=404, content={"error": "Unknown job"})
+    if job["status"] != "done":
+        return JSONResponse(
+            status_code=409, content={"error": f"Job is {job['status']}"}
+        )
+    output_path = Path(job["output_path"])
+    if not output_path.exists():
+        return JSONResponse(
+            status_code=410, content={"error": "Result no longer available"}
+        )
+    background_tasks.add_task(_cleanup_job, job_id)
+    return FileResponse(
+        path=output_path,
+        filename=job["output_name"],
+        media_type="application/octet-stream",
+    )
+
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn

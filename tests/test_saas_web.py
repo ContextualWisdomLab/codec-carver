@@ -309,3 +309,128 @@ class TestSaasWeb(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class JobModelTests(unittest.TestCase):
+    """Async job API: submit -> status -> result, plus all error paths."""
+
+    def setUp(self) -> None:
+        saas_web._JOBS.clear()
+
+    def tearDown(self) -> None:
+        for job in list(saas_web._JOBS.values()):
+            temp = job.get("temp_dir")
+            if temp:
+                saas_web.cleanup_temp_dir(Path(temp))
+        saas_web._JOBS.clear()
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_job_lifecycle_submit_status_result(self, mock_convert_file):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "out.flac"
+            output.write_bytes(b"audio-bytes")
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = output
+            mock_convert_file.return_value = [mock_result]
+
+            submit = client.post(
+                "/jobs",
+                files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+                data={"target_bytes": 10000},
+            )
+            self.assertEqual(submit.status_code, 200)
+            job_id = submit.json()["job_id"]
+            self.assertEqual(submit.json()["status"], "queued")
+
+            status = client.get(f"/jobs/{job_id}")
+            self.assertEqual(status.status_code, 200)
+            self.assertEqual(status.json()["status"], "done")
+
+            result = client.get(f"/jobs/{job_id}/result")
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(result.content, b"audio-bytes")
+
+    def test_submit_rejects_nonpositive_target(self):
+        response = client.post(
+            "/jobs",
+            files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+            data={"target_bytes": 0},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("greater than 0", response.json()["error"])
+
+    def test_submit_rejects_missing_filename(self):
+        response = saas_web.submit_job(
+            BackgroundTasks(),
+            file=SimpleNamespace(filename="", file=io.BytesIO(b"wav data")),
+            target_bytes=10000,
+        )
+        self.assertEqual(response.status_code, 400)
+
+    @patch("saas_web._persist_upload", side_effect=OSError("disk full"))
+    def test_submit_handles_persist_failure(self, _mock_persist):
+        response = saas_web.submit_job(
+            BackgroundTasks(),
+            file=SimpleNamespace(filename="in.wav", file=io.BytesIO(b"wav data")),
+            target_bytes=10000,
+        )
+        self.assertEqual(response.status_code, 500)
+
+    @patch("saas_web.media_shrinker.convert_file", side_effect=RuntimeError("boom"))
+    def test_run_job_records_failure_on_exception(self, _mock_convert):
+        submit = client.post(
+            "/jobs",
+            files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+            data={"target_bytes": 10000},
+        )
+        job_id = submit.json()["job_id"]
+        status = client.get(f"/jobs/{job_id}")
+        self.assertEqual(status.json()["status"], "failed")
+        self.assertEqual(status.json()["error"], "Processing failed")
+
+    @patch("saas_web.media_shrinker.convert_file", return_value=[])
+    def test_run_job_records_failure_on_empty_output(self, _mock_convert):
+        submit = client.post(
+            "/jobs",
+            files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+            data={"target_bytes": 10000},
+        )
+        job_id = submit.json()["job_id"]
+        status = client.get(f"/jobs/{job_id}")
+        self.assertEqual(status.json()["status"], "failed")
+        self.assertIn("no output", status.json()["error"])
+
+    def test_status_unknown_job_returns_404(self):
+        response = client.get("/jobs/does-not-exist")
+        self.assertEqual(response.status_code, 404)
+
+    def test_result_unknown_job_returns_404(self):
+        response = client.get("/jobs/does-not-exist/result")
+        self.assertEqual(response.status_code, 404)
+
+    def test_result_not_ready_returns_409(self):
+        saas_web._JOBS["pending"] = {"status": "processing", "temp_dir": ""}
+        response = client.get("/jobs/pending/result")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("processing", response.json()["error"])
+
+    def test_result_missing_file_returns_410(self):
+        saas_web._JOBS["gone"] = {
+            "status": "done",
+            "output_path": "/nonexistent/output.flac",
+            "output_name": "output.flac",
+            "temp_dir": "",
+        }
+        response = client.get("/jobs/gone/result")
+        self.assertEqual(response.status_code, 410)
+
+    def test_cleanup_job_removes_workspace(self):
+        import tempfile
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="codec_carver_"))
+        saas_web._JOBS["c"] = {"status": "done", "temp_dir": str(temp_dir)}
+        saas_web._cleanup_job("c")
+        self.assertFalse(temp_dir.exists())
+        self.assertNotIn("c", saas_web._JOBS)
