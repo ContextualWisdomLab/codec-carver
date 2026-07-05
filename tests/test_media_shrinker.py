@@ -1914,3 +1914,76 @@ class FastPathTests(unittest.TestCase):
                 with patch("media_shrinker._copy_macos_creation_time"):
                     with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
+
+
+class VideoAllowTests(unittest.TestCase):
+    """Opt-in audio-track extraction from video containers (--allow-video)."""
+
+    def _video_probe(self, audio_codec):
+        return MediaProbe(
+            duration_seconds=1800.0,
+            size_bytes=3_000_000_000,
+            audio_codec=audio_codec,
+            audio_bit_rate=192_000,
+            has_video=True,
+            format_name="mov,mp4,m4a,3gp,3g2,mj2",
+        )
+
+    def test_video_rejected_by_default(self) -> None:
+        probe = self._video_probe("aac")
+        with self.assertRaises(MediaShrinkerError) as cm:
+            build_audio_plan(
+                Path("zoom_meeting.mp4"),
+                probe,
+                target_bytes=1_900_000_000,
+                output_dir=Path("out"),
+            )
+        self.assertIn("contains video", str(cm.exception))
+
+    def test_video_with_audio_allowed_extracts_audio_track(self) -> None:
+        probe = self._video_probe("aac")
+        plan = build_audio_plan(
+            Path("zoom_meeting.mp4"),
+            probe,
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            allow_video=True,
+        )
+        # Audio-only extraction: video is dropped (-vn), output is audio.
+        self.assertIn("-vn", plan.ffmpeg_args)
+        self.assertTrue(str(plan.output_path).endswith(".opus"))
+
+    def test_video_lossless_audio_allowed_uses_flac(self) -> None:
+        probe = self._video_probe("flac")
+        plan = build_audio_plan(
+            Path("lecture.mov"),
+            probe,
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            allow_video=True,
+        )
+        self.assertEqual(plan.strategy, "flac-lossless")
+        self.assertIn("-vn", plan.ffmpeg_args)
+
+    def test_video_without_audio_rejected_even_when_allowed(self) -> None:
+        probe = self._video_probe(None)  # video container, no audio stream
+        with self.assertRaises(MediaShrinkerError) as cm:
+            build_audio_plan(
+                Path("silent_clip.mp4"),
+                probe,
+                target_bytes=1_900_000_000,
+                output_dir=Path("out"),
+                allow_video=True,
+            )
+        self.assertIn("no audio stream", str(cm.exception))
+
+    def test_parse_args_allow_video_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            off = media_shrinker.parse_args([tmp])
+            on = media_shrinker.parse_args([tmp, "--allow-video"])
+        self.assertFalse(off.allow_video)
+        self.assertTrue(on.allow_video)
+
+
+if __name__ == "__main__":
+    unittest.main()

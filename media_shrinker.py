@@ -321,12 +321,21 @@ def build_audio_plan(
     prefer_flac: bool = False,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    allow_video: bool = False,
 ) -> ConversionPlan:
-    """Build the preferred audio-only conversion plan for source_path."""
+    """Build the preferred audio-only conversion plan for source_path.
 
-    if probe.has_video:
+    When ``allow_video`` is False (the default) any file containing a video
+    stream is rejected, preserving the audio-only contract. When True, the
+    audio track is extracted from a video container (the ffmpeg plan already
+    drops video with ``-vn``); a video file with no audio stream is still
+    rejected below.
+    """
+
+    if probe.has_video and not allow_video:
         raise MediaShrinkerError(
-            f"{source_path} contains video; this tool is configured for audio preservation"
+            f"{source_path} contains video; this tool is configured for audio "
+            f"preservation (pass --allow-video to extract the audio track)"
         )
     if not probe.audio_codec:
         raise MediaShrinkerError(f"{source_path} has no audio stream")
@@ -727,6 +736,7 @@ def convert_file(
     protected_sources: Iterable[Path] = (),
     resolved_protected_sources: frozenset[Path] | None = None,
     original_size: int | None = None,
+    allow_video: bool = False,
 ) -> list[ConversionResult]:
     """Convert one file and return generated segment results without deleting the source."""
 
@@ -777,6 +787,7 @@ def convert_file(
             overwrite=overwrite,
             max_segment_duration_seconds=max_segment_duration_seconds,
             protected_sources=resolved_sources,
+            allow_video=allow_video,
         )
         for segment in segments
     ]
@@ -874,6 +885,7 @@ def _execute_segment_conversion(
     overwrite: bool,
     max_segment_duration_seconds: float,
     resolved_protected_sources: frozenset[Path],
+    allow_video: bool = False,
 ) -> ConversionResult:
     """Execute the conversion plan(s) for a single segment."""
     plan = build_audio_plan(
@@ -884,6 +896,7 @@ def _execute_segment_conversion(
         prefer_flac=prefer_flac,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        allow_video=allow_video,
     )
 
     final_output = _resolve_collision(plan.output_path, overwrite=overwrite)
@@ -994,6 +1007,7 @@ def _convert_segment(
     overwrite: bool,
     max_segment_duration_seconds: float,
     protected_sources: frozenset[Path] = frozenset(),
+    allow_video: bool = False,
 ) -> ConversionResult:
     """Convert one media segment fitting the target size limit."""
     # protected_sources is passed from convert_file where it is already fully resolved.
@@ -1043,6 +1057,7 @@ def _convert_segment(
         overwrite=overwrite,
         max_segment_duration_seconds=max_segment_duration_seconds,
         resolved_protected_sources=resolved_protected_sources,
+        allow_video=allow_video,
     )
 
 
@@ -1247,6 +1262,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow overwriting generated output paths",
     )
+    parser.add_argument(
+        "--allow-video",
+        action="store_true",
+        help=(
+            "Extract and shrink the audio track from video containers "
+            "(e.g. .mp4/.mov/.mkv Zoom/Teams/lecture recordings). By default "
+            "video files are rejected. Video files with no audio stream are "
+            "always rejected."
+        ),
+    )
     return parser.parse_args(_normalize_argv(argv))
 
 
@@ -1286,6 +1311,7 @@ def _execute_conversions(
                 protected_sources=protected_sources,
                 resolved_protected_sources=resolved_candidates,
                 original_size=size,
+                allow_video=args.allow_video,
             )
         except Exception as exc:  # noqa: BLE001 - batch processing records per-file failures.
             return [
