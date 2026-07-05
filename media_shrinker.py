@@ -1507,9 +1507,11 @@ def _parse_probe_payload(
         raise MediaShrinkerError(f"{source_path} has no audio stream")
 
     format_section = payload.get("format", {})
-    duration = _first_float(
-        audio_stream.get("duration"), format_section.get("duration")
-    )
+    # Prefer the stream duration, but a stream-level "0"/"0.000000" (reported by
+    # some containers) is unusable and must fall back to the format duration.
+    duration = _first_float(audio_stream.get("duration"))
+    if duration <= 0:
+        duration = _first_float(format_section.get("duration"))
     if duration <= 0:
         raise MediaShrinkerError(f"{source_path} has no usable duration")
 
