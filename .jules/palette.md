@@ -46,3 +46,7 @@
 ## 2024-06-30 - Quick Preset Buttons for Raw Inputs
 **Learning:** Large raw byte inputs create high cognitive load and increase magnitude errors. Providing accessible quick preset buttons allows users to quickly select common values with confidence, reducing errors and reliance on manual typing.
 **Action:** Add quick preset buttons for common values near raw inputs (especially bytes), ensuring they are accessible via keyboard and properly associated with `aria-describedby`.
+
+## 2024-11-20 - Accessible Toggle States for Preset Buttons
+**Learning:** Using `aria-describedby` to group preset buttons creates excessive screen reader verbosity when focusing the associated input field. Furthermore, inline `onclick` attributes are less maintainable, and missing semantic roles obscure the buttons' purpose.
+**Action:** Remove preset button containers from input `aria-describedby` attributes. Group preset buttons using `role="group"` and `aria-label`, manage toggle states with `aria-pressed`, and use event delegation via `data-value` attributes rather than inline `onclick` handlers for cleaner and more accessible HTML.
