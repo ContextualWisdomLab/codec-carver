@@ -417,8 +417,13 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
         return JSONResponse(
             status_code=409, content={"error": f"Job is {job['status']}"}
         )
-    output_path = Path(job["output_path"])
-    if not output_path.exists():
+    # Defense in depth: only ever serve a regular file that lives inside this
+    # job's own temp workspace. `job_id` is an opaque store key and is never
+    # used to build a path, but confining the served path makes traversal
+    # impossible even if the store were ever populated from untrusted data.
+    output_path = Path(job["output_path"]).resolve()
+    workspace = Path(job["temp_dir"]).resolve()
+    if not output_path.is_relative_to(workspace) or not output_path.is_file():
         return JSONResponse(
             status_code=410, content={"error": "Result no longer available"}
         )

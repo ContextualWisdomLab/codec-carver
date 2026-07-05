@@ -326,31 +326,54 @@ class JobModelTests(unittest.TestCase):
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_job_lifecycle_submit_status_result(self, mock_convert_file):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "out.flac"
+        def fake_convert(**kwargs):
+            # Write the output inside the job's real workspace (output_dir), as
+            # the engine does, so the served path passes the confinement check.
+            output = kwargs["output_dir"] / "out.flac"
             output.write_bytes(b"audio-bytes")
             mock_result = MagicMock(spec=ConversionResult)
             mock_result.output_path = output
-            mock_convert_file.return_value = [mock_result]
+            return [mock_result]
 
-            submit = client.post(
-                "/jobs",
-                files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
-                data={"target_bytes": 10000},
-            )
-            self.assertEqual(submit.status_code, 200)
-            job_id = submit.json()["job_id"]
-            self.assertEqual(submit.json()["status"], "queued")
+        mock_convert_file.side_effect = fake_convert
 
-            status = client.get(f"/jobs/{job_id}")
-            self.assertEqual(status.status_code, 200)
-            self.assertEqual(status.json()["status"], "done")
+        submit = client.post(
+            "/jobs",
+            files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+            data={"target_bytes": 10000},
+        )
+        self.assertEqual(submit.status_code, 200)
+        job_id = submit.json()["job_id"]
+        self.assertEqual(submit.json()["status"], "queued")
 
-            result = client.get(f"/jobs/{job_id}/result")
-            self.assertEqual(result.status_code, 200)
-            self.assertEqual(result.content, b"audio-bytes")
+        status = client.get(f"/jobs/{job_id}")
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()["status"], "done")
+
+        result = client.get(f"/jobs/{job_id}/result")
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.content, b"audio-bytes")
+
+    def test_result_outside_workspace_rejected(self):
+        # A "done" job whose output escaped its workspace must not be served.
+        import tempfile
+
+        workspace = Path(tempfile.mkdtemp(prefix="codec_carver_"))
+        outside_dir = Path(tempfile.mkdtemp())
+        escaped = outside_dir / "escaped.flac"
+        escaped.write_bytes(b"secret")
+        try:
+            saas_web._JOBS["escape"] = {
+                "status": "done",
+                "output_path": str(escaped),
+                "output_name": "escaped.flac",
+                "temp_dir": str(workspace),
+            }
+            response = client.get("/jobs/escape/result")
+            self.assertEqual(response.status_code, 410)
+        finally:
+            saas_web.cleanup_temp_dir(workspace)
+            saas_web.cleanup_temp_dir(outside_dir)
 
     def test_submit_rejects_nonpositive_target(self):
         response = client.post(
