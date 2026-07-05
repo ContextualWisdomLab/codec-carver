@@ -444,6 +444,31 @@ def build_opus_plan(
     )
 
 
+def _run_media_tool(
+    command: list[str], *, tool: str
+) -> "subprocess.CompletedProcess[str]":
+    """Run an ffmpeg/ffprobe command, mapping a missing binary to a clear error.
+
+    When the external tool is not installed or not on PATH, ``subprocess.run``
+    raises a bare ``FileNotFoundError`` whose message ("No such file or
+    directory: 'ffprobe'") gives the user no idea what to do. Translate it into
+    an actionable ``MediaShrinkerError`` that names the tool and how to install
+    it, while leaving nonzero-exit handling to each caller.
+    """
+
+    try:
+        return subprocess.run(
+            command, check=False, capture_output=True, text=True, shell=False
+        )
+    except FileNotFoundError as exc:
+        raise MediaShrinkerError(
+            f"{tool} not found: could not run '{command[0]}'. "
+            "Install ffmpeg (it provides both ffmpeg and ffprobe) and make sure "
+            "it is on your PATH — e.g. 'brew install ffmpeg' (macOS) or "
+            "'sudo apt install ffmpeg' (Debian/Ubuntu)."
+        ) from exc
+
+
 def probe_media(
     source_path: Path,
     *,
@@ -465,9 +490,7 @@ def probe_media(
         "-i",
         str(Path(source_path).resolve()),
     ]
-    completed = subprocess.run(
-        command, check=False, capture_output=True, text=True, shell=False
-    )
+    completed = _run_media_tool(command, tool="ffprobe")
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -520,17 +543,14 @@ def detect_silence_intervals(
 ) -> list[SilenceInterval]:
     """Run ffmpeg silencedetect and return paired silence intervals."""
 
-    completed = subprocess.run(
+    completed = _run_media_tool(
         build_silencedetect_command(
             source_path,
             ffmpeg_path=ffmpeg_path,
             silence_noise=silence_noise,
             silence_min_duration_seconds=silence_min_duration_seconds,
         ),
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
+        tool="ffmpeg",
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -1588,12 +1608,7 @@ def _execute_plan(
             output_path=temp_output,
             overwrite=True,
         )
-        try:
-            completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, shell=False
-            )
-        except FileNotFoundError as exc:
-            raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
+        completed = _run_media_tool(command, tool="ffmpeg")
 
         if completed.returncode != 0:
             raise MediaShrinkerError(

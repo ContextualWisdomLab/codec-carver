@@ -217,6 +217,31 @@ class ProbeMediaTests(unittest.TestCase):
 
         self.assertIn("ffprobe returned invalid JSON for test.wav", str(cm.exception))
 
+    @patch("media_shrinker.subprocess.run", side_effect=FileNotFoundError)
+    def test_probe_media_raises_clear_error_when_ffprobe_missing(
+        self, _mock_run: MagicMock
+    ) -> None:
+        with self.assertRaises(MediaShrinkerError) as cm:
+            probe_media(Path("test.wav"), ffprobe_path="missing-ffprobe")
+
+        message = str(cm.exception)
+        self.assertIn("ffprobe not found", message)
+        self.assertIn("missing-ffprobe", message)
+        self.assertIn("Install ffmpeg", message)
+
+    @patch("media_shrinker.subprocess.run", side_effect=FileNotFoundError)
+    def test_detect_silence_intervals_raises_clear_error_when_ffmpeg_missing(
+        self, _mock_run: MagicMock
+    ) -> None:
+        with self.assertRaises(MediaShrinkerError) as cm:
+            media_shrinker.detect_silence_intervals(
+                Path("test.wav"), ffmpeg_path="missing-ffmpeg"
+            )
+
+        message = str(cm.exception)
+        self.assertIn("ffmpeg not found", message)
+        self.assertIn("Install ffmpeg", message)
+
     def test_parse_probe_payload_uses_known_source_size_without_stat(self) -> None:
         payload = {
             "streams": [
