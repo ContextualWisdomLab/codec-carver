@@ -112,6 +112,21 @@ class PostProcessSeamTests(unittest.TestCase):
         with patch.dict(sys.modules, {"faster_whisper": None}):
             hook(self._result("converted", Path("out.flac")))
 
+    def test_hook_success_reports_transcribed(self) -> None:
+        args = media_shrinker.parse_args([tempfile.gettempdir(), "--transcribe"])
+        hook = _build_transcription_hook(args)
+        with patch(
+            "transcribe.transcribe_output",
+            return_value=(Path("out.flac.txt"), Path("out.flac.json")),
+        ):
+            hook(self._result("converted", Path("out.flac")))  # must not raise
+
+    def test_hook_generic_failure_is_isolated(self) -> None:
+        args = media_shrinker.parse_args([tempfile.gettempdir(), "--transcribe"])
+        hook = _build_transcription_hook(args)
+        with patch("transcribe.transcribe_output", side_effect=ValueError("boom")):
+            hook(self._result("converted", Path("out.flac")))  # must not raise
+
     def test_transcribe_model_flag_parsed(self) -> None:
         args = media_shrinker.parse_args(
             [tempfile.gettempdir(), "--transcribe", "--transcribe-model", "tiny"]
