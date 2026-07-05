@@ -1686,7 +1686,7 @@ class CliTests(unittest.TestCase):
                     media_shrinker.preserve_file_attributes(source, dest)
                     mock_copy.assert_called_once()
 
-            with patch("media_shrinker.os.listxattr", side_effect=OSError):
+            with patch("media_shrinker.os.listxattr", side_effect=OSError, create=True):
                 media_shrinker._copy_extended_attributes(source, dest)
 
             # Test unsupported OS for extended attributes
@@ -1714,7 +1714,7 @@ class FastPathTests(unittest.TestCase):
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
 
-            with patch("os.listxattr", side_effect=OSError("Permission denied")):
+            with patch("os.listxattr", side_effect=OSError("Permission denied"), create=True):
                 _copy_extended_attributes(src, dest)
 
     def test_copy_macos_creation_time_dummy(self) -> None:
@@ -1754,8 +1754,8 @@ class FastPathTests(unittest.TestCase):
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
 
-            with patch("os.listxattr", return_value=["user.test"]):
-                with patch("os.getxattr", side_effect=OSError("denied")):
+            with patch("os.listxattr", return_value=["user.test"], create=True):
+                with patch("os.getxattr", side_effect=OSError("denied"), create=True):
                     _copy_extended_attributes(src, dest)
 
     def test_copy_macos_creation_time_dummy_none(self) -> None:
@@ -1780,9 +1780,9 @@ class FastPathTests(unittest.TestCase):
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
 
-            with patch("os.listxattr", return_value=["user.test"]):
-                with patch("os.getxattr", return_value=b"value"):
-                    with patch("os.setxattr", side_effect=OSError("denied")):
+            with patch("os.listxattr", return_value=["user.test"], create=True):
+                with patch("os.getxattr", return_value=b"value", create=True):
+                    with patch("os.setxattr", side_effect=OSError("denied"), create=True):
                         _copy_extended_attributes(src, dest)
 
     def test_copy_macos_creation_time_dummy_not_found(self) -> None:
@@ -1840,9 +1840,9 @@ class FastPathTests(unittest.TestCase):
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
 
-            with patch("os.listxattr", return_value=["user.test"]):
-                with patch("os.getxattr", return_value=b"value"):
-                    with patch("os.setxattr") as mock_set:
+            with patch("os.listxattr", return_value=["user.test"], create=True):
+                with patch("os.getxattr", return_value=b"value", create=True):
+                    with patch("os.setxattr", create=True) as mock_set:
                         _copy_extended_attributes(src, dest)
                         mock_set.assert_called_once()
 
