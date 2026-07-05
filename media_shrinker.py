@@ -1349,6 +1349,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     write_report(results, report_path)
+    converted = [result for result in results if result.status == "converted"]
+    skipped = [result for result in results if result.status == "skipped_existing"]
     failed = [
         result
         for result in results
@@ -1356,7 +1358,8 @@ def main(argv: list[str] | None = None) -> int:
     ]
     print(f"REPORT\t{report_path}")
     print(
-        f"SUMMARY\tconverted={len(results) - len(failed)}\tfailed_or_too_large={len(failed)}"
+        f"SUMMARY\tconverted={len(converted)}\tskipped_existing={len(skipped)}"
+        f"\tfailed_or_too_large={len(failed)}"
     )
     return 1 if failed else 0
 
