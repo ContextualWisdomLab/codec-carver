@@ -1914,3 +1914,70 @@ class FastPathTests(unittest.TestCase):
                 with patch("media_shrinker._copy_macos_creation_time"):
                     with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
+
+
+class OutputFormatTests(unittest.TestCase):
+    """`--format` selection of the output codec/container."""
+
+    def _lossy_probe(self, audio_bit_rate=192_000):
+        return MediaProbe(
+            duration_seconds=1800.0,
+            size_bytes=3_000_000_000,
+            audio_codec="aac",
+            audio_bit_rate=audio_bit_rate,
+            has_video=False,
+            format_name="mov",
+        )
+
+    def _plan(self, output_format, probe=None, target_bytes=1_900_000_000):
+        return build_audio_plan(
+            Path("meeting.wav"),
+            probe or self._lossy_probe(),
+            target_bytes=target_bytes,
+            output_dir=Path("out"),
+            output_format=output_format,
+        )
+
+    def test_aac_plan(self) -> None:
+        plan = self._plan("aac")
+        self.assertEqual(plan.strategy, "aac-bitrate")
+        self.assertTrue(str(plan.output_path).endswith(".m4a"))
+        self.assertIn("-vn", plan.ffmpeg_args)
+        self.assertIn("aac", plan.ffmpeg_args)
+        self.assertIn("0:a:0", plan.ffmpeg_args)
+        self.assertIsNotNone(plan.audio_bitrate_bps)
+
+    def test_mp3_plan_and_bitrate_cap(self) -> None:
+        # Short duration + huge target + no source cap -> bitrate hits the mp3 ceiling.
+        probe = MediaProbe(10.0, 3_000_000_000, "aac", None, False, "mov")
+        plan = build_audio_plan(
+            Path("clip.wav"), probe,
+            target_bytes=1_900_000_000, output_dir=Path("out"),
+            output_format="mp3",
+        )
+        self.assertEqual(plan.strategy, "mp3-bitrate")
+        self.assertTrue(str(plan.output_path).endswith(".mp3"))
+        self.assertIn("libmp3lame", plan.ffmpeg_args)
+        self.assertEqual(plan.audio_bitrate_bps, media_shrinker.MP3_MAX_BITRATE_BPS)
+
+    def test_opus_forced_even_for_lossless_source(self) -> None:
+        lossless = MediaProbe(1800.0, 3_000_000_000, "pcm_s16le", 1_411_200, False, "wav")
+        self.assertEqual(self._plan("opus", probe=lossless).strategy, "opus-bitrate")
+
+    def test_flac_forced_for_lossy_source(self) -> None:
+        plan = self._plan("flac")
+        self.assertEqual(plan.strategy, "flac-transcode")
+        self.assertTrue(str(plan.output_path).endswith(".flac"))
+
+    def test_auto_matches_legacy_behaviour(self) -> None:
+        lossless = MediaProbe(1800.0, 3_000_000_000, "flac", 900_000, False, "flac")
+        self.assertEqual(self._plan("auto", probe=lossless).strategy, "flac-lossless")
+        self.assertEqual(self._plan("auto").strategy, "opus-bitrate")
+
+    def test_parse_args_format_flag(self) -> None:
+        self.assertEqual(media_shrinker.parse_args(["root"]).format, "auto")
+        self.assertEqual(
+            media_shrinker.parse_args(["root", "--format", "aac"]).format, "aac"
+        )
+        with self.assertRaises(SystemExit):
+            media_shrinker.parse_args(["root", "--format", "wav"])

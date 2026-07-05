@@ -32,6 +32,12 @@ Outputs are written under `../under_2gb/`. Existing generated output directories
 - Split outputs are named with part suffixes, for example `meeting.wav.part0001.flac`, `meeting.wav.part0002.flac`.
 - Tune silence detection with `--silence-noise` and `--silence-min-duration-seconds` when recordings need stricter or looser silence boundaries.
 
+## Output format
+
+- `--format auto` (default) keeps the original behaviour: FLAC for lossless (or `--flac-all`) input, high-bitrate Opus otherwise.
+- `--format flac` / `--format opus` force that codec.
+- `--format aac` (`.m4a`) and `--format mp3` produce broadly-compatible lossy output fitted to the target size — useful for players/devices that don't handle FLAC or Opus.
+
 ## Safety notes
 
 - Source files selected by the scan are protected from deletion or overwrite; keep `--output-dir` as a generated-only directory so excluded originals are never mistaken for stale generated outputs.
