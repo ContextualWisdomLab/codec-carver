@@ -1914,3 +1914,73 @@ class FastPathTests(unittest.TestCase):
                 with patch("media_shrinker._copy_macos_creation_time"):
                     with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
+
+    def test_build_silencedetect_command_invalid_noise(self):
+        """Test build_silencedetect_command raises error for invalid noise."""
+        from media_shrinker import build_silencedetect_command, MediaShrinkerError
+        from pathlib import Path
+
+        with self.assertRaises(MediaShrinkerError):
+            build_silencedetect_command(Path("test.mp4"), silence_noise="invalid")
+
+    @patch('subprocess.run')
+    def test_probe_media_invalid_json(self, mock_run):
+        """Test probe_media handles invalid JSON from ffprobe."""
+        from media_shrinker import probe_media, MediaShrinkerError
+        from pathlib import Path
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "invalid json"
+        mock_run.return_value = mock_result
+
+        with self.assertRaises(MediaShrinkerError):
+            probe_media(Path("test.mp4"))
+
+    def test_conversion_plan_missing_i_flag(self):
+        """Test command raises MediaShrinkerError if -i flag is missing."""
+        from media_shrinker import ConversionPlan, MediaShrinkerError
+        from pathlib import Path
+
+        plan = ConversionPlan(
+            strategy="test",
+            input_path=Path("in.mp4"),
+            output_path=Path("out.mp4"),
+            ffmpeg_args=["-y", "no_i_flag"]
+        )
+
+        with self.assertRaises(MediaShrinkerError):
+            plan.command(input_path=Path("in.mp4"))
+
+    @patch('subprocess.run')
+    def test_probe_media_invalid_json_decode_error(self, mock_run):
+        """Test probe_media handles invalid JSON from ffprobe."""
+        from media_shrinker import probe_media, MediaShrinkerError
+        from pathlib import Path
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "{"
+        mock_run.return_value = mock_result
+
+        with self.assertRaises(MediaShrinkerError):
+            probe_media(Path("test.mp4"))
+
+    @patch('subprocess.run')
+    def test_probe_media_valid_json(self, mock_run):
+        """Test probe_media with valid JSON from ffprobe."""
+        from media_shrinker import probe_media
+        from pathlib import Path
+        import json
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({
+            "streams": [{"codec_type": "audio", "codec_name": "aac", "duration": "10.0", "bit_rate": "128000"}],
+            "format": {"format_name": "mp4", "size": "1000000"}
+        })
+        mock_run.return_value = mock_result
+
+        probe = probe_media(Path("test.mp4"))
+        self.assertEqual(probe.duration_seconds, 10.0)
+        self.assertEqual(probe.audio_codec, "aac")
