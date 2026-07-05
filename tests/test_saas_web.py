@@ -309,3 +309,35 @@ class TestSaasWeb(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MultiSegmentZipTests(unittest.TestCase):
+    """Long recordings split into multiple segments must all be returned (as a zip)."""
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_multiple_segments_returned_as_zip(self, mock_convert_file):
+        import io as _io
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            part1 = Path(temp_dir) / "rec.wav.part0001.flac"
+            part2 = Path(temp_dir) / "rec.wav.part0002.flac"
+            part1.write_bytes(b"segment-one")
+            part2.write_bytes(b"segment-two")
+            r1 = MagicMock(spec=ConversionResult)
+            r1.output_path = part1
+            r2 = MagicMock(spec=ConversionResult)
+            r2.output_path = part2
+            mock_convert_file.return_value = [r1, r2]
+
+            response = client.post(
+                "/shrink",
+                files={"file": ("rec.wav", _io.BytesIO(b"wav data"), "audio/wav")},
+                data={"target_bytes": 10000},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/zip")
+        names = zipfile.ZipFile(_io.BytesIO(response.content)).namelist()
+        self.assertEqual(sorted(names), ["rec.wav.part0001.flac", "rec.wav.part0002.flac"])

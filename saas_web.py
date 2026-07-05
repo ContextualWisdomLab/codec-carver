@@ -3,6 +3,7 @@
 import tempfile
 import logging
 import shutil
+import zipfile
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -218,6 +219,16 @@ def cleanup_temp_dir(temp_dir_path: Path):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
+def _zip_outputs(outputs: list[Path], dest_dir: Path, archive_name: str) -> Path:
+    """Bundle multiple generated outputs into a single (uncompressed) zip archive."""
+    archive_path = dest_dir / archive_name
+    # ZIP_STORED: the audio is already compressed, so re-compressing wastes CPU.
+    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
+        for output in outputs:
+            archive.write(output, arcname=output.name)
+    return archive_path
+
+
 @app.get("/", response_class=HTMLResponse)
 async def get_ui():
     """Return the single-page upload form."""
@@ -281,22 +292,36 @@ def shrink_media(
             target_bytes=target_bytes,
         )
 
-        # Determine the generated output file.
-        # For simplicity, returning the first output file found.
-        # Handling multiple outputs (e.g. from splitting) would require zipping in a real scenario.
-        if results and results[0].output_path and results[0].output_path.exists():
-             output_file_path = results[0].output_path
-             # Schedule cleanup after response
-             background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
-             return FileResponse(
-                 path=output_file_path,
-                 filename=output_file_path.name,
-                 media_type="application/octet-stream"
-             )
-        else:
-            background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+        # Collect every generated output. Long recordings are split into several
+        # segments; returning only the first would silently drop the rest.
+        outputs = [
+            r.output_path
+            for r in results
+            if r.output_path and r.output_path.exists()
+        ]
+        background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+
+        if not outputs:
             logger.error("Processing produced no output: %r", results)
             return {"error": "Processing failed or no output generated"}
+
+        if len(outputs) == 1:
+            output_file_path = outputs[0]
+            return FileResponse(
+                path=output_file_path,
+                filename=output_file_path.name,
+                media_type="application/octet-stream",
+            )
+
+        # Multiple segments -> bundle them all into one zip download.
+        archive = _zip_outputs(
+            outputs, temp_dir_path, source_path.stem + "_shrunk.zip"
+        )
+        return FileResponse(
+            path=archive,
+            filename=archive.name,
+            media_type="application/zip",
+        )
 
     except Exception:
         cleanup_temp_dir(temp_dir_path)
