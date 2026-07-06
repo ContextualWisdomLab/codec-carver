@@ -1,8 +1,10 @@
 """FastAPI upload UI for shrinking one media file through Codec Carver."""
 
+import json
 import tempfile
 import logging
 import shutil
+import zipfile
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -11,6 +13,8 @@ import media_shrinker
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
+MAX_BATCH_FILES = 20
+ALLOWED_UPLOAD_CONTENT_PREFIXES = ("audio/", "video/")
 
 
 class RequestTooLarge(Exception):
@@ -208,6 +212,22 @@ HTML_TEMPLATE = """
         }, false);
         </script>
     </div>
+    <div class="box" style="margin-top: 20px;">
+        <h2>Shrink Multiple Files</h2>
+        <form action="/shrink-batch" method="post" enctype="multipart/form-data" id="shrink-batch-form">
+            <p>
+                <label for="batch_files">Media Files (up to 20): <span class="required-star" aria-hidden="true">*</span></label><br>
+                <input type="file" id="batch_files" name="files" accept="audio/*,video/*" multiple aria-describedby="batch_files_help" required>
+                <br><span id="batch_files_help" class="help-text">Select several audio or video files. You get back one zip with every output plus a results.json manifest.</span>
+            </p>
+            <p>
+                <label for="batch_target_bytes">Target Bytes (per file): <span class="required-star" aria-hidden="true">*</span></label><br>
+                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="batch_target_bytes_help" required>
+                <br><span id="batch_target_bytes_help" class="help-text">Maximum allowed size in bytes for each output file</span>
+            </p>
+            <button type="submit" id="batch-submit-btn">Upload and Shrink Batch</button>
+        </form>
+    </div>
 </body>
 </html>
 """
@@ -302,6 +322,163 @@ def shrink_media(
         cleanup_temp_dir(temp_dir_path)
         logger.exception("Media processing failed")
         return {"error": "Upload processing failed"}
+
+def _safe_upload_name(filename):
+    """Return a directory-free filename for an upload, with a safe fallback.
+
+    Strips any client-supplied directory components and substitutes
+    ``upload.tmp`` when the remaining name is empty or a dot entry, so a
+    hostile filename can never escape the request's temp workspace.
+    """
+
+    safe_filename = Path(filename or "").name
+    if not safe_filename or safe_filename in (".", ".."):
+        safe_filename = "upload.tmp"
+    return safe_filename
+
+
+def _save_upload_stream(upload, destination: Path):
+    """Stream one uploaded file to ``destination`` in 1 MB chunks.
+
+    Raises ``ValueError`` as soon as the written bytes exceed
+    ``MAX_UPLOAD_BYTES`` so oversized uploads are aborted early instead of
+    filling the disk. Mirrors the save pattern used by the ``/shrink``
+    endpoint.
+    """
+
+    bytes_written = 0
+    with open(destination, "wb") as f:
+        while chunk := upload.file.read(1024 * 1024):  # 1 MB chunks
+            bytes_written += len(chunk)
+            if bytes_written > MAX_UPLOAD_BYTES:
+                raise ValueError("File exceeds maximum allowed upload size")
+            f.write(chunk)
+
+
+@app.post("/shrink-batch")
+def shrink_media_batch(
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(default=[]),
+    target_bytes: int = Form(2_000_000_000),
+):
+    """Shrink several uploaded media files and return one zip archive.
+
+    Accepts up to ``MAX_BATCH_FILES`` audio/video uploads, converts each one
+    with :func:`media_shrinker.convert_file`, and responds with a single
+    ``ZIP_STORED`` archive containing every successful output plus a
+    ``results.json`` manifest describing the per-file outcome (status,
+    output name, output size, and error message when a file failed).
+
+    Per-file failures are recorded in the manifest and never abort the rest
+    of the batch. The whole request body remains bounded by the service-wide
+    request size middleware, and each individual file is additionally capped
+    at ``MAX_UPLOAD_BYTES``. The temp workspace is deleted after the response
+    is sent.
+    """
+
+    if target_bytes <= 0:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid target_bytes value. Must be greater than 0."},
+        )
+
+    if not files:
+        return JSONResponse(status_code=400, content={"error": "No files uploaded"})
+
+    if len(files) > MAX_BATCH_FILES:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Too many files. Maximum is {MAX_BATCH_FILES} files per batch."},
+        )
+
+    try:
+        temp_dir_path = Path(tempfile.mkdtemp(prefix="codec_carver_batch_"))
+    except Exception:
+        logger.exception("Failed to create batch upload workspace")
+        return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
+
+    workspace_root = temp_dir_path.resolve()
+    manifest = []
+    zip_path = temp_dir_path / "codec_carver_batch.zip"
+    try:
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
+            for index, upload in enumerate(files):
+                safe_filename = _safe_upload_name(upload.filename)
+                entry = {
+                    "index": index,
+                    "filename": safe_filename,
+                    "status": "error",
+                    "output_name": None,
+                    "output_bytes": None,
+                    "error": None,
+                }
+                manifest.append(entry)
+
+                content_type = upload.content_type or ""
+                if not content_type.startswith(ALLOWED_UPLOAD_CONTENT_PREFIXES):
+                    entry["error"] = "Unsupported content type. Only audio/* and video/* uploads are allowed."
+                    continue
+
+                # Each upload gets its own input/output directories so that
+                # duplicate filenames in one batch can never collide.
+                input_dir = temp_dir_path / f"input_{index}"
+                output_dir = temp_dir_path / f"output_{index}"
+                try:
+                    input_dir.mkdir()
+                    output_dir.mkdir()
+                    source_path = input_dir / safe_filename
+                    _save_upload_stream(upload, source_path)
+                except Exception:
+                    logger.exception("Failed to prepare batch upload #%d", index)
+                    entry["error"] = "Upload processing failed"
+                    continue
+
+                try:
+                    results = media_shrinker.convert_file(
+                        source=source_path,
+                        root=input_dir,
+                        output_dir=output_dir,
+                        target_bytes=target_bytes,
+                    )
+                except Exception:
+                    logger.exception("Batch media processing failed for upload #%d", index)
+                    entry["error"] = "Upload processing failed"
+                    continue
+
+                if not (results and results[0].output_path):
+                    logger.error("Batch processing produced no output for upload #%d: %r", index, results)
+                    entry["error"] = "Processing failed or no output generated"
+                    continue
+
+                output_path = Path(results[0].output_path).resolve()
+                # Never serve files outside this request's temp workspace.
+                if not (output_path.is_file() and output_path.is_relative_to(workspace_root)):
+                    logger.error("Batch output for upload #%d is missing or outside the workspace", index)
+                    entry["error"] = "Processing failed or no output generated"
+                    continue
+
+                arcname = f"{index + 1:02d}_{output_path.name}"
+                archive.write(output_path, arcname=arcname)
+                entry["status"] = "ok"
+                entry["output_name"] = arcname
+                entry["output_bytes"] = output_path.stat().st_size
+
+            archive.writestr(
+                "results.json",
+                json.dumps({"target_bytes": target_bytes, "results": manifest}, indent=2),
+            )
+    except Exception:
+        cleanup_temp_dir(temp_dir_path)
+        logger.exception("Failed to build batch archive")
+        return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
+
+    background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+    return FileResponse(
+        path=zip_path,
+        filename="codec_carver_batch.zip",
+        media_type="application/zip",
+    )
+
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
