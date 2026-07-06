@@ -46,3 +46,6 @@
 ## 2024-06-30 - Quick Preset Buttons for Raw Inputs
 **Learning:** Large raw byte inputs create high cognitive load and increase magnitude errors. Providing accessible quick preset buttons allows users to quickly select common values with confidence, reducing errors and reliance on manual typing.
 **Action:** Add quick preset buttons for common values near raw inputs (especially bytes), ensuring they are accessible via keyboard and properly associated with `aria-describedby`.
+## 2024-07-06 - 프리셋 버튼 활성화 상태 및 접근성 개선
+**Learning:** 사용자가 입력한 값과 일치하는 프리셋 버튼이 있을 때 이를 시각적으로 표시(`aria-pressed="true"` 및 CSS 스타일)하면 사용자 경험과 접근성이 크게 향상됨을 확인함. JavaScript 이벤트 리스너 내에서 버튼 목록(`document.querySelectorAll`)을 조회하는 대신 외부에서 캐싱해두면 성능 향상에도 도움이 됨.
+**Action:** 앞으로 폼에 프리셋 버튼 같은 요소가 있을 경우 시각적/접근성 피드백이 제공되는지 항상 확인하고, `aria-pressed` 상태를 통해 상태를 명확히 전달하도록 구현할 것.
