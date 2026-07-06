@@ -84,8 +84,7 @@ DURATION_TOLERANCE_SECONDS = 2.0
 BITRATE_SAFETY_MARGIN = 0.92
 OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
-SILENCE_START_RE = re.compile(r"silence_start:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
-SILENCE_END_RE = re.compile(r"silence_end:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
+SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
 
 
 class MediaShrinkerError(RuntimeError):
@@ -544,23 +543,18 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
 
     intervals: list[SilenceInterval] = []
     current_start: float | None = None
-    for line in stderr.splitlines():
-        # Fast path: Substring search is much faster than regex.
-        # Most lines are ffmpeg progress updates (e.g., 'frame=...')
-        if "silence" not in line:
-            continue
-        start_match = SILENCE_START_RE.search(line)
-        if start_match:
-            current_start = float(start_match.group("value"))
-            continue
+    # ⚡ Bolt: splitlines() 대신 finditer()를 사용하여 대용량 stderr 로그 파싱 시 O(N) 메모리 할당을 방지하고 속도를 개선합니다.
+    for match in SILENCE_RE.finditer(stderr):
+        type_str = match.group(1)
+        value = float(match.group("value"))
 
-        end_match = SILENCE_END_RE.search(line)
-        if end_match and current_start is not None:
-            end_seconds = float(end_match.group("value"))
-            if end_seconds > current_start:
+        if type_str == "start":
+            current_start = value
+        elif type_str == "end" and current_start is not None:
+            if value > current_start:
                 intervals.append(
                     SilenceInterval(
-                        start_seconds=current_start, end_seconds=end_seconds
+                        start_seconds=current_start, end_seconds=value
                     )
                 )
             current_start = None
