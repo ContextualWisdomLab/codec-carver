@@ -1,3 +1,6 @@
+## 2024-07-06 - Micro-UX and Accessibility for Grouped Preset Buttons
+**Learning:** Adding multiple individual `id` references (like `preset_buttons_container`) to `aria-describedby` creates excessive screen reader verbosity. Data attributes (`data-*`) simplify JS logic compared to inline handlers, and managing visual active states with `aria-pressed` provides semantic meaning while ensuring consistent CSS styling for sighted users.
+**Action:** Use `role="group"` and `aria-label` on button containers instead of `aria-describedby`. Rely on `data-*` attributes for values, and sync `aria-pressed` state with user input for both accessibility and CSS active states.
 ## 2024-05-24 - CLI Arguments as UX
 **Learning:** In headless or CLI-only applications, the command-line help interface serves as the primary UI. Missing help strings and lack of default value visibility severely impacts developer/user experience and accessibility.
 **Action:** Always ensure `argparse` leverages `ArgumentDefaultsHelpFormatter` and that every argument has a descriptive `help` parameter to provide an intuitive "interface" for CLI tools.

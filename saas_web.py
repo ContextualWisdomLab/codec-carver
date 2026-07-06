@@ -91,6 +91,7 @@ HTML_TEMPLATE = """
         .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
         .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
+        .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; }
     </style>
 </head>
 <body>
@@ -105,14 +106,14 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview preset_buttons_container" required>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
-                <div id="preset_buttons_container" class="preset-container">
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)">25 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)">100 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)">500 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)">1 GiB</button>
+                <div id="preset_buttons_container" class="preset-container" role="group" aria-label="Target size presets">
+                    <button type="button" class="preset-btn" data-bytes="26214400" aria-pressed="false">25 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="104857600" aria-pressed="false">100 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="524288000" aria-pressed="false">500 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="1073741824" aria-pressed="false">1 GiB</button>
                 </div>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
@@ -128,11 +129,6 @@ HTML_TEMPLATE = """
                     unit += 1;
                 }
                 return unit === 0 ? size + ' ' + units[unit] : size.toFixed(2) + ' ' + units[unit];
-            }
-            function setTargetBytes(bytes) {
-                const input = document.getElementById('target_bytes');
-                input.value = bytes;
-                input.dispatchEvent(new Event('input'));
             }
 
             function updateFileSizePreview(input) {
@@ -171,6 +167,19 @@ HTML_TEMPLATE = """
                 } else {
                     preview.innerText = formatBinaryBytes(val);
                 }
+
+                const currentVal = this.value;
+                document.getElementById('preset_buttons_container').querySelectorAll('.preset-btn').forEach(btn => {
+                    btn.setAttribute('aria-pressed', btn.dataset.bytes === currentVal ? 'true' : 'false');
+                });
+            });
+
+            document.getElementById('preset_buttons_container').querySelectorAll('.preset-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const input = document.getElementById('target_bytes');
+                    input.value = this.dataset.bytes;
+                    input.dispatchEvent(new Event('input'));
+                });
             });
 
             document.getElementById('shrink-form').addEventListener('submit', function() {
