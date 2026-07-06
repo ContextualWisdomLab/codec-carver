@@ -1,5 +1,6 @@
 """FastAPI upload UI for shrinking one media file through Codec Carver."""
 
+import os
 import tempfile
 import logging
 import shutil
@@ -7,6 +8,7 @@ import uuid
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+import job_store
 import media_shrinker
 
 app = FastAPI(title="Codec Carver SaaS")
@@ -334,9 +336,44 @@ def shrink_media(
 # The synchronous /shrink endpoint blocks for the whole conversion, which is
 # impractical for long recordings. These endpoints let a client submit a job,
 # poll its status, and download the result when ready (Upload -> Processing ->
-# Result). The store is in-memory and per-process; swap for a shared store to
-# scale horizontally.
-_JOBS: dict[str, dict] = {}
+# Result). Job state lives in a SQLite-backed store (see job_store.py), so it
+# survives process restarts and is shared by every worker process on the host.
+JOB_STORE = job_store.JobStore(job_store.default_db_path())
+
+#: How long finished jobs (and their workspaces) are kept before the startup
+#: sweep reclaims them. Override with CODEC_CARVER_JOB_RETENTION_SECONDS.
+JOB_RETENTION_SECONDS = float(
+    os.environ.get(
+        "CODEC_CARVER_JOB_RETENTION_SECONDS", job_store.DEFAULT_RETENTION_SECONDS
+    )
+)
+
+
+def run_job_store_maintenance() -> None:
+    """Reconcile the durable store with reality at process startup.
+
+    Two classes of jobs need attention after a restart:
+
+    * queued/processing jobs — their background workers died with the old
+      process, so they would stay "in flight" forever. Mark them failed so
+      polling clients get an honest answer, and reclaim their workspaces.
+    * old terminal jobs — results nobody downloaded within the retention
+      window. Drop the rows and reclaim their workspaces.
+    """
+    interrupted = JOB_STORE.recover_interrupted()
+    for job in interrupted:
+        if job.get("temp_dir"):
+            cleanup_temp_dir(Path(job["temp_dir"]))
+    if interrupted:
+        logger.warning(
+            "Failed %d job(s) interrupted by a previous shutdown", len(interrupted)
+        )
+    for job in JOB_STORE.purge_stale(JOB_RETENTION_SECONDS):
+        if job.get("temp_dir"):
+            cleanup_temp_dir(Path(job["temp_dir"]))
+
+
+app.router.on_startup.append(run_job_store_maintenance)
 
 
 def _run_job(
@@ -348,7 +385,7 @@ def _run_job(
     temp_dir_path: Path,
 ) -> None:
     """Background worker: shrink one uploaded file and record the outcome."""
-    _JOBS[job_id]["status"] = "processing"
+    JOB_STORE.update(job_id, status="processing")
     try:
         results = media_shrinker.convert_file(
             source=source_path,
@@ -358,21 +395,22 @@ def _run_job(
         )
     except Exception:
         logger.exception("Job processing failed")
-        _JOBS[job_id].update(status="failed", error="Processing failed")
+        JOB_STORE.update(job_id, status="failed", error="Processing failed")
         cleanup_temp_dir(temp_dir_path)
         return
 
     if results and results[0].output_path and results[0].output_path.exists():
         output_path = results[0].output_path
-        _JOBS[job_id].update(
+        JOB_STORE.update(
+            job_id,
             status="done",
             output_path=str(output_path),
             output_name=output_path.name,
         )
     else:
         logger.error("Job produced no output: %r", results)
-        _JOBS[job_id].update(
-            status="failed", error="Processing failed or no output generated"
+        JOB_STORE.update(
+            job_id, status="failed", error="Processing failed or no output generated"
         )
         cleanup_temp_dir(temp_dir_path)
 
@@ -397,7 +435,7 @@ def submit_job(
         )
 
     job_id = uuid.uuid4().hex
-    _JOBS[job_id] = {"status": "queued", "temp_dir": str(temp_dir_path)}
+    JOB_STORE.create(job_id, status="queued", temp_dir=str(temp_dir_path))
     background_tasks.add_task(
         _run_job, job_id, source_path, input_dir, output_dir, target_bytes, temp_dir_path
     )
@@ -407,15 +445,19 @@ def submit_job(
 @app.get("/jobs/{job_id}")
 def job_status(job_id: str):
     """Return the current status of a previously submitted job."""
-    job = _JOBS.get(job_id)
+    job = JOB_STORE.get(job_id)
     if job is None:
         return JSONResponse(status_code=404, content={"error": "Unknown job"})
     return {"job_id": job_id, "status": job["status"], "error": job.get("error")}
 
 
 def _cleanup_job(job_id: str) -> None:
-    """Forget a job and remove its temporary workspace."""
-    job = _JOBS.pop(job_id, None)
+    """Forget a job and remove its temporary workspace.
+
+    `JobStore.delete` returns the row to exactly one caller, so the workspace
+    is removed once even if cleanup is triggered concurrently.
+    """
+    job = JOB_STORE.delete(job_id)
     if job is not None and job.get("temp_dir"):
         cleanup_temp_dir(Path(job["temp_dir"]))
 
@@ -423,12 +465,16 @@ def _cleanup_job(job_id: str) -> None:
 @app.get("/jobs/{job_id}/result")
 def job_result(job_id: str, background_tasks: BackgroundTasks):
     """Download a finished job's output, then clean up its workspace."""
-    job = _JOBS.get(job_id)
+    job = JOB_STORE.get(job_id)
     if job is None:
         return JSONResponse(status_code=404, content={"error": "Unknown job"})
     if job["status"] != "done":
         return JSONResponse(
             status_code=409, content={"error": f"Job is {job['status']}"}
+        )
+    if not job.get("output_path") or job.get("temp_dir") is None:
+        return JSONResponse(
+            status_code=410, content={"error": "Result no longer available"}
         )
     # Defense in depth: only ever serve a regular file that lives inside this
     # job's own temp workspace. `job_id` is an opaque store key and is never

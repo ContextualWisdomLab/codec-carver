@@ -1,5 +1,7 @@
 import asyncio
 import io
+import shutil
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -9,6 +11,7 @@ from fastapi.testclient import TestClient
 from fastapi.responses import Response
 
 import saas_web
+from job_store import JobStore
 from saas_web import app
 from media_shrinker import ConversionResult
 
@@ -311,18 +314,24 @@ if __name__ == '__main__':
     unittest.main()
 
 
-class JobModelTests(unittest.TestCase):
-    """Async job API: submit -> status -> result, plus all error paths."""
+class JobStoreTestCase(unittest.TestCase):
+    """Base class that swaps in an isolated on-disk job store per test."""
 
     def setUp(self) -> None:
-        saas_web._JOBS.clear()
+        self._db_dir = Path(tempfile.mkdtemp(prefix="codec_carver_jobdb_"))
+        self._original_store = saas_web.JOB_STORE
+        saas_web.JOB_STORE = JobStore(self._db_dir / "jobs.db")
 
     def tearDown(self) -> None:
-        for job in list(saas_web._JOBS.values()):
-            temp = job.get("temp_dir")
-            if temp:
-                saas_web.cleanup_temp_dir(Path(temp))
-        saas_web._JOBS.clear()
+        for job in saas_web.JOB_STORE.all_jobs():
+            if job.get("temp_dir"):
+                saas_web.cleanup_temp_dir(Path(job["temp_dir"]))
+        saas_web.JOB_STORE = self._original_store
+        shutil.rmtree(self._db_dir, ignore_errors=True)
+
+
+class JobModelTests(JobStoreTestCase):
+    """Async job API: submit -> status -> result, plus all error paths."""
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_job_lifecycle_submit_status_result(self, mock_convert_file):
@@ -356,19 +365,18 @@ class JobModelTests(unittest.TestCase):
 
     def test_result_outside_workspace_rejected(self):
         # A "done" job whose output escaped its workspace must not be served.
-        import tempfile
-
         workspace = Path(tempfile.mkdtemp(prefix="codec_carver_"))
         outside_dir = Path(tempfile.mkdtemp())
         escaped = outside_dir / "escaped.flac"
         escaped.write_bytes(b"secret")
         try:
-            saas_web._JOBS["escape"] = {
-                "status": "done",
-                "output_path": str(escaped),
-                "output_name": "escaped.flac",
-                "temp_dir": str(workspace),
-            }
+            saas_web.JOB_STORE.create(
+                "escape",
+                status="done",
+                output_path=str(escaped),
+                output_name="escaped.flac",
+                temp_dir=str(workspace),
+            )
             response = client.get("/jobs/escape/result")
             self.assertEqual(response.status_code, 410)
         finally:
@@ -434,29 +442,85 @@ class JobModelTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_result_not_ready_returns_409(self):
-        saas_web._JOBS["pending"] = {"status": "processing", "temp_dir": ""}
+        saas_web.JOB_STORE.create("pending", status="processing", temp_dir="")
         response = client.get("/jobs/pending/result")
         self.assertEqual(response.status_code, 409)
         self.assertIn("processing", response.json()["error"])
 
     def test_result_missing_file_returns_410(self):
-        saas_web._JOBS["gone"] = {
-            "status": "done",
-            "output_path": "/nonexistent/output.flac",
-            "output_name": "output.flac",
-            "temp_dir": "",
-        }
+        saas_web.JOB_STORE.create(
+            "gone",
+            status="done",
+            output_path="/nonexistent/output.flac",
+            output_name="output.flac",
+            temp_dir="",
+        )
         response = client.get("/jobs/gone/result")
         self.assertEqual(response.status_code, 410)
 
-    def test_cleanup_job_removes_workspace(self):
-        import tempfile
+    def test_result_without_recorded_output_returns_410(self):
+        # A "done" row with no output_path (e.g. hand-edited or corrupted
+        # store) must degrade to 410, not crash on Path(None).
+        saas_web.JOB_STORE.create("noout", status="done", temp_dir="")
+        response = client.get("/jobs/noout/result")
+        self.assertEqual(response.status_code, 410)
 
+    def test_cleanup_job_removes_workspace(self):
         temp_dir = Path(tempfile.mkdtemp(prefix="codec_carver_"))
-        saas_web._JOBS["c"] = {"status": "done", "temp_dir": str(temp_dir)}
+        saas_web.JOB_STORE.create("c", status="done", temp_dir=str(temp_dir))
         saas_web._cleanup_job("c")
         self.assertFalse(temp_dir.exists())
-        self.assertNotIn("c", saas_web._JOBS)
+        self.assertIsNone(saas_web.JOB_STORE.get("c"))
+
+
+class JobDurabilityTests(JobStoreTestCase):
+    """The properties the in-memory dict could not provide."""
+
+    @patch("saas_web.media_shrinker.convert_file", side_effect=RuntimeError("boom"))
+    def test_job_status_survives_store_reopen(self, _mock_convert):
+        # Submitting through one store handle and polling through a fresh
+        # handle on the same database simulates a process restart (or a
+        # status request served by a different worker process).
+        submit = client.post(
+            "/jobs",
+            files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+            data={"target_bytes": 10000},
+        )
+        job_id = submit.json()["job_id"]
+
+        saas_web.JOB_STORE = JobStore(saas_web.JOB_STORE.db_path)
+        status = client.get(f"/jobs/{job_id}")
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()["status"], "failed")
+
+    def test_startup_maintenance_fails_interrupted_jobs(self):
+        workspace = Path(tempfile.mkdtemp(prefix="codec_carver_"))
+        saas_web.JOB_STORE.create("orphan", status="processing", temp_dir=str(workspace))
+
+        saas_web.run_job_store_maintenance()
+
+        job = saas_web.JOB_STORE.get("orphan")
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("restart", job["error"])
+        self.assertFalse(workspace.exists())
+
+        status = client.get("/jobs/orphan")
+        self.assertEqual(status.json()["status"], "failed")
+
+    def test_startup_maintenance_keeps_recent_terminal_jobs(self):
+        saas_web.JOB_STORE.create("fresh-done", status="done", temp_dir="")
+        saas_web.run_job_store_maintenance()
+        self.assertIsNotNone(saas_web.JOB_STORE.get("fresh-done"))
+
+    def test_startup_maintenance_purges_expired_terminal_jobs(self):
+        workspace = Path(tempfile.mkdtemp(prefix="codec_carver_"))
+        saas_web.JOB_STORE.create("expired", status="done", temp_dir=str(workspace))
+
+        with patch.object(saas_web, "JOB_RETENTION_SECONDS", -1.0):
+            saas_web.run_job_store_maintenance()
+
+        self.assertIsNone(saas_web.JOB_STORE.get("expired"))
+        self.assertFalse(workspace.exists())
 
 
 class UploadValidationTests(unittest.TestCase):
