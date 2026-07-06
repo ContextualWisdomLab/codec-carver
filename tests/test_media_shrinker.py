@@ -1336,6 +1336,86 @@ class CliTests(unittest.TestCase):
             [item.message for item in results if item.status == "failed"], ["boom"]
         )
 
+    def test_format_progress_formats_counts_percent_and_eta(self) -> None:
+        self.assertEqual(
+            media_shrinker._format_progress(1, 4, 125.9),
+            "PROGRESS\t1/4\t25%\tETA 02:05",
+        )
+        self.assertEqual(
+            media_shrinker._format_progress(3, 3, 0.0),
+            "PROGRESS\t3/3\t100%\tETA 00:00",
+        )
+
+    def test_format_progress_clamps_negative_eta_to_zero(self) -> None:
+        self.assertEqual(
+            media_shrinker._format_progress(2, 2, -5.0),
+            "PROGRESS\t2/2\t100%\tETA 00:00",
+        )
+
+    def test_execute_conversions_prints_progress_lines_with_eta(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sources = []
+            for name in ("a.wav", "b.wav", "c.wav"):
+                source = root / name
+                source.write_bytes(b"12")
+                sources.append(source)
+            args = media_shrinker.parse_args([str(root), "--workers", "1"])
+
+            def fake_convert_file(source: Path, **_kwargs):
+                return [
+                    media_shrinker.ConversionResult(
+                        source_path=source,
+                        output_path=root / "out" / (source.stem + ".flac"),
+                        status="converted",
+                        original_size_bytes=2,
+                        output_size_bytes=1,
+                        strategy="flac-lossless",
+                    )
+                ]
+
+            # One call at batch start, then one after each completion:
+            # elapsed 10s per file -> average 10s -> ETA 20s, 10s, 0s.
+            clock = iter([100.0, 110.0, 120.0, 130.0])
+            with patch("media_shrinker.convert_file", side_effect=fake_convert_file):
+                with patch(
+                    "media_shrinker.time.monotonic",
+                    side_effect=lambda: next(clock, 130.0),
+                ):
+                    with patch("builtins.print") as mock_print:
+                        results = media_shrinker._execute_conversions(
+                            [(source, 2) for source in sources],
+                            args,
+                            root,
+                            root / "out",
+                        )
+
+        self.assertEqual(len(results), 3)
+        printed = ["\t".join(map(str, call.args)) for call in mock_print.call_args_list]
+        progress_lines = [line for line in printed if line.startswith("PROGRESS\t")]
+        self.assertEqual(
+            progress_lines,
+            [
+                "PROGRESS\t1/3\t33%\tETA 00:20",
+                "PROGRESS\t2/3\t66%\tETA 00:10",
+                "PROGRESS\t3/3\t100%\tETA 00:00",
+            ],
+        )
+
+    def test_main_dry_run_prints_no_progress_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "source.wav").write_bytes(b"1234")
+
+            with patch("builtins.print") as mock_print:
+                rc = media_shrinker.main([str(root), "--size-limit-bytes", "1"])
+
+        self.assertEqual(rc, 0)
+        printed = ["\t".join(map(str, call.args)) for call in mock_print.call_args_list]
+        self.assertFalse(
+            [line for line in printed if line.startswith("PROGRESS")], printed
+        )
+
     def test_small_segment_returns_single_segment(self) -> None:
         segments = build_segments(duration_seconds=1.0, max_segment_duration_seconds=2.0)
         self.assertEqual(segments, [MediaSegment(1, 0.0, 1.0, 1)])
