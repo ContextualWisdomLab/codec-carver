@@ -32,6 +32,19 @@ Outputs are written under `../under_2gb/`. Existing generated output directories
 - Split outputs are named with part suffixes, for example `meeting.wav.part0001.flac`, `meeting.wav.part0002.flac`.
 - Tune silence detection with `--silence-noise` and `--silence-min-duration-seconds` when recordings need stricter or looser silence boundaries.
 
+## Metadata tagging
+
+- `--set-title`, `--set-artist`, `--set-album`, and `--set-comment` stamp the corresponding tags on every generated output, so archived files stay searchable in players and music libraries.
+- Generated commands already copy source metadata with `-map_metadata 0`; the `--set-*` values are injected after it, so each provided key overrides that specific source tag while all other source metadata is preserved (standard ffmpeg semantics).
+- When none of the `--set-*` options are passed, generated ffmpeg commands are byte-identical to the untagged behavior.
+- Values are passed to ffmpeg as single argv items without a shell, so spaces, quotes, and other special characters are safe as given.
+
+```bash
+python3 media_shrinker.py .. --execute \
+  --set-album "Board Meetings 2026" \
+  --set-comment "archived by codec-carver"
+```
+
 ## Safety notes
 
 - Source files selected by the scan are protected from deletion or overwrite; keep `--output-dir` as a generated-only directory so excluded originals are never mistaken for stale generated outputs.

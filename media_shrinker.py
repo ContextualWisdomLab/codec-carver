@@ -312,6 +312,28 @@ def calculate_audio_bitrate(
     return bitrate
 
 
+def _metadata_args(tags: dict[str, str] | None) -> list[str]:
+    """Return ffmpeg ``-metadata key=value`` arguments for the given tags.
+
+    Keys are emitted in sorted order so generated commands are deterministic.
+    The pairs are meant to be inserted after ``-map_metadata 0`` in a plan:
+    ffmpeg applies them on top of the metadata copied from the source, so each
+    provided key overrides the corresponding source tag while every other
+    source tag is preserved. Values are passed through verbatim as single
+    argv items (plans run without a shell), so special characters are safe.
+
+    Returns an empty list when tags is None or empty, keeping default plans
+    byte-identical to those built before metadata tagging existed.
+    """
+
+    if not tags:
+        return []
+    args: list[str] = []
+    for key in sorted(tags):
+        args.extend(("-metadata", f"{key}={tags[key]}"))
+    return args
+
+
 def build_audio_plan(
     source_path: Path,
     probe: MediaProbe,
@@ -321,8 +343,14 @@ def build_audio_plan(
     prefer_flac: bool = False,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    tags: dict[str, str] | None = None,
 ) -> ConversionPlan:
-    """Build the preferred audio-only conversion plan for source_path."""
+    """Build the preferred audio-only conversion plan for source_path.
+
+    When tags is provided, ``-metadata key=value`` pairs are injected after
+    ``-map_metadata 0`` so they override those specific keys copied from the
+    source while leaving all other source metadata intact.
+    """
 
     if probe.has_video:
         raise MediaShrinkerError(
@@ -356,6 +384,7 @@ def build_audio_plan(
                 "0",
                 "-map_chapters",
                 "0",
+                *_metadata_args(tags),
                 "-vn",
                 "-c:a",
                 "flac",
@@ -379,6 +408,7 @@ def build_audio_plan(
         output_dir=output_dir,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        tags=tags,
     )
 
 
@@ -390,8 +420,14 @@ def build_opus_plan(
     output_dir: Path,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    tags: dict[str, str] | None = None,
 ) -> ConversionPlan:
-    """Build a high-quality Opus plan that fits the target size."""
+    """Build a high-quality Opus plan that fits the target size.
+
+    When tags is provided, ``-metadata key=value`` pairs are injected after
+    ``-map_metadata 0`` so they override those specific keys copied from the
+    source while leaving all other source metadata intact.
+    """
 
     duration_seconds = (
         segment.duration_seconds if segment is not None else probe.duration_seconds
@@ -420,6 +456,7 @@ def build_opus_plan(
             "0",
             "-map_chapters",
             "0",
+            *_metadata_args(tags),
             "-vn",
             "-c:a",
             "libopus",
@@ -727,8 +764,13 @@ def convert_file(
     protected_sources: Iterable[Path] = (),
     resolved_protected_sources: frozenset[Path] | None = None,
     original_size: int | None = None,
+    tags: dict[str, str] | None = None,
 ) -> list[ConversionResult]:
-    """Convert one file and return generated segment results without deleting the source."""
+    """Convert one file and return generated segment results without deleting the source.
+
+    When tags is provided, each generated output is stamped with those
+    ``-metadata`` key/value pairs on top of the metadata copied from the source.
+    """
 
     source = Path(source)
     root = Path(root)
@@ -777,6 +819,7 @@ def convert_file(
             overwrite=overwrite,
             max_segment_duration_seconds=max_segment_duration_seconds,
             protected_sources=resolved_sources,
+            tags=tags,
         )
         for segment in segments
     ]
@@ -874,6 +917,7 @@ def _execute_segment_conversion(
     overwrite: bool,
     max_segment_duration_seconds: float,
     resolved_protected_sources: frozenset[Path],
+    tags: dict[str, str] | None = None,
 ) -> ConversionResult:
     """Execute the conversion plan(s) for a single segment."""
     plan = build_audio_plan(
@@ -884,6 +928,7 @@ def _execute_segment_conversion(
         prefer_flac=prefer_flac,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        tags=tags,
     )
 
     final_output = _resolve_collision(plan.output_path, overwrite=overwrite)
@@ -910,6 +955,7 @@ def _execute_segment_conversion(
             output_dir=output_dir,
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            tags=tags,
         )
         final_output = _resolve_collision(opus_plan.output_path, overwrite=overwrite)
         first_result = _execute_plan(
@@ -994,6 +1040,7 @@ def _convert_segment(
     overwrite: bool,
     max_segment_duration_seconds: float,
     protected_sources: frozenset[Path] = frozenset(),
+    tags: dict[str, str] | None = None,
 ) -> ConversionResult:
     """Convert one media segment fitting the target size limit."""
     # protected_sources is passed from convert_file where it is already fully resolved.
@@ -1043,6 +1090,7 @@ def _convert_segment(
         overwrite=overwrite,
         max_segment_duration_seconds=max_segment_duration_seconds,
         resolved_protected_sources=resolved_protected_sources,
+        tags=tags,
     )
 
 
@@ -1143,7 +1191,13 @@ def _normalize_argv(argv: list[str] | None) -> list[str] | None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse CLI arguments."""
+    """Parse CLI arguments.
+
+    The returned namespace also carries a ``tags`` dict collecting the
+    ``--set-title``/``--set-artist``/``--set-album``/``--set-comment`` values
+    that were actually provided; it is empty when none were passed, which
+    keeps generated ffmpeg commands byte-identical to the untagged behavior.
+    """
 
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -1247,7 +1301,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow overwriting generated output paths",
     )
-    return parser.parse_args(_normalize_argv(argv))
+    parser.add_argument(
+        "--set-title",
+        default=None,
+        help="Set the 'title' metadata tag on every generated output",
+    )
+    parser.add_argument(
+        "--set-artist",
+        default=None,
+        help="Set the 'artist' metadata tag on every generated output",
+    )
+    parser.add_argument(
+        "--set-album",
+        default=None,
+        help="Set the 'album' metadata tag on every generated output",
+    )
+    parser.add_argument(
+        "--set-comment",
+        default=None,
+        help="Set the 'comment' metadata tag on every generated output",
+    )
+    args = parser.parse_args(_normalize_argv(argv))
+    provided_tags = {
+        "title": args.set_title,
+        "artist": args.set_artist,
+        "album": args.set_album,
+        "comment": args.set_comment,
+    }
+    args.tags = {key: value for key, value in provided_tags.items() if value is not None}
+    return args
 
 
 def _execute_conversions(
@@ -1286,6 +1368,7 @@ def _execute_conversions(
                 protected_sources=protected_sources,
                 resolved_protected_sources=resolved_candidates,
                 original_size=size,
+                tags=args.tags or None,
             )
         except Exception as exc:  # noqa: BLE001 - batch processing records per-file failures.
             return [
