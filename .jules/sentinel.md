@@ -46,3 +46,8 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities (CWE-88).
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, command-line utilities (like `ffprobe` and `ffmpeg` filters) can interpret user input (like a file path) starting with a hyphen (e.g., `-version.wav`) as options if passed as a relative path.
 **Prevention:** File paths must be converted to absolute paths using `.resolve()` before they are passed to `subprocess.run`. This prefixes the path with a root, drive, or UNC prefix rather than a leading hyphen, thereby averting the possibility of argument injection.
+
+## 2026-07-06 - [Sentinel: Path Traversal Vulnerability Fix]
+**Vulnerability:** Path Traversal / Arbitrary File System Access via unbounded inputs.
+**Learning:** `convert_file` did not validate whether the provided `source` path resided inside the `root` directory. If an attacker provided a relative traversal path or an absolute path pointing to sensitive OS directories (e.g., `/etc/passwd`), the application could read those files or generate unauthorized converted outputs on the filesystem, bypassing directory boundaries.
+**Prevention:** When implementing path traversal boundary checks (e.g., verifying `source.resolve().is_relative_to(root.resolve())`), enforce these checks strictly on input paths. However, do not mistakenly enforce them on output directories (`output_dir`), as legitimate use-cases exist where the output directory is separate from the input root.

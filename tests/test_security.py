@@ -31,7 +31,15 @@ class SecurityTests(unittest.TestCase):
 
         command = mock_run.call_args.args[0]
         input_index = command.index("-i")
-        self.assertEqual(command[input_index + 1], str(source_path.resolve()))
+        self.assertEqual(command[input_index + 1], f"{source_path.resolve()}")
+
+    def test_path_traversal_boundary_check(self):
+        source = Path("/tmp/outside/hacked.wav")
+        root = Path("/tmp/safe/root")
+        out_dir = Path("/tmp/safe/out")
+        with self.assertRaises(MediaShrinkerError):
+            from media_shrinker import convert_file
+            convert_file(source, root=root, output_dir=out_dir, original_size=1)
 
 if __name__ == "__main__":
     unittest.main()
