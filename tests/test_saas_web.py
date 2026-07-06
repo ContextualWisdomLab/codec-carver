@@ -1,5 +1,6 @@
 import asyncio
 import io
+import os
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -306,6 +307,108 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('onclick="setTargetBytes(524288000)"', html)
         self.assertIn('onclick="setTargetBytes(1073741824)"', html)
         self.assertIn('function setTargetBytes(bytes)', html)
+
+class TestApiKeyAuth(unittest.TestCase):
+    """Tests for the opt-in CODEC_CARVER_API_KEYS authentication middleware."""
+
+    def _post_shrink(self, headers=None):
+        """POST a minimal /shrink request and return the response."""
+
+        return client.post(
+            "/shrink",
+            files={"file": ("input.wav", io.BytesIO(b"dummy wav data"), "audio/wav")},
+            data={"target_bytes": 0},
+            headers=headers or {},
+        )
+
+    def test_no_env_var_leaves_endpoints_open(self):
+        with patch.dict(os.environ):
+            os.environ.pop("CODEC_CARVER_API_KEYS", None)
+            response = self._post_shrink()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid target_bytes value. Must be greater than 0."},
+        )
+
+    def test_missing_header_rejected_when_keys_configured(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = self._post_shrink()
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+        self.assertNotIn("secret-key", response.text)
+
+    def test_wrong_key_rejected(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = self._post_shrink(headers={"X-API-Key": "wrong-key"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+        self.assertNotIn("secret-key", response.text)
+
+    def test_correct_key_reaches_handler(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = self._post_shrink(headers={"X-API-Key": "secret-key"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid target_bytes value. Must be greater than 0."},
+        )
+
+    def test_get_ui_always_open_without_key(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Codec Carver SaaS", response.content)
+
+    def test_multiple_comma_separated_keys_all_valid(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "key-one,key-two,key-three"}):
+            for key in ("key-one", "key-two", "key-three"):
+                response = self._post_shrink(headers={"X-API-Key": key})
+                self.assertEqual(response.status_code, 200, key)
+            rejected = self._post_shrink(headers={"X-API-Key": "key-four"})
+
+        self.assertEqual(rejected.status_code, 401)
+
+    def test_whitespace_around_keys_is_stripped(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "  key-one , key-two  "}):
+            response = self._post_shrink(headers={"X-API-Key": "key-one"})
+            self.assertEqual(response.status_code, 200)
+            response = self._post_shrink(headers={"X-API-Key": "key-two"})
+            self.assertEqual(response.status_code, 200)
+            rejected = self._post_shrink(headers={"X-API-Key": " key-one "})
+
+        self.assertEqual(rejected.status_code, 401)
+
+    def test_empty_entries_are_ignored(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "key-one,,  ,"}):
+            response = self._post_shrink(headers={"X-API-Key": "key-one"})
+            self.assertEqual(response.status_code, 200)
+            rejected = self._post_shrink(headers={"X-API-Key": ""})
+
+        self.assertEqual(rejected.status_code, 401)
+
+    def test_only_empty_entries_leave_endpoints_open(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " , ,"}):
+            response = self._post_shrink()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid target_bytes value. Must be greater than 0."},
+        )
+
+    def test_get_configured_api_keys_parsing(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " a ,, b ,"}):
+            self.assertEqual(saas_web.get_configured_api_keys(), ["a", "b"])
+        with patch.dict(os.environ):
+            os.environ.pop("CODEC_CARVER_API_KEYS", None)
+            self.assertEqual(saas_web.get_configured_api_keys(), [])
+
 
 if __name__ == '__main__':
     unittest.main()
