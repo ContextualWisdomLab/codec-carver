@@ -341,3 +341,31 @@ class MultiSegmentZipTests(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "application/zip")
         names = zipfile.ZipFile(_io.BytesIO(response.content)).namelist()
         self.assertEqual(sorted(names), ["rec.wav.part0001.flac", "rec.wav.part0002.flac"])
+
+
+class UploadValidationTests(unittest.TestCase):
+    """Input hardening: target upper bound + content-type allowlist."""
+
+    def test_shrink_rejects_oversized_target_bytes(self):
+        response = client.post(
+            "/shrink",
+            files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+            data={"target_bytes": saas_web.MAX_TARGET_BYTES + 1},
+        )
+        self.assertEqual(response.json(), {"error": "Invalid target_bytes value. Exceeds the maximum allowed size."})
+
+    def test_shrink_rejects_non_media_content_type(self):
+        response = client.post(
+            "/shrink",
+            files={"file": ("shell.php", io.BytesIO(b"<?php ?>"), "application/x-php")},
+            data={"target_bytes": 10000},
+        )
+        self.assertEqual(response.json(), {"error": "Unsupported content type; upload an audio or video file."})
+
+    def test_video_content_type_accepted_by_validator(self):
+        self.assertIsNone(
+            saas_web._validate_request(
+                SimpleNamespace(filename="clip.mp4", content_type="video/mp4"),
+                10000,
+            )
+        )

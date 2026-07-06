@@ -12,6 +12,27 @@ import media_shrinker
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
+# A shrink target larger than the biggest accepted upload is meaningless; cap it
+# to keep numeric input bounded.
+MAX_TARGET_BYTES = MAX_UPLOAD_BYTES
+# This service only processes audio/video. Uploaded files are never executed or
+# served as web content — they are handed to ffmpeg, which rejects non-media —
+# but validating the declared content type rejects obviously-wrong uploads early.
+_ALLOWED_CONTENT_PREFIXES = ("audio/", "video/")
+
+
+def _validate_request(file: "UploadFile", target_bytes: int) -> str | None:
+    """Return an error message for an invalid upload request, or None if valid."""
+    if target_bytes <= 0:
+        return "Invalid target_bytes value. Must be greater than 0."
+    if target_bytes > MAX_TARGET_BYTES:
+        return "Invalid target_bytes value. Exceeds the maximum allowed size."
+    if not file.filename:
+        return "No file uploaded or filename missing"
+    content_type = getattr(file, "content_type", None)
+    if content_type and not content_type.startswith(_ALLOWED_CONTENT_PREFIXES):
+        return "Unsupported content type; upload an audio or video file."
+    return None
 
 
 class RequestTooLarge(Exception):
@@ -244,11 +265,9 @@ def shrink_media(
 ):
     """Persist an uploaded media file, shrink it, and return the generated file."""
 
-    if target_bytes <= 0:
-        return {"error": "Invalid target_bytes value. Must be greater than 0."}
-
-    if not file.filename:
-        return {"error": "No file uploaded or filename missing"}
+    error = _validate_request(file, target_bytes)
+    if error is not None:
+        return {"error": error}
 
     # Create a temporary directory that will hold the input and output
     try:
