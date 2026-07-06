@@ -1,5 +1,6 @@
 """FastAPI upload UI for shrinking one media file through Codec Carver."""
 
+import os
 import tempfile
 import logging
 import shutil
@@ -321,4 +322,4 @@ def shrink_media(
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=os.getenv("HOST", "127.0.0.1"), port=int(os.getenv("PORT", "8000")))
