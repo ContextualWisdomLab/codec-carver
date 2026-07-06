@@ -465,9 +465,12 @@ def probe_media(
         "-i",
         str(Path(source_path).resolve()),
     ]
-    completed = subprocess.run(
-        command, check=False, capture_output=True, text=True, shell=False
-    )
+    try:
+        completed = subprocess.run(
+            command, check=False, capture_output=True, text=True, shell=False, timeout=60  # nosec B603
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"ffprobe timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -520,18 +523,22 @@ def detect_silence_intervals(
 ) -> list[SilenceInterval]:
     """Run ffmpeg silencedetect and return paired silence intervals."""
 
-    completed = subprocess.run(
-        build_silencedetect_command(
-            source_path,
-            ffmpeg_path=ffmpeg_path,
-            silence_noise=silence_noise,
-            silence_min_duration_seconds=silence_min_duration_seconds,
-        ),
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        completed = subprocess.run(
+            build_silencedetect_command(
+                source_path,
+                ffmpeg_path=ffmpeg_path,
+                silence_noise=silence_noise,
+                silence_min_duration_seconds=silence_min_duration_seconds,
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=3600,  # nosec B603
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"silencedetect timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"silencedetect failed for {source_path}: {completed.stderr.strip()}"
@@ -646,13 +653,17 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
         raise MediaShrinkerError(
             f"iCloud download requested but '{brctl_path}' was not found"
         )
-    completed = subprocess.run(
-        build_icloud_download_command(source_path, brctl_path=brctl_path),
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        completed = subprocess.run(
+            build_icloud_download_command(source_path, brctl_path=brctl_path),
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=3600,  # nosec B603
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"iCloud download timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"iCloud download failed for {source_path}: {completed.stderr.strip()}"
@@ -1590,10 +1601,12 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, shell=False
+                command, check=False, capture_output=True, text=True, shell=False, timeout=3600  # nosec B603
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise MediaShrinkerError(f"ffmpeg timed out for {source}") from exc
 
         if completed.returncode != 0:
             raise MediaShrinkerError(
@@ -1658,13 +1671,17 @@ def _copy_macos_creation_time(
     creation_date = datetime.fromtimestamp(float(birthtime)).strftime(
         "%m/%d/%Y %H:%M:%S"
     )
-    subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest.resolve())],
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        subprocess.run(
+            [setfile_path, "-d", creation_date, str(dest.resolve())],
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=60,  # nosec B603
+        )
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _format_result(root: Path, result: ConversionResult) -> str:

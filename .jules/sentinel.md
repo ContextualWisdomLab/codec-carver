@@ -46,3 +46,7 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities (CWE-88).
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, command-line utilities (like `ffprobe` and `ffmpeg` filters) can interpret user input (like a file path) starting with a hyphen (e.g., `-version.wav`) as options if passed as a relative path.
 **Prevention:** File paths must be converted to absolute paths using `.resolve()` before they are passed to `subprocess.run`. This prefixes the path with a root, drive, or UNC prefix rather than a leading hyphen, thereby averting the possibility of argument injection.
+## 2024-05-27 - [Missing Subprocess Timeouts (DoS Risk)]
+**Vulnerability:** Found multiple `subprocess.run` calls in `media_shrinker.py` executing external tools (`ffmpeg`, `ffprobe`, `brctl`) without an explicit `timeout` argument.
+**Learning:** `subprocess.run` blocks indefinitely by default. In a web/SaaS context, or even during batch processing, an external tool hanging (e.g., waiting for input, stalled network mount) can lead to resource exhaustion and Denial of Service (DoS).
+**Prevention:** Always provide a realistic `timeout` argument to `subprocess.run` based on the expected execution time (e.g., 60s for probes, 3600s for heavy processing), and handle `subprocess.TimeoutExpired` appropriately.
