@@ -263,7 +263,20 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
-    """Persist an uploaded media file, shrink it, and return the generated file."""
+    """Persist an uploaded media file, shrink it, and return the generated file.
+
+    Security model for the uploaded bytes (self-contained; no trust in
+    downstream internals): the upload is (1) validated (audio/video content
+    type + bounded target size) by ``_validate_request``, (2) written under a
+    private per-request temp directory with a sanitized filename (never a
+    web-served or executable location), and (3) passed to ``media_shrinker``
+    only as a **file-path argument** to ``ffmpeg``/``ffprobe`` invoked via
+    ``subprocess.run`` with an explicit argument list and ``shell=False`` — the
+    bytes are never executed, ``eval``/``exec``'d, or interpolated into a shell.
+    The generated output is returned as an ``application/octet-stream`` download;
+    the uploaded file itself is never served back. The temp workspace is removed
+    after the response.
+    """
 
     error = _validate_request(file, target_bytes)
     if error is not None:
