@@ -349,7 +349,7 @@ def build_audio_plan(
                 "-protocol_whitelist",
                 "file,crypto,data",
                 "-i",
-                str(source_path.resolve()),
+                str(source_path),
                 "-map",
                 "0:a:0",
                 "-map_metadata",
@@ -413,7 +413,7 @@ def build_opus_plan(
             "-protocol_whitelist",
             "file,crypto,data",
             "-i",
-            str(source_path.resolve()),
+            str(source_path),
             "-map",
             "0:a:0",
             "-map_metadata",
@@ -463,9 +463,9 @@ def probe_media(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path.resolve()),
+        str(source_path),
     ]
-    completed = subprocess.run(command, check=False, shell=False, capture_output=True, text=True)
+    completed = subprocess.run(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -500,7 +500,7 @@ def build_silencedetect_command(
         "-protocol_whitelist",
         "file,crypto,data",
         "-i",
-        str(source_path.resolve()),
+        str(source_path),
         "-af",
         f"silencedetect=noise={silence_noise}:d={_format_seconds(silence_min_duration_seconds)}",
         "-f",
@@ -525,7 +525,7 @@ def detect_silence_intervals(
             silence_noise=silence_noise,
             silence_min_duration_seconds=silence_min_duration_seconds,
         ),
-        check=False, shell=False,
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -645,7 +645,7 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
         )
     completed = subprocess.run(
         build_icloud_download_command(source_path, brctl_path=brctl_path),
-        check=False, shell=False,
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -1561,7 +1561,7 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, shell=False, capture_output=True, text=True
+                command, check=False, capture_output=True, text=True
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
@@ -1631,7 +1631,7 @@ def _copy_macos_creation_time(
     )
     subprocess.run(
         [setfile_path, "-d", creation_date, str(dest.resolve())],
-        check=False, shell=False,
+        check=False,
         capture_output=True,
         text=True,
     )

@@ -31,7 +31,7 @@ class SecurityTests(unittest.TestCase):
 
         command = mock_run.call_args.args[0]
         input_index = command.index("-i")
-        self.assertEqual(command[input_index + 1], str(source_path.resolve()))
+        self.assertEqual(command[input_index + 1], str(source_path))
 
 if __name__ == "__main__":
     unittest.main()
