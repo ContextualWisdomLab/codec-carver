@@ -72,7 +72,7 @@ HTML_TEMPLATE = """
         button:hover:not(:disabled) { background-color: #0056b3; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
         button:focus-visible, input:focus-visible { outline: 2px solid #0056b3; outline-offset: 2px; }
-        input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; outline-offset: 2px; }
+        input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
         .required-star { color: #dc3545; }
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
@@ -211,9 +211,6 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
-    if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
-        return {"error": "Invalid content type"}
-
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -231,8 +228,7 @@ def shrink_media(
 
         # Save the uploaded file
         safe_filename = Path(file.filename).name
-        safe_filename = "".join(c for c in safe_filename if c.isalnum() or c in ".-_")
-        if not safe_filename or safe_filename.startswith(".") or ".." in safe_filename:
+        if not safe_filename or safe_filename in (".", ".."):
             safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename

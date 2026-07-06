@@ -41,4 +41,4 @@
 
 ## 2024-10-24 - Visual Styling for aria-invalid
 **Learning:** Dynamically toggling `aria-invalid="true"` in JavaScript provides screen reader feedback, but without corresponding CSS, sighted users receive no immediate visual cue of the validation state on the input itself.
-**Action:** Always ensure there is a corresponding CSS rule (e.g., `input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; outline-offset: 2px; }`) to provide immediate, distinct visual feedback for invalid form fields.
+**Action:** Always ensure there is a corresponding CSS rule (e.g., `input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }`) to provide immediate, distinct visual feedback for invalid form fields.
