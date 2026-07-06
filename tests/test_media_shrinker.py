@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import tempfile
@@ -6,6 +7,7 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 import media_shrinker
+import presets
 from media_shrinker import (
     ConversionPlan,
     MediaSegment,
@@ -1699,6 +1701,118 @@ class CliTests(unittest.TestCase):
                 mock_stat.st_birthtime = 1234567890.0
                 media_shrinker._copy_macos_creation_time(mock_stat, dest, "SetFile")
                 mock_run.assert_called_once()
+
+class PresetTests(unittest.TestCase):
+    """Scenario preset CLI wiring and precedence."""
+
+    def test_music_preset_applies_bundled_overrides(self) -> None:
+        """`--preset music` fills flac_all and gentler silence from the preset."""
+        args = media_shrinker.parse_args(["root", "--preset", "music"])
+        self.assertTrue(args.flac_all)
+        self.assertEqual(args.silence_noise, "-45dB")
+        self.assertEqual(args.silence_min_duration_seconds, 3.0)
+        # target_bytes is not overridden by music -> stays the real default.
+        self.assertEqual(args.target_bytes, media_shrinker.DEFAULT_TARGET_BYTES)
+
+    def test_archive_preset_raises_target_and_prefers_flac(self) -> None:
+        """`--preset archive` bumps target_bytes and enables flac_all."""
+        args = media_shrinker.parse_args(["root", "--preset", "archive"])
+        self.assertTrue(args.flac_all)
+        self.assertEqual(args.target_bytes, 1_950_000_000)
+        self.assertEqual(args.silence_noise, "-50dB")
+
+    def test_voice_preset_keeps_opus_and_trims_aggressively(self) -> None:
+        """`--preset voice` keeps Opus (flac_all False) with aggressive silence."""
+        args = media_shrinker.parse_args(["root", "--preset", "voice"])
+        self.assertFalse(args.flac_all)
+        self.assertEqual(args.silence_noise, "-30dB")
+        self.assertEqual(args.silence_min_duration_seconds, 0.5)
+
+    def test_explicit_flag_overrides_preset(self) -> None:
+        """A value the user sets on the CLI wins over the preset override."""
+        args = media_shrinker.parse_args(
+            ["root", "--preset", "music", "--silence-noise", "-99dB"]
+        )
+        self.assertEqual(args.silence_noise, "-99dB")
+        # Unspecified options still come from the preset.
+        self.assertTrue(args.flac_all)
+
+    def test_explicit_store_true_flag_overrides_preset(self) -> None:
+        """`--flac-all` set explicitly is honored even for a preset that omits it."""
+        args = media_shrinker.parse_args(["root", "--preset", "voice", "--flac-all"])
+        self.assertTrue(args.flac_all)
+
+    def test_explicit_target_bytes_overrides_archive_preset(self) -> None:
+        """A user-set --target-bytes beats the archive preset's larger value."""
+        args = media_shrinker.parse_args(
+            ["root", "--preset", "archive", "--target-bytes", "5"]
+        )
+        self.assertEqual(args.target_bytes, 5)
+
+    def test_no_preset_leaves_defaults_unchanged(self) -> None:
+        """Without --preset every tunable option equals the built-in default."""
+        args = media_shrinker.parse_args(["root"])
+        self.assertIsNone(args.preset)
+        self.assertFalse(args.flac_all)
+        self.assertEqual(args.silence_noise, media_shrinker.DEFAULT_SILENCE_NOISE)
+        self.assertEqual(
+            args.silence_min_duration_seconds,
+            media_shrinker.DEFAULT_SILENCE_MIN_DURATION_SECONDS,
+        )
+        self.assertEqual(args.target_bytes, media_shrinker.DEFAULT_TARGET_BYTES)
+        self.assertEqual(
+            args.max_duration_seconds,
+            media_shrinker.DEFAULT_MAX_SEGMENT_DURATION_SECONDS,
+        )
+
+    def test_unknown_preset_is_rejected(self) -> None:
+        """An unknown preset name exits via argparse (SystemExit)."""
+        with self.assertRaises(SystemExit):
+            media_shrinker.parse_args(["root", "--preset", "bogus"])
+
+
+class PresetModuleTests(unittest.TestCase):
+    """Unit tests for the standalone presets module logic."""
+
+    def test_preset_names_matches_registry(self) -> None:
+        """preset_names reports every registered preset in definition order."""
+        self.assertEqual(
+            presets.preset_names(), ("voice", "podcast", "music", "archive")
+        )
+
+    def test_apply_preset_without_preset_restores_real_defaults(self) -> None:
+        """No preset: every unset dest receives its real default."""
+        args = argparse.Namespace(preset=None)
+        for dest in presets.PRESET_TUNABLE_DESTS:
+            setattr(args, dest, presets._UNSET)
+        defaults = {dest: f"D_{dest}" for dest in presets.PRESET_TUNABLE_DESTS}
+        presets.apply_preset(args, defaults)
+        for dest, value in defaults.items():
+            self.assertEqual(getattr(args, dest), value)
+
+    def test_apply_preset_override_beats_default_but_not_explicit(self) -> None:
+        """Preset override applies to unset dests; explicit values are untouched."""
+        args = argparse.Namespace(preset="music")
+        # flac_all explicitly set by the user -> must be preserved.
+        args.flac_all = False
+        args.silence_noise = presets._UNSET
+        args.silence_min_duration_seconds = presets._UNSET
+        args.target_bytes = presets._UNSET
+        args.max_duration_seconds = presets._UNSET
+        defaults = {dest: None for dest in presets.PRESET_TUNABLE_DESTS}
+        presets.apply_preset(args, defaults)
+        self.assertFalse(args.flac_all)  # explicit user value survives
+        self.assertEqual(args.silence_noise, "-45dB")  # from music preset
+        self.assertIsNone(args.target_bytes)  # not in preset -> default
+
+    def test_apply_preset_returns_same_namespace(self) -> None:
+        """apply_preset mutates and returns the same namespace object."""
+        args = argparse.Namespace(preset=None)
+        for dest in presets.PRESET_TUNABLE_DESTS:
+            setattr(args, dest, presets._UNSET)
+        result = presets.apply_preset(args, {d: 0 for d in presets.PRESET_TUNABLE_DESTS})
+        self.assertIs(result, args)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,6 +23,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+import presets
+
 
 SUPPORTED_EXTENSIONS = {
     ".3gp",
@@ -1247,7 +1249,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow overwriting generated output paths",
     )
-    return parser.parse_args(_normalize_argv(argv))
+    parser.add_argument(
+        "--preset",
+        choices=presets.preset_names(),
+        default=None,
+        help=(
+            "Apply bundled defaults for a scenario. Explicit flags always win "
+            "over the preset."
+        ),
+    )
+
+    # Capture the tool's built-in defaults, then seed the namespace with a
+    # sentinel for every preset-tunable option so argparse leaves it untouched
+    # unless the user passes the flag. That lets apply_preset tell "unset" apart
+    # from "set to the default value" and give explicit flags precedence.
+    real_defaults = {
+        dest: parser.get_default(dest) for dest in presets.PRESET_TUNABLE_DESTS
+    }
+    namespace = argparse.Namespace()
+    for dest in presets.PRESET_TUNABLE_DESTS:
+        setattr(namespace, dest, presets._UNSET)
+    args = parser.parse_args(_normalize_argv(argv), namespace)
+    return presets.apply_preset(args, real_defaults)
 
 
 def _execute_conversions(
