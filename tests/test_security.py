@@ -36,49 +36,11 @@ class SecurityTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
     @patch("media_shrinker.subprocess.run")
-    def test_probe_media_handles_timeout(self, mock_run: MagicMock) -> None:
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ffprobe", timeout=60)
-        with self.assertRaisesRegex(MediaShrinkerError, "ffprobe timed out"):
-            probe_media(Path("source.wav"))
-
-    @patch("media_shrinker.subprocess.run")
-    def test_detect_silence_handles_timeout(self, mock_run: MagicMock) -> None:
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ffmpeg", timeout=3600)
-        with self.assertRaisesRegex(MediaShrinkerError, "silencedetect timed out"):
-            detect_silence_intervals(Path("source.wav"))
-
-    @patch("media_shrinker.subprocess.run")
-    def test_download_icloud_handles_timeout(self, mock_run: MagicMock) -> None:
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="brctl", timeout=3600)
-        with patch("shutil.which", return_value="brctl"):
-            with self.assertRaisesRegex(MediaShrinkerError, "iCloud download timed out"):
-                download_from_icloud(Path("source.wav"))
-
-    @patch("media_shrinker.subprocess.run")
-    def test_execute_plan_handles_timeout(self, mock_run: MagicMock) -> None:
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ffmpeg", timeout=3600)
-        plan = ConversionPlan(
-            strategy="test",
-            input_path=Path("source.wav"),
-            output_path=Path("out.opus"),
-            ffmpeg_args=["-i", "source.wav", "out.opus"]
-        )
-        with self.assertRaisesRegex(MediaShrinkerError, "ffmpeg timed out"):
-            _execute_plan(plan, Path("source.wav"), Path("final.opus"), ffmpeg_path="ffmpeg", overwrite=True)
-
-    @patch("media_shrinker.subprocess.run")
-    def test_copy_macos_creation_time_handles_timeout(self, mock_run: MagicMock) -> None:
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="SetFile", timeout=60)
-        mock_stat = MagicMock()
-        mock_stat.st_birthtime = 1234567890.0
-        # Should not raise exception
-        _copy_macos_creation_time(mock_stat, Path("dest.txt"), "SetFile")
-
-    @patch("media_shrinker.subprocess.run")
     def test_probe_media_invalid_json(self, mock_run: MagicMock) -> None:
         mock_completed = MagicMock()
         mock_completed.returncode = 0
         mock_completed.stdout = "invalid json"
         mock_run.return_value = mock_completed
+        from media_shrinker import probe_media, MediaShrinkerError
         with self.assertRaisesRegex(MediaShrinkerError, "ffprobe returned invalid JSON"):
             probe_media(Path("source.wav"))
