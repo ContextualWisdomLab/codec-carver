@@ -1682,5 +1682,116 @@ class CliTests(unittest.TestCase):
             media_shrinker._copy_macos_creation_time(MagicMock(spec=[]), dest, "SetFile")
 
 
+    @patch("media_shrinker.os.listxattr", return_value=["test_attr"])
+    @patch("media_shrinker.os.getxattr", side_effect=OSError)
+    @patch("media_shrinker.os.setxattr")
+    def test_copy_extended_attributes_oserror_get(self, mock_set, mock_get, mock_list):
+        """copy_extended_attributes gracefully handles OSError during getxattr."""
+        with patch("builtins.hasattr", return_value=True):
+            media_shrinker._copy_extended_attributes(Path("source"), Path("dest"))
+            mock_set.assert_not_called()
+
+    @patch("media_shrinker.os.listxattr", side_effect=OSError)
+    def test_copy_extended_attributes_oserror_list(self, mock_list):
+        with patch("builtins.hasattr", return_value=True):
+            media_shrinker._copy_extended_attributes(Path("source"), Path("dest"))
+
+    @patch("media_shrinker.os.listxattr", return_value=["test_attr"])
+    @patch("media_shrinker.os.getxattr", return_value=b"value")
+    @patch("media_shrinker.os.setxattr", side_effect=OSError)
+    def test_copy_extended_attributes_oserror_set(self, mock_set, mock_get, mock_list):
+        """copy_extended_attributes gracefully handles OSError during setxattr."""
+        with patch("builtins.hasattr", return_value=True):
+            media_shrinker._copy_extended_attributes(Path("source"), Path("dest"))
+            mock_set.assert_called_once()
+
+    @patch("media_shrinker.subprocess.run")
+    def test_ffprobe_timeout(self, mock_run):
+        """ffprobe raises MediaShrinkerError on timeout."""
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=60)
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker.probe_media(Path("input.mp4"))
+
+    @patch("media_shrinker.subprocess.run")
+    def test_silencedetect_timeout(self, mock_run):
+        """silencedetect raises MediaShrinkerError on timeout."""
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=600)
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker.detect_silence_intervals(Path("input.mp4"))
+
+    @patch("media_shrinker.subprocess.run")
+    def test_icloud_download_timeout(self, mock_run):
+        """icloud download raises MediaShrinkerError on timeout."""
+        import subprocess
+        with patch("media_shrinker.shutil.which", return_value="/bin/brctl"):
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd=["brctl"], timeout=600)
+            with self.assertRaises(media_shrinker.MediaShrinkerError):
+                media_shrinker.download_from_icloud(Path("input.mp4"))
+
+    @patch("media_shrinker.subprocess.run")
+    def test_execute_plan_timeout(self, mock_run):
+        """execute_plan raises MediaShrinkerError on timeout."""
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=3600)
+        plan = media_shrinker.ConversionPlan(
+            strategy="copy",
+            input_path=Path("in.mp4"),
+            output_path=Path("out.mp4"),
+            ffmpeg_args=["ffmpeg", "-i", "in.mp4", "out.mp4"]
+        )
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker._execute_plan(
+                plan, Path("in.mp4"), Path("out.mp4"), ffmpeg_path="ffmpeg", overwrite=True
+            )
+
+    @patch("media_shrinker.subprocess.run")
+    def test_copy_macos_metadata_timeout(self, mock_run):
+        """copy_macos_metadata handles timeout gracefully."""
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["SetFile"], timeout=10)
+        # Mock birthtime
+        stat_mock = MagicMock()
+        stat_mock.st_birthtime = 1234567890.0
+        # Shouldn't raise error
+        media_shrinker._copy_macos_creation_time(stat_mock, Path("dest.mp4"), setfile_path="SetFile")
+
+    @patch("media_shrinker.os.utime")
+    @patch("media_shrinker._copy_macos_creation_time")
+    def test_copy_metadata_with_setfile(self, mock_copy_macos, mock_utime):
+        """copy_metadata calls SetFile wrapper if SetFile is found."""
+        stat_mock = MagicMock()
+        stat_mock.st_atime_ns = 100
+        stat_mock.st_mtime_ns = 200
+        stat_mock.st_mode = 0o100644
+        with patch("pathlib.Path.stat", return_value=stat_mock), patch("media_shrinker.os.chmod"), patch("media_shrinker._copy_extended_attributes"):
+            media_shrinker.preserve_file_attributes(Path("source"), Path("dest"), setfile_path="/bin/SetFile")
+            mock_copy_macos.assert_called_once_with(stat_mock, Path("dest"), "/bin/SetFile")
+
+
+    @patch("media_shrinker.os.listxattr", return_value=["test_attr"])
+    @patch("media_shrinker.os.getxattr", side_effect=OSError)
+    @patch("media_shrinker.os.setxattr")
+    def test_copy_extended_attributes_oserror_getxattr(self, mock_set, mock_get, mock_list):
+        """copy_extended_attributes gracefully handles OSError during getxattr and continues."""
+        with patch("builtins.hasattr", return_value=True):
+            media_shrinker._copy_extended_attributes(Path("source"), Path("dest"))
+            mock_set.assert_not_called()
+
+    @patch("media_shrinker.os.listxattr", return_value=["test_attr"])
+    @patch("media_shrinker.os.getxattr", return_value=b"value")
+    @patch("media_shrinker.os.setxattr", side_effect=OSError)
+    def test_copy_extended_attributes_oserror_set(self, mock_set, mock_get, mock_list):
+        """copy_extended_attributes gracefully handles OSError during setxattr."""
+        with patch("builtins.hasattr", return_value=True):
+            media_shrinker._copy_extended_attributes(Path("source"), Path("dest"))
+            mock_set.assert_called_once()
+
+    def test_copy_extended_attributes_not_supported(self):
+        with patch("builtins.hasattr", return_value=False):
+            media_shrinker._copy_extended_attributes(Path("source"), Path("dest"))
+
+
 if __name__ == "__main__":
     unittest.main()
