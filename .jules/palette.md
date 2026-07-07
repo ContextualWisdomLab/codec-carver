@@ -46,3 +46,7 @@
 ## 2024-06-30 - Quick Preset Buttons for Raw Inputs
 **Learning:** Large raw byte inputs create high cognitive load and increase magnitude errors. Providing accessible quick preset buttons allows users to quickly select common values with confidence, reducing errors and reliance on manual typing.
 **Action:** Add quick preset buttons for common values near raw inputs (especially bytes), ensuring they are accessible via keyboard and properly associated with `aria-describedby`.
+
+## 2024-07-07 - aria-describedby와 role=group 사용 시 스크린 리더의 과도한 음성 출력(Verbosity) 방지
+**Learning:** 입력 필드의 `aria-describedby` 속성을 `role="group"`이 지정된 컨테이너에 직접 연결하면, 입력 필드에 포커스가 갈 때마다 스크린 리더가 그룹 역할과 그룹 내의 모든 내용을 반복해서 읽어 과도하고 혼란스러운 음성 출력을 발생시킵니다.
+**Action:** `role="group"` 속성은 논리적으로 그룹화되는 요소들(예: 관련 프리셋 버튼 묶음)에만 엄격하게 적용해야 합니다. 또한 그룹 컨테이너 자체에는 `aria-label`을 사용하여 접근성 높은 레이블을 직접 제공해야 합니다. 입력 필드의 `aria-describedby` 속성이 그룹 컨테이너를 가리키게 해서는 안 되며, 오직 실제 설명 텍스트가 포함된 요소(span 등)만 가리키도록 해야 합니다.
