@@ -60,3 +60,7 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+
+## 2024-05-18 - ffmpeg 로그 파싱 메모리 최적화
+**Learning:** `ffmpeg`의 stderr와 같은 대용량 서브프로세스 로그를 처리할 때 `.splitlines()`를 사용하면 모든 줄을 메모리에 한 번에 로드하여(O(N) 메모리 할당) 성능 저하 및 메모리 부족 현상이 발생할 수 있습니다.
+**Action:** 대규모 문자열 출력을 파싱할 때는 `.splitlines()`를 피하고 `re.finditer()`를 사용하여 순차적으로 스캔함으로써 메모리 사용량을 최소화하고 성능을 개선합니다.
