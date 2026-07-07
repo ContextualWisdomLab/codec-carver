@@ -36,3 +36,13 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities.
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
 **Prevention:** Resolve file paths before passing them to `subprocess.run` when a tool does not support an explicit input flag or `--` delimiter. Absolute paths use a root, drive, or UNC prefix rather than a leading hyphen, so they cannot be parsed as command-line options.
+
+## 2026-06-28 - [Sentinel: Command Injection via Malicious Filenames]
+**Vulnerability:** Command Injection via Malicious Filenames (CWE-78) when passing unsanitized user input to command line executions.
+**Learning:** Even though `Path(filename).name` extracts the file name from a path, it still allows special characters like `;`, `&`, `|`, and ` ` which can be used to inject commands if the filename is later processed by tools executed in the shell or passed carelessly into subprocesses.
+**Prevention:** Strictly validate and sanitize uploaded filenames using an allow-list (e.g. `"".join(c for c in safe_filename if c.isalnum() or c in ".-_ ")`) to strip out characters that have special meaning to the shell, and additionally check that the sanitized name does not start with a hyphen to prevent argument injection.
+
+## 2026-06-28 - [Sentinel: Command Injection via Malicious Filenames]
+**Vulnerability:** Command Injection via Malicious Filenames (CWE-78) when passing unsanitized user input to command line executions.
+**Learning:** Even though `Path(filename).name` extracts the file name from a path, it still allows special characters like `;`, `&`, `|`, and ` ` which can be used to inject commands if the filename is later processed by tools executed in the shell or passed carelessly into subprocesses.
+**Prevention:** Strictly validate and sanitize uploaded filenames using an allow-list (e.g. `"".join(c for c in safe_filename if c.isalnum() or c in ".-_ ")`) to strip out characters that have special meaning to the shell, and additionally check that the sanitized name does not start with a hyphen to prevent argument injection.

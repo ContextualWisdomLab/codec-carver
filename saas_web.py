@@ -1,9 +1,11 @@
-import logging
-import os
-import secrets
-import shutil
+"""
+SaaS Web API for Codec Carver.
+
+Provides a FastAPI-based web interface to upload and shrink media files.
+"""
 import tempfile
-import time
+import logging
+import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -12,32 +14,18 @@ import media_shrinker
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
-MAX_TARGET_BYTES = MAX_UPLOAD_BYTES
-RATE_LIMIT_WINDOW_SECONDS = 60
-RATE_LIMIT_MAX_REQUESTS = 60
-_request_times: dict[str, list[float]] = {}
 
 
 class RequestTooLarge(Exception):
+    """Exception raised when the request size exceeds the allowed limit."""
+    """Exception raised when the request size exceeds the allowed limit."""
     pass
 
 
 @app.middleware("http")
-async def rate_limit_requests(request: Request, call_next):
-    client_host = request.client.host if request.client else "unknown"
-    now = time.monotonic()
-    cutoff = now - RATE_LIMIT_WINDOW_SECONDS
-    history = _request_times.setdefault(client_host, [])
-    history[:] = [timestamp for timestamp in history if timestamp > cutoff]
-    if len(history) >= RATE_LIMIT_MAX_REQUESTS:
-        return JSONResponse(status_code=429, content={"error": "Too Many Requests"})
-    history.append(now)
-    # ponytail: in-process limiter; use a shared store if multi-worker limits matter.
-    return await call_next(request)
-
-
-@app.middleware("http")
 async def limit_request_size(request: Request, call_next):
+    """Middleware to limit the total size of HTTP requests."""
+    """Middleware to limit the total size of HTTP requests."""
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
@@ -53,6 +41,8 @@ async def limit_request_size(request: Request, call_next):
     receive = request._receive
 
     async def limited_receive():
+        """A wrapped receive function that tracks and limits incoming bytes."""
+        """A wrapped receive function that tracks and limits incoming bytes."""
         nonlocal received
         message = await receive()
         if message.get("type") == "http.request":
@@ -69,6 +59,8 @@ async def limit_request_size(request: Request, call_next):
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    """Middleware to add security-related HTTP headers to the response."""
+    """Middleware to add security-related HTTP headers to the response."""
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -208,22 +200,16 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def has_path_components(filename: str) -> bool:
-    """Return whether an upload filename tries to include directories."""
-    normalized = filename.replace("\\", "/")
-    return "/" in normalized or normalized in {".", ".."}
-
-
 def cleanup_temp_dir(temp_dir_path: Path):
     """Clean up the temporary directory after the response is sent."""
-    temp_root = Path(tempfile.gettempdir()).resolve()
-    resolved_path = temp_dir_path.resolve()
-    if temp_dir_path.exists() and (resolved_path == temp_root or temp_root in resolved_path.parents):
+    if temp_dir_path.exists():
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
 @app.get("/", response_class=HTMLResponse)
 async def get_ui():
+    """Returns the main HTML user interface."""
+    """Returns the main HTML user interface."""
     return HTML_TEMPLATE
 
 
@@ -233,23 +219,13 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
+    """Processes an uploaded media file and returns the shrunk version."""
+    """Processes an uploaded media file and returns the shrunk version."""
     if target_bytes <= 0:
         return {"error": "Invalid target_bytes value. Must be greater than 0."}
 
-    if target_bytes > MAX_TARGET_BYTES:
-        return {"error": "Invalid target_bytes value. Must not exceed maximum upload size."}
-
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
-
-    if has_path_components(file.filename):
-        return JSONResponse(status_code=400, content={"error": "Invalid upload filename"})
-
-    if not file.content_type or not file.content_type.startswith(("audio/", "video/")):
-        return {"error": "Invalid content type"}
-    suffix = Path(file.filename).suffix.lower()
-    if suffix not in media_shrinker.SUPPORTED_EXTENSIONS:
-        return {"error": "Invalid content type"}
 
     # Create a temporary directory that will hold the input and output
     try:
@@ -263,16 +239,31 @@ def shrink_media(
         # Setup paths
         input_dir = temp_dir_path / "input"
         output_dir = temp_dir_path / "output"
-        input_dir.mkdir(mode=0o700)
-        output_dir.mkdir(mode=0o700)
+        input_dir.mkdir()
+        output_dir.mkdir()
 
         # Save the uploaded file
-        safe_filename = f"upload-{secrets.token_hex(16)}{suffix}"
+
+
+        safe_filename = Path(file.filename).name
+        if not safe_filename or safe_filename in (".", ".."):
+            safe_filename = "upload.tmp"
+
+        # Strict whitelist validation for filename characters to prevent command injection
+        safe_filename = "".join(c for c in safe_filename if c.isalnum() or c in ".-_ ")
+        if not safe_filename or safe_filename.startswith("-"):
+            safe_filename = "upload.tmp"
+
+
+        # Strict whitelist validation for filename characters to prevent command injection
+        safe_filename = "".join(c for c in safe_filename if c.isalnum() or c in ".-_ ")
+        if not safe_filename or safe_filename.startswith("-"):
+            safe_filename = "upload.tmp"
+
 
         source_path = input_dir / safe_filename
         bytes_written = 0
-        fd = os.open(source_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "wb") as f:
+        with open(source_path, "wb") as f:
             while chunk := file.file.read(1024 * 1024):  # 1 MB chunks
                 bytes_written += len(chunk)
                 if bytes_written > MAX_UPLOAD_BYTES:

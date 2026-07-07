@@ -1,3 +1,4 @@
+"""Test module."""
 import json
 import os
 import tempfile
@@ -30,9 +31,11 @@ from media_shrinker import (
 
 
 class FindCandidateTests(unittest.TestCase):
+    """Test class."""
     def test_find_candidates_returns_supported_files_over_limit_case_insensitively(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             large_wav = root / "A.WAV"
@@ -58,6 +61,7 @@ class FindCandidateTests(unittest.TestCase):
     def test_find_candidates_includes_under_limit_by_default_for_all_source_conversion(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             small_mp3 = root / "small.mp3"
@@ -73,6 +77,7 @@ class FindCandidateTests(unittest.TestCase):
     def test_find_candidates_can_include_under_limit_and_skip_output_directory(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.m4a"
@@ -94,6 +99,7 @@ class FindCandidateTests(unittest.TestCase):
             self.assertEqual(candidates, [Path("source.m4a")])
 
     def test_find_candidates_skips_multiple_excluded_paths(self) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             keep = root / "keep" / "source.wav"
@@ -121,6 +127,7 @@ class FindCandidateTests(unittest.TestCase):
     def test_find_candidates_can_skip_generated_split_directories_by_prefix(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -143,6 +150,7 @@ class FindCandidateTests(unittest.TestCase):
     def test_find_candidates_skips_directory_when_current_dir_cannot_resolve(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             good = root / "good.mp3"
@@ -158,6 +166,7 @@ class FindCandidateTests(unittest.TestCase):
             original_realpath = os.path.realpath
 
             def flaky_realpath(path: str, *args: object, **kwargs: object) -> str:
+                """Test method."""
                 if path == str(broken):
                     raise OSError("cannot resolve directory")
                 return original_realpath(path, *args, **kwargs)
@@ -171,6 +180,7 @@ class FindCandidateTests(unittest.TestCase):
             self.assertEqual(candidates, [Path("good.mp3")])
 
     def test_find_candidates_skips_entries_when_symlink_check_fails(self) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             good = root / "good.mp3"
@@ -188,6 +198,7 @@ class FindCandidateTests(unittest.TestCase):
             original_lstat = os.lstat
 
             def flaky_lstat(path):
+                """Test method."""
                 name = os.path.basename(str(path))
                 if name in {"bad.mp3", "bad_dir"}:
                     raise OSError("cannot inspect symlink state")
@@ -203,10 +214,12 @@ class FindCandidateTests(unittest.TestCase):
 
 
 class ProbeMediaTests(unittest.TestCase):
+    """Test class."""
     @patch("media_shrinker.subprocess.run")
     def test_probe_media_raises_error_on_invalid_json(
         self, mock_run: MagicMock
     ) -> None:
+        """Test method."""
         mock_completed = MagicMock()
         mock_completed.returncode = 0
         mock_completed.stdout = "invalid json"
@@ -218,6 +231,7 @@ class ProbeMediaTests(unittest.TestCase):
         self.assertIn("ffprobe returned invalid JSON for test.wav", str(cm.exception))
 
     def test_parse_probe_payload_uses_known_source_size_without_stat(self) -> None:
+        """Test method."""
         payload = {
             "streams": [
                 {
@@ -240,9 +254,11 @@ class ProbeMediaTests(unittest.TestCase):
 
 
 class PlanningTests(unittest.TestCase):
+    """Test class."""
     def test_pcm_wav_uses_lossless_flac_first_and_preserves_container_metadata(
         self,
     ) -> None:
+        """Test method."""
         probe = MediaProbe(
             duration_seconds=3600.0,
             size_bytes=4_294_808_936,
@@ -266,6 +282,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("flac", plan.ffmpeg_args)
 
     def test_conversion_command_resolves_input_and_output_overrides(self) -> None:
+        """Test method."""
         plan = ConversionPlan(
             strategy="test",
             input_path=Path("input.wav"),
@@ -287,6 +304,7 @@ class PlanningTests(unittest.TestCase):
     def test_lossy_audio_uses_highest_opus_bitrate_that_fits_target_with_safety_margin(
         self,
     ) -> None:
+        """Test method."""
         probe = MediaProbe(
             duration_seconds=10_000.0,
             size_bytes=3_000_000_000,
@@ -309,6 +327,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("libopus", plan.ffmpeg_args)
 
     def test_prefer_flac_converts_lossy_audio_to_flac_without_extra_loss(self) -> None:
+        """Test method."""
         probe = MediaProbe(
             duration_seconds=3_600.0,
             size_bytes=50_000_000,
@@ -334,6 +353,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("0", plan.ffmpeg_args)
 
     def test_calculate_audio_bitrate_never_exceeds_source_bitrate(self) -> None:
+        """Test method."""
         bitrate = calculate_audio_bitrate(
             duration_seconds=1_000.0,
             target_bytes=1_900_000_000,
@@ -343,6 +363,7 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(bitrate, 96_000)
 
     def test_same_stem_sources_keep_unique_output_paths(self) -> None:
+        """Test method."""
         wav_probe = MediaProbe(
             duration_seconds=60.0,
             size_bytes=1_000,
@@ -381,6 +402,7 @@ class PlanningTests(unittest.TestCase):
     def test_execute_plan_refuses_to_replace_source_path_even_with_overwrite(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.flac"
@@ -410,6 +432,7 @@ class PlanningTests(unittest.TestCase):
     def test_long_sources_plan_part_outputs_below_four_hours_at_latest_silence_point(
         self,
     ) -> None:
+        """Test method."""
         segments = build_segments(
             duration_seconds=18_500.0,
             max_segment_duration_seconds=14_400.0,
@@ -442,6 +465,7 @@ class PlanningTests(unittest.TestCase):
     def test_spanning_silence_split_advances_near_window_end_not_segment_start(
         self,
     ) -> None:
+        """Test method."""
         split_point = media_shrinker._choose_silence_split_point(
             segment_start=10_000.0,
             window_end=24_400.0,
@@ -455,6 +479,7 @@ class PlanningTests(unittest.TestCase):
     def test_long_sources_fall_back_to_hard_splits_just_under_four_hours_without_silence(
         self,
     ) -> None:
+        """Test method."""
         segments = build_segments(
             duration_seconds=30_000.0,
             max_segment_duration_seconds=14_400.0,
@@ -472,6 +497,7 @@ class PlanningTests(unittest.TestCase):
     def test_segmented_conversion_plan_uses_part_name_seek_and_segment_duration(
         self,
     ) -> None:
+        """Test method."""
         probe = MediaProbe(
             duration_seconds=18_500.0,
             size_bytes=4_000_000_000,
@@ -500,6 +526,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("14230", plan.ffmpeg_args)
 
     def test_segment_duration_ffmpeg_arg_never_rounds_up_to_four_hours(self) -> None:
+        """Test method."""
         probe = MediaProbe(
             duration_seconds=14_399.9996,
             size_bytes=1_000,
@@ -527,6 +554,7 @@ class PlanningTests(unittest.TestCase):
     def test_convert_segment_marks_too_long_when_generated_output_probes_over_limit(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -552,6 +580,7 @@ class PlanningTests(unittest.TestCase):
                 ffprobe_path: str = "ffprobe",
                 source_size: int | None = None,
             ) -> MediaProbe:
+                """Test method."""
                 return output_probe if path.suffix == ".flac" else source_probe
 
             try:
@@ -586,6 +615,7 @@ class PlanningTests(unittest.TestCase):
     def test_convert_segment_deletes_generated_output_when_duration_mismatches_expected_segment(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -637,6 +667,7 @@ class PlanningTests(unittest.TestCase):
             self.assertFalse((output_dir / "source.wav.flac").exists())
 
     def test_existing_output_with_wrong_duration_is_replaced_not_skipped(self) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -697,6 +728,7 @@ class PlanningTests(unittest.TestCase):
     def test_stale_oversized_existing_output_is_replaced_at_canonical_path(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -752,6 +784,7 @@ class PlanningTests(unittest.TestCase):
     def test_legacy_stem_output_over_duration_is_deleted_before_segmented_conversion(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -815,6 +848,7 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(canonical.read_bytes(), b"ok")
 
     def test_cleanup_refuses_to_delete_another_protected_source_file(self) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -849,6 +883,7 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(other_source.read_bytes(), b"do-not-delete")
 
     def test_prefer_flac_reuses_existing_opus_fallback_output(self) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -891,6 +926,7 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(result.output_path, existing_opus)
 
     def test_missing_source_size_fallback_keeps_failure_reporting_safe(self) -> None:
+        """Test method."""
         missing_source = Path("/tmp/media-shrinker-test-missing-source.wav")
 
         self.assertEqual(media_shrinker.safe_source_size(missing_source), 0)
@@ -898,6 +934,7 @@ class PlanningTests(unittest.TestCase):
     def test_parse_silencedetect_intervals_pairs_long_silence_start_and_end(
         self,
     ) -> None:
+        """Test method."""
         stderr = """
         [silencedetect @ 0x1] silence_start: 14200.125
         [silencedetect @ 0x1] silence_end: 14260.375 | silence_duration: 60.25
@@ -917,8 +954,10 @@ class PlanningTests(unittest.TestCase):
 
 
 class SilenceDetectionTests(unittest.TestCase):
+    """Test class."""
     @patch("media_shrinker.subprocess.run")
     def test_detect_silence_intervals_success(self, mock_run: MagicMock) -> None:
+        """Test method."""
         mock_completed = MagicMock()
         mock_completed.returncode = 0
         mock_completed.stderr = """
@@ -955,6 +994,7 @@ class SilenceDetectionTests(unittest.TestCase):
     def test_detect_silence_intervals_failure_raises_error(
         self, mock_run: MagicMock
     ) -> None:
+        """Test method."""
         mock_completed = MagicMock()
         mock_completed.returncode = 1
 
@@ -969,15 +1009,18 @@ class SilenceDetectionTests(unittest.TestCase):
 
 
 class MetadataPreservationTests(unittest.TestCase):
+    """Test class."""
     @patch("os.setxattr", create=True)
     @patch("os.getxattr", create=True)
     @patch("os.listxattr", create=True)
     def test_preserve_file_attributes_ignores_getxattr_oserror(
         self, mock_list, mock_get, mock_set
     ) -> None:
+        """Test method."""
         mock_list.return_value = ["user.attr1", "user.attr2"]
 
         def mock_getxattr_side_effect(src, name):
+            """Test method."""
             if name == "user.attr1":
                 raise OSError("Access denied")
             return b"value2"
@@ -999,6 +1042,7 @@ class MetadataPreservationTests(unittest.TestCase):
     def test_preserve_file_attributes_copies_times_and_extended_attributes_when_supported(
         self,
     ) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.wav"
@@ -1033,9 +1077,11 @@ class MetadataPreservationTests(unittest.TestCase):
 
 
 class ICloudDownloadTests(unittest.TestCase):
+    """Test class."""
     def test_build_icloud_download_command_uses_argument_list_for_paths_with_spaces(
         self,
     ) -> None:
+        """Test method."""
         command = build_icloud_download_command(
             Path("folder/file with spaces.m4a"), brctl_path="brctl"
         )
@@ -1047,17 +1093,22 @@ class ICloudDownloadTests(unittest.TestCase):
 
 
 class ParallelismTests(unittest.TestCase):
+    """Test class."""
     def test_choose_worker_count_uses_requested_workers_when_positive(self) -> None:
+        """Test method."""
         self.assertEqual(choose_worker_count(3, cpu_count=8), 3)
 
     def test_choose_worker_count_auto_uses_multiple_workers_without_exceeding_half_cores(
         self,
     ) -> None:
+        """Test method."""
         self.assertEqual(choose_worker_count(0, cpu_count=10), 4)
 
 
 class ReportingTests(unittest.TestCase):
+    """Test class."""
     def test_write_report(self) -> None:
+        """Test method."""
         result1 = media_shrinker.ConversionResult(
             source_path=Path("/scan/source1.wav"),
             output_path=Path("/scan/source1.wav.flac"),
@@ -1099,6 +1150,7 @@ class ReportingTests(unittest.TestCase):
             self.assertIsNone(payload[1]["output_size_bytes"])
 
     def test_format_result_handles_output_path_outside_scan_root(self) -> None:
+        """Test method."""
         result = media_shrinker.ConversionResult(
             source_path=Path("/scan/source.wav"),
             output_path=Path("/external-output/source.wav.flac"),
@@ -1115,23 +1167,29 @@ class ReportingTests(unittest.TestCase):
 
 
 class FirstFloatTests(unittest.TestCase):
+    """Test class."""
     def test_first_float_returns_first_valid_number(self) -> None:
+        """Test method."""
         self.assertEqual(_first_float(1.5, "2.0"), 1.5)
         self.assertEqual(_first_float(None, 2.0, 3.0), 2.0)
         self.assertEqual(_first_float("N/A", "1.1"), 1.1)
 
     def test_first_float_ignores_type_error_and_value_error(self) -> None:
+        """Test method."""
         self.assertEqual(_first_float({}, "not-a-float", 3.14), 3.14)
         self.assertEqual(_first_float([], None, "bad", 42.0), 42.0)
 
     def test_first_float_returns_zero_on_all_failures(self) -> None:
+        """Test method."""
         self.assertEqual(_first_float(), 0.0)
         self.assertEqual(_first_float(None, "N/A"), 0.0)
         self.assertEqual(_first_float({}, "bad"), 0.0)
 
 
 class FirstIntTests(unittest.TestCase):
+    """Test class."""
     def test_first_int_handles_uncastable_types(self) -> None:
+        """Test method."""
         self.assertEqual(_first_int("invalid", "N/A", None, "12"), 12)
         self.assertIsNone(_first_int("invalid", object(), []))
         self.assertEqual(_first_int(10), 10)
@@ -1139,6 +1197,7 @@ class FirstIntTests(unittest.TestCase):
         self.assertIsNone(_first_int())
 
     def test_first_int_more_cases(self) -> None:
+        """Test method."""
         self.assertIsNone(_first_int("not a number"))
         self.assertIsNone(_first_int([1, 2]))
         self.assertIsNone(_first_int({"a": 1}))
@@ -1147,7 +1206,9 @@ class FirstIntTests(unittest.TestCase):
 
 
 class FormatSecondsTests(unittest.TestCase):
+    """Test class."""
     def test_format_seconds_truncates_to_three_decimals(self) -> None:
+        """Test method."""
         from media_shrinker import _format_seconds
 
         self.assertEqual(_format_seconds(1.23456), "1.234")
@@ -1157,13 +1218,16 @@ class FormatSecondsTests(unittest.TestCase):
 
 
 class CollisionResolutionTests(unittest.TestCase):
+    """Test class."""
     def test_resolve_collision_returns_original_if_no_collision(self) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "new.flac"
             resolved = media_shrinker._resolve_collision(path, overwrite=False)
             self.assertEqual(resolved, path)
 
     def test_resolve_collision_returns_numbered_variant_if_collision(self) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "existing.flac"
             path.write_bytes(b"data")
@@ -1171,6 +1235,7 @@ class CollisionResolutionTests(unittest.TestCase):
             self.assertEqual(resolved, Path(tmp) / "existing-1.flac")
 
     def test_resolve_collision_returns_original_if_overwrite_is_true(self) -> None:
+        """Test method."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "existing.flac"
             path.write_bytes(b"data")

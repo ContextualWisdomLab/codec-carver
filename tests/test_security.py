@@ -1,3 +1,4 @@
+"""Test module."""
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -5,7 +6,9 @@ from unittest.mock import MagicMock, patch
 from media_shrinker import build_silencedetect_command, MediaShrinkerError, probe_media
 
 class SecurityTests(unittest.TestCase):
+    """Test class."""
     def test_silence_noise_validation(self):
+        """Test method."""
         valid_noises = ["-35dB", "35", "+35.5", "-35.5dB"]
         for noise in valid_noises:
             build_silencedetect_command(Path("test.wav"), silence_noise=noise)
@@ -19,6 +22,7 @@ class SecurityTests(unittest.TestCase):
     def test_probe_media_uses_explicit_input_flag_for_dash_prefixed_path(
         self, mock_run: MagicMock
     ):
+        """Test method."""
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout='{"format":{"duration":"1","size":"10","format_name":"wav"},"streams":[{"codec_type":"audio","codec_name":"pcm_s16le","bit_rate":"128000"}]}',
