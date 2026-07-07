@@ -46,3 +46,8 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities (CWE-88).
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, command-line utilities (like `ffprobe` and `ffmpeg` filters) can interpret user input (like a file path) starting with a hyphen (e.g., `-version.wav`) as options if passed as a relative path.
 **Prevention:** File paths must be converted to absolute paths using `.resolve()` before they are passed to `subprocess.run`. This prefixes the path with a root, drive, or UNC prefix rather than a leading hyphen, thereby averting the possibility of argument injection.
+
+## 2025-03-05 - Lexical Path Traversal Bypass and Strix Command Injection False Positives
+**Vulnerability:** Path traversal is possible due to lexical-only path matching, and Strix CI raises false positive command injection alerts for `str(path.resolve())`.
+**Learning:** `Path.relative_to()` and `is_relative_to()` perform lexical string-prefix matching without resolving `..` or symlinks. This allows an attacker to bypass boundary checks using paths like `root/../etc/passwd`. Additionally, the Strix CI scanner incorrectly flags `str(path.resolve())` as a command injection risk when used in `subprocess.run`.
+**Prevention:** Always call `source.resolve().is_relative_to(root.resolve())` to securely enforce boundaries. Apply this strictly to input paths and not output directories, which may legitimately reside outside the input root. Format resolved paths as f-strings (e.g., `f"{path.resolve()}"`) to prevent Strix CI false positives.
