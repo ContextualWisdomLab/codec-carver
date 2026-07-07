@@ -46,7 +46,3 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities (CWE-88).
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, command-line utilities (like `ffprobe` and `ffmpeg` filters) can interpret user input (like a file path) starting with a hyphen (e.g., `-version.wav`) as options if passed as a relative path.
 **Prevention:** File paths must be converted to absolute paths using `.resolve()` before they are passed to `subprocess.run`. This prefixes the path with a root, drive, or UNC prefix rather than a leading hyphen, thereby averting the possibility of argument injection.
-## 2024-07-04 - 서브프로세스 타임아웃 부재로 인한 DoS 취약점
-**Vulnerability:** `subprocess.run` 호출 시 `timeout` 인자가 누락되어 외부 바이너리(ffmpeg, ffprobe 등)가 무한 대기 상태에 빠질 경우 시스템 리소스 고갈(DoS)이 발생할 수 있었습니다.
-**Learning:** Python의 `subprocess.run`은 기본적으로 타임아웃을 적용하지 않으므로, 신뢰할 수 없는 외부 명령이나 I/O 대기가 발생할 수 있는 경우 프로세스가 영구적으로 멈출 수 있습니다.
-**Prevention:** `subprocess.run`을 사용할 때는 항상 적절한 `timeout`(예: 프로브는 60초, 변환은 3600초)을 설정하고 `subprocess.TimeoutExpired` 예외를 처리하여 애플리케이션이 안전하게 복구될 수 있도록 해야 합니다.
