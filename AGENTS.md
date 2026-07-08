@@ -29,6 +29,25 @@ repo.
   code-scanning tools can't converge on one PR ref). Gating is by the Security
   Scan **job result**, not the code_scanning rule — **don't add tools to that rule.**
 
+### Config & secrets (KV, not env)
+- **Org rule: do NOT read config/secrets via `os.getenv()` / raw environment
+  variables at runtime.** Read them from a KV / credential registry. Org Actions
+  secrets (e.g. `OPENAI_API_KEY`) flow **into** the KV via a bootstrap/CI step;
+  runtime reads from the KV — env is only transport into the KV, never the
+  runtime source.
+- **Reference implementation:** xtrmLLMBatchPython's pgcrypto-encrypted Postgres
+  credential registry (`get_credential(name)`). Reuse that pattern (a DB-backed
+  KV is fine — this repo already ships a stdlib `sqlite3` store in
+  `job_store.py`) unless a dedicated KV is adopted.
+- **Applies here:** `saas_web.py` is a FastAPI service being productized (durable
+  job store, and open PRs adding API-key auth and usage metering), so it *will*
+  read runtime secrets/config (API keys, DB creds, endpoints). When you add them,
+  source them from the KV, not `os.getenv`.
+- **Known deviation to migrate:** the in-flight API-key auth work reads keys from
+  a `CODEC_CARVER_API_KEYS` environment variable — that is exactly the anti-pattern
+  above. Move it to read from the credential registry (env may still be the
+  bootstrap transport that *populates* the KV, never the runtime source).
+
 ### Code exploration
 - There is no `.codegraph/` index in this repo today, so use normal search
   (grep/find) to locate and understand code. If a `.codegraph/` directory is
