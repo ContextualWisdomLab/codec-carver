@@ -1,5 +1,0 @@
-🚨 Severity: CRITICAL
-💡 Vulnerability: Server-Side Request Forgery (SSRF) and Local File Inclusion (LFI). The application executed `ffmpeg` and `ffprobe` on user-supplied media files without any protocol restrictions. Malicious media files, such as crafted HLS playlists (`.m3u8`), could contain embedded URIs using protocols like `http`, `https`, or `tcp`, allowing an attacker to exfiltrate local files or scan internal services when the application attempts to process or probe the media.
-🎯 Impact: Attackers could read sensitive local files, interact with internal APIs, or use the server as a proxy to attack other systems, potentially leading to full server compromise.
-🔧 Fix: Explicitly added `"-protocol_whitelist", "file,crypto,data"` to all `ffmpeg` and `ffprobe` commands in `media_shrinker.py` (`probe_media`, `build_audio_plan`, `build_opus_plan`, `build_silencedetect_command`) before the `-i` input flag. This restricts FFmpeg to only processing safe, necessary local protocols.
-✅ Verification: Ensure the test suite passes (`python3 -m unittest discover -s tests`). Run the CLI against a local media file and verify it still converts correctly.
