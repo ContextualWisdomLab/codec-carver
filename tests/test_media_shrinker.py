@@ -1914,3 +1914,46 @@ class FastPathTests(unittest.TestCase):
                 with patch("media_shrinker._copy_macos_creation_time"):
                     with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
+
+    @patch("subprocess.run")
+    def test_probe_media_timeout(self, mock_run):
+        mock_run.side_effect = media_shrinker.subprocess.TimeoutExpired(cmd="ffprobe", timeout=60)
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker.probe_media(Path("dummy.wav"))
+
+    @patch("subprocess.run")
+    def test_detect_silence_intervals_timeout(self, mock_run):
+        mock_run.side_effect = media_shrinker.subprocess.TimeoutExpired(cmd="ffmpeg", timeout=3600)
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker.detect_silence_intervals(Path("dummy.wav"))
+
+    @patch("subprocess.run")
+    @patch("shutil.which", return_value="brctl")
+    def test_download_from_icloud_timeout(self, mock_which, mock_run):
+        mock_run.side_effect = media_shrinker.subprocess.TimeoutExpired(cmd="brctl", timeout=3600)
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker.download_from_icloud(Path("dummy.wav"))
+
+    @patch("subprocess.run")
+    def test_execute_plan_timeout(self, mock_run):
+        mock_run.side_effect = media_shrinker.subprocess.TimeoutExpired(cmd="ffmpeg", timeout=3600)
+        plan = media_shrinker.ConversionPlan("opus-bitrate", Path("dummy.wav"), Path("out_dir") / "out.opus", ["ffmpeg", "-i", str(Path("dummy.wav"))])
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker._execute_plan(plan, Path("dummy.wav"), Path("out_dir") / "out.opus", ffmpeg_path="ffmpeg", overwrite=True)
+
+    @patch("subprocess.run")
+    def test_copy_macos_creation_time_timeout(self, mock_run):
+        mock_run.side_effect = media_shrinker.subprocess.TimeoutExpired(cmd="SetFile", timeout=60)
+        stat_mock = MagicMock()
+        stat_mock.st_birthtime = 123456789.0
+        media_shrinker._copy_macos_creation_time(stat_mock, Path("dummy.wav"), "SetFile")
+
+    @patch("subprocess.run")
+    @patch("shutil.which", return_value="brctl")
+    def test_download_from_icloud_failed(self, mock_which, mock_run):
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "error"
+        mock_run.return_value = mock_result
+        with self.assertRaises(media_shrinker.MediaShrinkerError):
+            media_shrinker.download_from_icloud(Path("dummy.wav"))

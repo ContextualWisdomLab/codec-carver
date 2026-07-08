@@ -46,3 +46,8 @@
 **Vulnerability:** Argument Injection via relative paths starting with a hyphen in command-line utilities (CWE-88).
 **Learning:** Even when `ffmpeg` inputs are protected by `-i`, command-line utilities (like `ffprobe` and `ffmpeg` filters) can interpret user input (like a file path) starting with a hyphen (e.g., `-version.wav`) as options if passed as a relative path.
 **Prevention:** File paths must be converted to absolute paths using `.resolve()` before they are passed to `subprocess.run`. This prefixes the path with a root, drive, or UNC prefix rather than a leading hyphen, thereby averting the possibility of argument injection.
+
+## 2026-07-15 - [Sentinel: DoS from Unbounded External Binaries]
+**Vulnerability:** Uncontrolled Resource Consumption (CWE-400) / Denial of Service via unbounded `subprocess.run` executions.
+**Learning:** `subprocess.run` blocks indefinitely by default. If external binaries (like `ffmpeg`, `ffprobe`, `brctl`) hang due to malicious inputs or systemic issues, the Python process will block forever, leading to resource exhaustion and DoS.
+**Prevention:** Always configure an explicit `timeout` parameter and handle `subprocess.TimeoutExpired` exceptions when using `subprocess.run` to execute external binaries, ensuring the application does not hang indefinitely.
