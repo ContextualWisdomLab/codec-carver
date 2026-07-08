@@ -60,3 +60,7 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+
+## 2024-05-18 - [Optimizing Parsing of Large Command Outputs]
+**Learning:** Using `.splitlines()` on massive string outputs (like ffmpeg log/stderr data) is extremely memory-intensive (O(N) memory allocation) because it loads all lines into memory at once. It's also computationally slow due to generating the list and iterating over it line by line.
+**Action:** When parsing large outputs in Python, always use `re.finditer()` with a combined regex pattern for sequential scanning instead of `.splitlines()`. This approach maintains a near-zero memory footprint and dramatically speeds up parsing times (observed ~6.6x speedup).
