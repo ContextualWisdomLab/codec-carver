@@ -11,6 +11,7 @@ import argparse
 import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import math
 import os
 import re
 import shutil
@@ -1549,9 +1550,12 @@ def _first_float(*values: Any) -> float:
         if value is None or value == "N/A":
             continue
         try:
-            return float(value)
+            parsed = float(value)
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(parsed):
+            continue
+        return parsed
     return 0.0
 
 
@@ -1561,9 +1565,12 @@ def _first_int(*values: Any) -> int | None:
         if value is None or value == "N/A":
             continue
         try:
-            return int(float(value))
+            parsed = float(value)
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(parsed):
+            continue
+        return int(parsed)
     return None
 
 

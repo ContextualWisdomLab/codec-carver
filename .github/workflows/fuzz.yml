@@ -1,0 +1,73 @@
+name: fuzz
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly deeper run (10 minutes/target) at 03:17 UTC.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Fast property + regression suite (Hypothesis) — keeps the invariants green
+  # on every push without the native fuzzing engine.
+  property-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev dependencies
+        run: pip install hypothesis coverage
+      - name: Run test suite
+        run: python -m unittest discover -s tests -v
+
+  # Coverage-guided fuzzing (Atheris) with a bounded per-target time budget so
+  # CI cost stays low. Each target runs independently in the matrix.
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse_silencedetect
+          - parse_probe_payload
+          - build_segments
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Atheris supports CPython 3.6 - 3.12.
+          python-version: "3.12"
+      - name: Install Atheris
+        run: pip install atheris
+      - name: Select time budget
+        id: budget
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "seconds=600" >> "$GITHUB_OUTPUT"
+          else
+            echo "seconds=90" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Fuzz ${{ matrix.target }}
+        run: |
+          python fuzz/fuzz_${{ matrix.target }}.py \
+            -max_total_time=${{ steps.budget.outputs.seconds }} \
+            -timeout=25 \
+            -rss_limit_mb=2048 \
+            fuzz/corpus/${{ matrix.target }}
+      - name: Upload crash reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: |
+            crash-*
+            oom-*
+            timeout-*
+          if-no-files-found: ignore
