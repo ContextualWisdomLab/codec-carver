@@ -4,6 +4,8 @@ No real speech model is ever loaded here: the faster-whisper backend is either
 injected as a fake or forced unavailable by patching ``sys.modules``.
 """
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -108,24 +110,58 @@ class PostProcessSeamTests(unittest.TestCase):
         args = media_shrinker.parse_args([tempfile.gettempdir(), "--transcribe"])
         hook = _build_transcription_hook(args)
         self.assertIsNotNone(hook)
-        # With faster-whisper unavailable the hook must NOT raise (it prints a skip).
+        # With faster-whisper unavailable the hook must NOT raise; it must emit a
+        # single TRANSCRIBE_SKIP notice carrying the unavailability reason.
+        out = io.StringIO()
         with patch.dict(sys.modules, {"faster_whisper": None}):
-            hook(self._result("converted", Path("out.flac")))
+            with contextlib.redirect_stdout(out):
+                hook(self._result("converted", Path("out.flac")))
+        printed = out.getvalue()
+        self.assertIn("TRANSCRIBE_SKIP\t", printed)
+        self.assertNotIn("TRANSCRIBED\t", printed)
+        self.assertNotIn("TRANSCRIBE_FAIL\t", printed)
 
     def test_hook_success_reports_transcribed(self) -> None:
         args = media_shrinker.parse_args([tempfile.gettempdir(), "--transcribe"])
         hook = _build_transcription_hook(args)
+        out = io.StringIO()
         with patch(
             "transcribe.transcribe_output",
             return_value=(Path("out.flac.txt"), Path("out.flac.json")),
         ):
-            hook(self._result("converted", Path("out.flac")))  # must not raise
+            with contextlib.redirect_stdout(out):
+                hook(self._result("converted", Path("out.flac")))
+        # The success branch must announce the generated .txt sidecar path and
+        # must NOT fall through to the skip/fail branches.
+        self.assertEqual(out.getvalue().strip(), "TRANSCRIBED\tout.flac.txt")
+
+    def test_hook_success_forwards_configured_model(self) -> None:
+        # A meaningful guard on the seam wiring: the model chosen on the CLI must
+        # reach transcribe_output, otherwise --transcribe-model would be inert.
+        args = media_shrinker.parse_args(
+            [tempfile.gettempdir(), "--transcribe", "--transcribe-model", "medium"]
+        )
+        hook = _build_transcription_hook(args)
+        with patch(
+            "transcribe.transcribe_output",
+            return_value=(Path("out.flac.txt"), Path("out.flac.json")),
+        ) as fake_transcribe:
+            with contextlib.redirect_stdout(io.StringIO()):
+                hook(self._result("converted", Path("out.flac")))
+        fake_transcribe.assert_called_once_with(Path("out.flac"), model="medium")
 
     def test_hook_generic_failure_is_isolated(self) -> None:
         args = media_shrinker.parse_args([tempfile.gettempdir(), "--transcribe"])
         hook = _build_transcription_hook(args)
+        out = io.StringIO()
         with patch("transcribe.transcribe_output", side_effect=ValueError("boom")):
-            hook(self._result("converted", Path("out.flac")))  # must not raise
+            with contextlib.redirect_stdout(out):
+                hook(self._result("converted", Path("out.flac")))  # must not raise
+        # A broken transcript is swallowed and surfaced as TRANSCRIBE_FAIL with the
+        # offending output path and error text, never re-raised into conversion.
+        printed = out.getvalue().strip()
+        self.assertTrue(printed.startswith("TRANSCRIBE_FAIL\tout.flac\t"))
+        self.assertIn("boom", printed)
 
     def test_transcribe_model_flag_parsed(self) -> None:
         args = media_shrinker.parse_args(
