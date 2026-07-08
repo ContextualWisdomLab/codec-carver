@@ -91,6 +91,7 @@ HTML_TEMPLATE = """
         .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
         .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
+        .preset-btn[aria-pressed="true"] { background-color: #0f6674; color: white; border-color: #0f6674; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -109,16 +110,17 @@ HTML_TEMPLATE = """
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="preset_buttons_container" class="preset-container">
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)">25 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)">100 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)">500 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)">1 GiB</button>
+                    <button type="button" class="preset-btn" aria-pressed="false" onclick="setTargetBytes(26214400, this)">25 MiB</button>
+                    <button type="button" class="preset-btn" aria-pressed="false" onclick="setTargetBytes(104857600, this)">100 MiB</button>
+                    <button type="button" class="preset-btn" aria-pressed="false" onclick="setTargetBytes(524288000, this)">500 MiB</button>
+                    <button type="button" class="preset-btn" aria-pressed="false" onclick="setTargetBytes(1073741824, this)">1 GiB</button>
                 </div>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
         <script>
             const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
+            const presetButtons = document.querySelectorAll('.preset-btn');
             function formatBinaryBytes(value) {
                 const units = ['B', 'KiB', 'MiB', 'GiB'];
                 let size = value;
@@ -129,10 +131,12 @@ HTML_TEMPLATE = """
                 }
                 return unit === 0 ? size + ' ' + units[unit] : size.toFixed(2) + ' ' + units[unit];
             }
-            function setTargetBytes(bytes) {
+            function setTargetBytes(bytes, btn) {
                 const input = document.getElementById('target_bytes');
                 input.value = bytes;
-                input.dispatchEvent(new Event('input'));
+                presetButtons.forEach(b => b.setAttribute('aria-pressed', 'false'));
+                if (btn) btn.setAttribute('aria-pressed', 'true');
+                input.dispatchEvent(new Event('input', { bubbles: true }));
             }
 
             function updateFileSizePreview(input) {
@@ -156,7 +160,10 @@ HTML_TEMPLATE = """
                 preview.innerText = 'Selected file size: ' + text;
             }
 
-            document.getElementById('target_bytes').addEventListener('input', function() {
+            document.getElementById('target_bytes').addEventListener('input', function(e) {
+                if (e.isTrusted) {
+                    presetButtons.forEach(b => b.setAttribute('aria-pressed', 'false'));
+                }
                 const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
