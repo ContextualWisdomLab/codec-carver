@@ -1914,3 +1914,13 @@ class FastPathTests(unittest.TestCase):
                 with patch("media_shrinker._copy_macos_creation_time"):
                     with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
+
+    def test_parse_silencedetect_intervals_ignores_fast_path(self) -> None:
+        stderr = "silence_start: 1.0\nsilence_end: 2.0"
+        intervals = parse_silencedetect_intervals(stderr)
+        self.assertEqual(len(intervals), 1)
+
+    def test_parse_silencedetect_intervals_handles_invalid_end(self) -> None:
+        stderr = "silence_start: 10.0\nsilence_end: 5.0"
+        intervals = parse_silencedetect_intervals(stderr)
+        self.assertEqual(len(intervals), 0)
