@@ -54,4 +54,33 @@ repo.
   ever added at the repo root, prefer CodeGraph first —
   `codegraph explore "<query>"` or the code-review-graph MCP tools — before
   grep/find; it surfaces callers, callees, and impact that text search misses.
+
+### This repo's role in the ecosystem
+- **codec-carver** is the **speech/video conversion module for STT and
+  omni-modal LLM input** — carving and transcoding recordings into
+  metadata-preserved streams that feed speech-to-text and multimodal LLM
+  pipelines.
+- The org is an ecosystem around **naruon** (the hub: email/PIM that
+  DOM-decomposes emails and files into a persisted knowledge graph). Each
+  component is a **standalone program that must ALSO work as a git submodule**,
+  grown separately and together: **waf-ids-ai-soc** (WAF / IDS / AI SOC / LB /
+  APIM), **clearfolio** (document viewer), **pg-erd-cloud** (ERD tool),
+  **contextual-orchestrator** (LLM cost/perf/upstream-LB gateway beyond
+  LiteLLM), **codec-carver** (this repo — STT/omni-modal speech-video codec),
+  **fast-mlsirm** (LLM-as-a-Judge calibration + evaluation-item quality, using
+  aFIPC FIPC + kaefa item-fit), **feelanet-adfs** (passwordless SSO —
+  OIDC/SCIM/ADFS/LDAP/FIDO2/OAuth2.1, eliminate passwords), **newsdom-api**
+  (PDF→DOM sidecar), and **semantic-data-portal** (upper ontology / catalog /
+  governance plane with its own graph engine).
+
+### Research grounding (attach paper PDFs)
+- **Org rule:** substantive feature/process PRs should find the relevant
+  academic papers and **commit their PDFs into the PR** (e.g. a `docs/papers/`
+  or `references/` directory) with full citations. Respect copyright — attach
+  the PDF only when redistribution is permissible; otherwise **cite + link +
+  summarize** instead of committing the file.
+- **For this repo:** ground speech/codec work in the primary literature — e.g.
+  ASR/STT acoustic modeling, neural audio/speech codecs (Opus/EnCodec-class),
+  and audio-visual / omni-modal representation papers behind any new transcode
+  or feature-extraction path.
 <!-- END cwl-agent-guidance -->
