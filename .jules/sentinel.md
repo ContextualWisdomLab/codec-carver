@@ -50,3 +50,7 @@
 **Vulnerability:** Uncontrolled Resource Consumption (CWE-400) via missing subprocess timeouts.
 **Learning:** `subprocess.run` calls without explicit `timeout` arguments can cause the application to hang indefinitely if the spawned process (e.g., `ffmpeg`, `ffprobe`, `brctl`) deadlocks or takes an unreasonable amount of time due to maliciously crafted input files or underlying system issues.
 **Prevention:** Always specify an explicit, appropriate `timeout` parameter for `subprocess.run` calls (e.g., 60s for probes/metadata, 3600s+ for intensive processing) and handle the resulting `subprocess.TimeoutExpired` exception to ensure the application fails securely and releases resources.
+## 2026-07-15 - [Sentinel: Prevent Path Traversal in convert_file]
+**Vulnerability:** Path traversal vulnerability allowing input paths to resolve outside the restricted root directory (CWE-22).
+**Learning:** Using `Path.relative_to` without checking `.resolve().is_relative_to(root.resolve())` can allow lexical bypasses (e.g., `root/../etc/passwd`) to escape the intended directory boundary, potentially leading to unauthorized file access or writes outside the `output_dir`.
+**Prevention:** Always verify `source.resolve().is_relative_to(root.resolve())` before processing file paths to ensure they remain strictly within the allowed root directory boundary.

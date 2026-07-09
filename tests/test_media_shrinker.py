@@ -1987,3 +1987,16 @@ class FastPathTests(unittest.TestCase):
         mock_run.side_effect = subprocess.TimeoutExpired(cmd=["SetFile"], timeout=60)
         # Should not raise
         _copy_macos_creation_time(MockStat(), Path("/dest"), "SetFile")
+
+class ConvertFileTests(unittest.TestCase):
+    def test_convert_file_rejects_path_traversal_outside_root(self) -> None:
+        from media_shrinker import convert_file, MediaShrinkerError
+
+        source = Path("tests/../media_shrinker.py")
+        root = Path("tests")
+        output_dir = Path("/tmp/out")
+
+        with self.assertRaises(MediaShrinkerError) as ctx:
+            convert_file(source=source, root=root, output_dir=output_dir)
+
+        self.assertIn("is not within root directory", str(ctx.exception))

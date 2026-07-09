@@ -744,6 +744,10 @@ def convert_file(
     source = Path(source)
     root = Path(root)
     output_dir = Path(output_dir)
+
+    if not source.resolve().is_relative_to(root.resolve()):
+        raise MediaShrinkerError(f"Source path {source} is not within root directory {root}")
+
     original_size = (
         original_size if original_size is not None else safe_source_size(source)
     )
