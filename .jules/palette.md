@@ -1,3 +1,6 @@
+## 2024-07-09 - Accessible Toggle Buttons and Associated Inputs
+**Learning:** Overusing `aria-describedby` by pointing it to entire containers (like a group of buttons) causes excessive and confusing screen reader verbosity when focusing the associated input. Furthermore, managing the selected state of quick-action preset buttons requires using the `aria-pressed` attribute alongside a proper `role="group"` container, rather than relying solely on visual cues or inline click handlers.
+**Action:** Use `role="group"` with `aria-label` for grouping toggle buttons, manage their state with `aria-pressed`, and keep `aria-describedby` strictly focused on brief, concise helper text.
 ## 2024-05-24 - CLI Arguments as UX
 **Learning:** In headless or CLI-only applications, the command-line help interface serves as the primary UI. Missing help strings and lack of default value visibility severely impacts developer/user experience and accessibility.
 **Action:** Always ensure `argparse` leverages `ArgumentDefaultsHelpFormatter` and that every argument has a descriptive `help` parameter to provide an intuitive "interface" for CLI tools.
