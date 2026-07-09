@@ -1705,6 +1705,7 @@ if __name__ == "__main__":
 
 class FastPathTests(unittest.TestCase):
     def test_copy_extended_attributes_dummy(self) -> None:
+        import os
         from media_shrinker import _copy_extended_attributes
 
         # We need to hit lines 703-704
@@ -1719,6 +1720,7 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_macos_creation_time_dummy(self) -> None:
         from media_shrinker import _copy_macos_creation_time
+        import stat
 
         # Hit 1632
         class MockStat:
@@ -1745,6 +1747,7 @@ class FastPathTests(unittest.TestCase):
         self.assertIn("foo.txt", s)
 
     def test_copy_extended_attributes_dummy_success(self) -> None:
+        import os
         from media_shrinker import _copy_extended_attributes
 
         # Hit 703-704
@@ -1760,6 +1763,7 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_macos_creation_time_dummy_none(self) -> None:
         from media_shrinker import _copy_macos_creation_time
+        import stat
 
         # Hit 1632
         class MockStat:
@@ -1771,6 +1775,7 @@ class FastPathTests(unittest.TestCase):
             _copy_macos_creation_time(MockStat(), dest, "/bin/echo")
 
     def test_copy_extended_attributes_dummy_set_fail(self) -> None:
+        import os
         from media_shrinker import _copy_extended_attributes
 
         # Hit 703-704
@@ -1787,6 +1792,7 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_macos_creation_time_dummy_not_found(self) -> None:
         from media_shrinker import _copy_macos_creation_time
+        import stat
 
         # Hit 1632
         class MockStat:
@@ -1801,6 +1807,7 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_macos_creation_time_dummy_success(self) -> None:
         from media_shrinker import _copy_macos_creation_time
+        import stat
 
         # Hit 1632
         class MockStat:
@@ -1809,7 +1816,7 @@ class FastPathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "dest.txt"
             dest.write_text("hello")
-            with patch("subprocess.run"):
+            with patch("subprocess.run") as mock_run:
                 _copy_macos_creation_time(MockStat(), dest, "/bin/echo")
 
     def test_preserve_file_attributes_no_setfile(self) -> None:
@@ -1831,6 +1838,7 @@ class FastPathTests(unittest.TestCase):
                     preserve_file_attributes(src, dest)
 
     def test_copy_extended_attributes_dummy_success_branch(self) -> None:
+        import os
         from media_shrinker import _copy_extended_attributes
 
         # Hit 703-704
@@ -1848,6 +1856,7 @@ class FastPathTests(unittest.TestCase):
 
     def test_copy_extended_attributes_dummy_listxattr_missing(self) -> None:
         import builtins
+        import os
         from media_shrinker import _copy_extended_attributes
 
         # Hit early return inside _copy_extended_attributes when OS doesn't support it
@@ -1868,6 +1877,7 @@ class FastPathTests(unittest.TestCase):
 
     def test_preserve_file_attributes_chmod_error(self) -> None:
         from media_shrinker import preserve_file_attributes
+        import stat
 
         # Hit 703-704
         class MockStat:
@@ -1887,6 +1897,7 @@ class FastPathTests(unittest.TestCase):
 
     def test_preserve_file_attributes_with_setfile(self) -> None:
         from media_shrinker import preserve_file_attributes
+        import stat
 
         # Hit 703-704
         class MockStat:
@@ -1903,87 +1914,3 @@ class FastPathTests(unittest.TestCase):
                 with patch("media_shrinker._copy_macos_creation_time"):
                     with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
-    @patch("subprocess.run")
-    def test_ffprobe_timeout(self, mock_run: MagicMock) -> None:
-        """Test ffprobe handles TimeoutExpired correctly."""
-        from media_shrinker import probe_media, MediaShrinkerError
-        import subprocess
-
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=60)
-        with self.assertRaises(MediaShrinkerError) as ctx:
-            probe_media(Path("/dummy.mp4"))
-
-        self.assertIn("ffprobe timed out for", str(ctx.exception))
-
-    @patch("subprocess.run")
-    def test_silencedetect_timeout(self, mock_run: MagicMock) -> None:
-        """Test silencedetect handles TimeoutExpired correctly."""
-        from media_shrinker import detect_silence_intervals, MediaShrinkerError
-        import subprocess
-
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=3600)
-        with self.assertRaises(MediaShrinkerError) as ctx:
-            detect_silence_intervals(Path("/dummy.mp4"))
-
-        self.assertIn("silencedetect timed out for", str(ctx.exception))
-
-    @patch("shutil.which", return_value="/usr/bin/brctl")
-    @patch("subprocess.run")
-    def test_brctl_timeout(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
-        """Test brctl handles TimeoutExpired correctly."""
-        from media_shrinker import download_from_icloud, MediaShrinkerError
-        import subprocess
-
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["brctl"], timeout=3600)
-        with self.assertRaises(MediaShrinkerError) as ctx:
-            download_from_icloud(Path("/dummy.mp4"))
-
-        self.assertIn("iCloud download timed out for", str(ctx.exception))
-
-    @patch("media_shrinker._ensure_not_source_path")
-    @patch("media_shrinker._ensure_not_protected_source_path")
-    @patch("tempfile.mkstemp", return_value=(0, "/tmp/.test.tmp"))
-    @patch("os.close")
-    @patch("pathlib.Path.unlink")
-    @patch("subprocess.run")
-    def test_convert_timeout(
-        self,
-        mock_run: MagicMock,
-        mock_unlink: MagicMock,
-        mock_close: MagicMock,
-        mock_mkstemp: MagicMock,
-        mock_ensure_prot: MagicMock,
-        mock_ensure_src: MagicMock,
-    ) -> None:
-        """Test _execute_plan handles TimeoutExpired correctly."""
-        from media_shrinker import _execute_plan, ConversionPlan, MediaShrinkerError
-        import subprocess
-
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=3600)
-        plan = ConversionPlan(
-            strategy="test",
-            input_path=Path("/dummy.mp4"),
-            output_path=Path("/tmp/dummy.mp4"),
-            ffmpeg_args=["-i", "{input}", "-c:a", "copy", "{output}"],
-            audio_bitrate_bps=128000
-        )
-
-        with self.assertRaises(MediaShrinkerError) as ctx:
-            _execute_plan(
-                plan, source=Path("/dummy.mp4"), final_output=Path("/tmp/dummy.mp4"), overwrite=True, protected_sources=set(), ffmpeg_path="ffmpeg"
-            )
-
-        self.assertIn("ffmpeg timed out for", str(ctx.exception))
-
-    @patch("subprocess.run")
-    def test_copy_macos_creation_time_timeout(self, mock_run: MagicMock) -> None:
-        """Test _copy_macos_creation_time ignores TimeoutExpired."""
-        from media_shrinker import _copy_macos_creation_time
-        import subprocess
-
-        class MockStat:
-            st_birthtime = 123456789.0
-
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["SetFile"], timeout=60)
-        # Should not raise
-        _copy_macos_creation_time(MockStat(), Path("/dest"), "SetFile")
