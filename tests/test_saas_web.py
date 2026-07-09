@@ -301,11 +301,11 @@ class TestSaasWeb(unittest.TestCase):
         html = response.text
 
         self.assertIn('class="preset-container"', html)
-        self.assertIn('onclick="setTargetBytes(26214400)"', html)
-        self.assertIn('onclick="setTargetBytes(104857600)"', html)
-        self.assertIn('onclick="setTargetBytes(524288000)"', html)
-        self.assertIn('onclick="setTargetBytes(1073741824)"', html)
-        self.assertIn('function setTargetBytes(bytes)', html)
+        self.assertIn('onclick="setTargetBytes(26214400, this)"', html)
+        self.assertIn('onclick="setTargetBytes(104857600, this)"', html)
+        self.assertIn('onclick="setTargetBytes(524288000, this)"', html)
+        self.assertIn('onclick="setTargetBytes(1073741824, this)"', html)
+        self.assertIn('function setTargetBytes(bytes, btnElement)', html)
 
 if __name__ == '__main__':
     unittest.main()
