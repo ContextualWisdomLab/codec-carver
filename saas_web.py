@@ -183,11 +183,9 @@ HTML_TEMPLATE = """
 
                 // Unpress presets if the value doesn't match
                 const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
-                let matched = false;
                 buttons.forEach(b => {
                     if (b.dataset.bytes == val) {
                         b.setAttribute('aria-pressed', 'true');
-                        matched = true;
                     } else {
                         b.setAttribute('aria-pressed', 'false');
                     }
