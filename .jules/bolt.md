@@ -60,3 +60,6 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+## 2026-07-09 - Avoid splitlines for massive command output logs
+**Learning:** Using `.splitlines()` on massive strings (like `ffmpeg` log/stderr data) allocates thousands of string objects, resulting in huge O(N) memory allocation and stalling execution due to Python object overhead.
+**Action:** Always parse massive command output sequentially by using `re.finditer` directly over the raw string rather than calling `.splitlines()` to avoid O(N) memory allocations, achieving a near-zero memory footprint and drastically improving parser speed.
