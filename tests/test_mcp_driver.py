@@ -2,9 +2,17 @@ import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from mcp_driver import shrink_media
+try:
+    from mcp_driver import shrink_media
+
+    _HAS_MCP = True
+except ImportError:
+    _HAS_MCP = False
+
 from media_shrinker import ConversionResult
 
+
+@unittest.skipUnless(_HAS_MCP, "mcp not installed (optional integration dependency)")
 class TestMCPDriver(unittest.TestCase):
 
     @patch("mcp_driver.media_shrinker.convert_file")

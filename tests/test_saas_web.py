@@ -4,16 +4,25 @@ import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from types import SimpleNamespace
-from fastapi import BackgroundTasks
-from fastapi.testclient import TestClient
-from fastapi.responses import Response
+try:
+    from fastapi import BackgroundTasks
+    from fastapi.testclient import TestClient
+    from fastapi.responses import Response
 
-import saas_web
-from saas_web import app
+    import saas_web
+    from saas_web import app
+
+    _HAS_FASTAPI = True
+except ImportError:
+    _HAS_FASTAPI = False
+
 from media_shrinker import ConversionResult
 
-client = TestClient(app)
+if _HAS_FASTAPI:
+    client = TestClient(app)
 
+
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class TestSaasWeb(unittest.TestCase):
 
     def test_get_ui(self):
