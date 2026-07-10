@@ -1687,7 +1687,7 @@ def _copy_macos_creation_time(
             shell=False,
             timeout=60,
         )
-    except subprocess.TimeoutExpired:
+    except (OSError, subprocess.TimeoutExpired):
         pass  # Metadata restoration failure is non-fatal
 
 
