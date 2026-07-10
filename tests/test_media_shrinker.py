@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -49,6 +50,13 @@ def _write_fake_ffmpeg(path: Path, output: bytes = b"converted") -> Path:
     )
     path.chmod(0o755)
     return path
+
+
+def _fake_lstat(mode: int, size: int = 0) -> MagicMock:
+    result = MagicMock()
+    result.st_mode = mode
+    result.st_size = size
+    return result
 
 
 class FindCandidateTests(unittest.TestCase):
@@ -222,6 +230,55 @@ class FindCandidateTests(unittest.TestCase):
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])
+
+    def test_find_candidates_skips_symlink_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root_str = str(root)
+            link_file = os.path.join(root_str, "link.wav")
+
+            original_lstat = os.lstat
+
+            def fake_lstat(path: str) -> object:
+                if path == link_file:
+                    return _fake_lstat(stat.S_IFLNK)
+                return original_lstat(path)
+
+            with patch("os.walk", return_value=[(root_str, [], ["link.wav"])]):
+                with patch("os.lstat", fake_lstat):
+                    candidates = find_candidates(root, include_under_limit=True)
+
+            self.assertEqual(candidates, [])
+
+    def test_find_candidates_skips_symlink_dir_when_realpath_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            excluded = root / "excluded"
+            excluded.mkdir()
+            root_str = str(root)
+            symlink_dir = os.path.join(root_str, "linked")
+            original_lstat = os.lstat
+
+            def fake_lstat(path: str) -> object:
+                if path == symlink_dir:
+                    return _fake_lstat(stat.S_IFLNK)
+                return original_lstat(path)
+
+            def flaky_realpath(path: str, *args: object, **kwargs: object) -> str:
+                if path == symlink_dir:
+                    raise OSError("cannot resolve symlink")
+                return os.path.abspath(path)
+
+            with patch("os.walk", return_value=[(root_str, ["linked"], [])]):
+                with patch("os.lstat", fake_lstat):
+                    with patch("os.path.realpath", flaky_realpath):
+                        candidates = find_candidates(
+                            root,
+                            include_under_limit=True,
+                            exclude_paths=[excluded],
+                        )
+
+            self.assertEqual(candidates, [])
 
 
 class ProbeMediaTests(unittest.TestCase):
