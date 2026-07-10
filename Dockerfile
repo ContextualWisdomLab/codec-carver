@@ -12,9 +12,9 @@ RUN apt-get update \
 WORKDIR /app
 
 # Install dependencies first for better layer caching.
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements-lock.txt ./
 COPY media_shrinker.py saas_web.py mcp_driver.py ./
-RUN pip install --no-cache-dir ".[web]"
+RUN python -m pip install --no-cache-dir --disable-pip-version-check --require-hashes -r requirements-lock.txt
 
 # Run as a non-root user.
 RUN useradd --create-home --uid 10001 appuser

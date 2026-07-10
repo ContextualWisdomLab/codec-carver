@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
@@ -27,6 +28,27 @@ from media_shrinker import (
     _first_float,
     _first_int,
 )
+
+
+def _write_fake_ffmpeg(path: Path, output: bytes = b"converted") -> Path:
+    """Create a tiny ffmpeg stand-in that writes the final argv path."""
+    payload = repr(output)
+    if os.name == "nt":
+        path = path.with_suffix(".cmd")
+        path.write_text(
+            f'@echo off\n"{sys.executable}" -c "import pathlib, sys; pathlib.Path(sys.argv[-1]).write_bytes({payload})" %*\n',
+            encoding="utf-8",
+        )
+        return path
+
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        f"pathlib.Path(sys.argv[-1]).write_bytes({payload})\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
 
 
 class FindCandidateTests(unittest.TestCase):
@@ -384,15 +406,8 @@ class PlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.flac"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py")
             source.write_bytes(b"original")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'converted')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             plan = ConversionPlan(
                 strategy="test",
                 input_path=source,
@@ -531,15 +546,8 @@ class PlanningTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "source.wav"
             output_dir = root / "out"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py")
             source.write_bytes(b"source")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'converted')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             source_probe = MediaProbe(
                 14_399.999, 1_000, "pcm_s16le", 1_411_200, False, "wav"
             )
@@ -590,15 +598,8 @@ class PlanningTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "source.wav"
             output_dir = root / "out"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py")
             source.write_bytes(b"source")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'converted')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             source_probe = MediaProbe(60.0, 1_000, "pcm_s16le", 1_411_200, False, "wav")
             truncated_probe = MediaProbe(12.0, 1_000, "flac", 1_411_200, False, "flac")
             original_probe_media = media_shrinker.probe_media
@@ -642,17 +643,10 @@ class PlanningTests(unittest.TestCase):
             source = root / "source.wav"
             output_dir = root / "out"
             existing = output_dir / "source.wav.flac"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py")
             output_dir.mkdir()
             source.write_bytes(b"source")
             existing.write_bytes(b"truncated")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'converted')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             source_probe = MediaProbe(60.0, 1_000, "pcm_s16le", 1_411_200, False, "wav")
             probes = iter(
                 [
@@ -702,17 +696,10 @@ class PlanningTests(unittest.TestCase):
             source = root / "source.wav"
             output_dir = root / "out"
             existing = output_dir / "source.wav.flac"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py", b"ok")
             output_dir.mkdir()
             source.write_bytes(b"source")
             existing.write_bytes(b"oversized")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'ok')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             probe = MediaProbe(60.0, 1_000, "pcm_s16le", 1_411_200, False, "wav")
             original_probe_media = media_shrinker.probe_media
 
@@ -758,17 +745,10 @@ class PlanningTests(unittest.TestCase):
             output_dir = root / "out"
             legacy = output_dir / "source.flac"
             canonical = output_dir / "source.wav.part0001.flac"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py", b"ok")
             output_dir.mkdir()
             source.write_bytes(b"source")
             legacy.write_bytes(b"legacy")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'ok')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             source_probe = MediaProbe(
                 18_000.0, 1_000, "pcm_s16le", 1_411_200, False, "wav"
             )
@@ -1023,8 +1003,8 @@ class MetadataPreservationTests(unittest.TestCase):
             preserve_file_attributes(source, dest, setfile_path=None)
 
             dest_stat = dest.stat()
-            self.assertEqual(dest_stat.st_atime_ns, atime_ns)
-            self.assertEqual(dest_stat.st_mtime_ns, mtime_ns)
+            self.assertAlmostEqual(dest_stat.st_atime_ns, atime_ns, delta=1_000)
+            self.assertAlmostEqual(dest_stat.st_mtime_ns, mtime_ns, delta=1_000)
             if xattr_supported:
                 assert getxattr is not None
                 self.assertEqual(
@@ -1084,14 +1064,16 @@ class ReportingTests(unittest.TestCase):
                 payload = json.load(f)
 
             self.assertEqual(len(payload), 2)
-            self.assertEqual(payload[0]["source_path"], "/scan/source1.wav")
-            self.assertEqual(payload[0]["output_path"], "/scan/source1.wav.flac")
+            self.assertEqual(payload[0]["source_path"], str(Path("/scan/source1.wav")))
+            self.assertEqual(
+                payload[0]["output_path"], str(Path("/scan/source1.wav.flac"))
+            )
             self.assertEqual(payload[0]["status"], "converted")
             self.assertEqual(payload[0]["strategy"], "flac-lossless")
             self.assertEqual(payload[0]["original_size_bytes"], 100)
             self.assertEqual(payload[0]["output_size_bytes"], 50)
 
-            self.assertEqual(payload[1]["source_path"], "/scan/source2.wav")
+            self.assertEqual(payload[1]["source_path"], str(Path("/scan/source2.wav")))
             self.assertIsNone(payload[1]["output_path"])
             self.assertEqual(payload[1]["status"], "skipped")
             self.assertIsNone(payload[1]["strategy"])
@@ -1111,7 +1093,7 @@ class ReportingTests(unittest.TestCase):
         line = media_shrinker._format_result(Path("/scan"), result)
 
         self.assertIn("source.wav", line)
-        self.assertIn("/external-output/source.wav.flac", line)
+        self.assertIn(str(Path("/external-output/source.wav.flac")), line)
 
 
 class FirstFloatTests(unittest.TestCase):

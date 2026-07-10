@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 
 #: Allowed job lifecycle states.
@@ -95,17 +97,22 @@ class JobStore:
         with self._connect() as conn:
             conn.execute(_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         """Open a new WAL-mode connection to the underlying database.
 
-        Returns:
-            A ``sqlite3.Connection`` with WAL journaling and a row
-            factory that yields ``sqlite3.Row`` objects.
+        Yields:
+            A short-lived ``sqlite3.Connection`` with WAL journaling and
+            a row factory that yields ``sqlite3.Row`` objects.
         """
         conn = sqlite3.connect(self._db_path, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
 
     @staticmethod
     def _validate_status(status: str) -> None:
