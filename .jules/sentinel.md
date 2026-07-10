@@ -50,3 +50,7 @@
 **Vulnerability:** Uncontrolled Resource Consumption (CWE-400) via missing subprocess timeouts.
 **Learning:** `subprocess.run` calls without explicit `timeout` arguments can cause the application to hang indefinitely if the spawned process (e.g., `ffmpeg`, `ffprobe`, `brctl`) deadlocks or takes an unreasonable amount of time due to maliciously crafted input files or underlying system issues.
 **Prevention:** Always specify an explicit, appropriate `timeout` parameter for `subprocess.run` calls (e.g., 60s for probes/metadata, 3600s+ for intensive processing) and handle the resulting `subprocess.TimeoutExpired` exception to ensure the application fails securely and releases resources.
+## 2026-07-06 - [Sentinel: FastAPI Security Headers]
+**Vulnerability:** Defense-in-depth enhancement.
+**Learning:** `Referrer-Policy` and `Permissions-Policy` headers are crucial for modern web security to prevent leaking sensitive URLs and mitigate potential cross-site scripting (XSS) payload capabilities.
+**Prevention:** Consistently configure `Referrer-Policy: strict-origin-when-cross-origin` and restrict `Permissions-Policy` (e.g., `geolocation=(), microphone=(), camera=()`) alongside standard security headers (CSP, HSTS) in web application middlewares.
