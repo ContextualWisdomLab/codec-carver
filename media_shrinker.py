@@ -745,11 +745,15 @@ def convert_file(
     source = Path(source)
     root = Path(root)
     output_dir = Path(output_dir)
+
+    if not source.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"Source path {source} is not within root directory {root}")
+
     original_size = (
         original_size if original_size is not None else safe_source_size(source)
     )
 
-    rel_source = source.relative_to(root)
+    rel_source = source.resolve().relative_to(root.resolve())
     if download_icloud:
         download_from_icloud(source, brctl_path=brctl_path)
     probe = probe_media(source, ffprobe_path=ffprobe_path, source_size=original_size)
