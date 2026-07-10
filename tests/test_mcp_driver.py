@@ -1,13 +1,44 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
+import sys
+import types
+
+
+class _FakeFastMCP:
+    def __init__(self, name):
+        self.name = name
+
+    def tool(self):
+        return lambda func: func
+
+    def run(self):
+        return None
+
+
+def _install_fake_mcp():
+    mcp_module = types.ModuleType("mcp")
+    server_module = types.ModuleType("mcp.server")
+    fastmcp_module = types.ModuleType("mcp.server.fastmcp")
+    fastmcp_module.FastMCP = _FakeFastMCP
+    server_module.fastmcp = fastmcp_module
+    mcp_module.server = server_module
+    sys.modules.setdefault("mcp", mcp_module)
+    sys.modules.setdefault("mcp.server", server_module)
+    sys.modules.setdefault("mcp.server.fastmcp", fastmcp_module)
+
 
 try:
     from mcp_driver import shrink_media
 
     _HAS_MCP = True
-except ImportError:
-    _HAS_MCP = False
+except ImportError as exc:
+    if exc.name not in {"mcp", "mcp.server", "mcp.server.fastmcp"}:
+        raise
+    _install_fake_mcp()
+    from mcp_driver import shrink_media
+
+    _HAS_MCP = True
 
 from media_shrinker import ConversionResult
 

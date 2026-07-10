@@ -20,6 +20,35 @@ try:  # Hypothesis is an optional dev dependency; skip gracefully without it.
 except ImportError:  # pragma: no cover - exercised only when hypothesis absent
     _HAS_HYPOTHESIS = False
 
+    def given(*_args, **_kwargs):
+        """Return a no-op decorator while the owning test class is skipped."""
+
+        def decorator(func):
+            return func
+
+        return decorator
+
+    def settings(*_args, **_kwargs):
+        """Return a no-op decorator while the owning test class is skipped."""
+
+        def decorator(func):
+            return func
+
+        return decorator
+
+    class _MissingHealthCheck:
+        too_slow = object()
+
+    class _MissingStrategies:
+        def __getattr__(self, _name):
+            return self._strategy
+
+        def _strategy(self, *_args, **_kwargs):
+            return None
+
+    HealthCheck = _MissingHealthCheck()
+    st = _MissingStrategies()
+
 
 class NonFiniteRegressionTests(unittest.TestCase):
     """Regression coverage for the non-finite ffprobe values fuzzing found.

@@ -4,3 +4,4 @@ python-multipart
 mcp
 aiofiles
 httpx
+httpx2==2.5.0

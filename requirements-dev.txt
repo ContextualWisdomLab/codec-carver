@@ -2,6 +2,6 @@
 # atheris    - Apache-2.0  (coverage-guided fuzzing engine)
 # hypothesis - MPL-2.0     (property-based testing)
 # coverage   - Apache-2.0  (coverage measurement)
-atheris; python_version < "3.13"
+atheris; python_version < "3.13" and sys_platform != "win32"
 hypothesis
 coverage
