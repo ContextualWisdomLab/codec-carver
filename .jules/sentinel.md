@@ -51,6 +51,11 @@
 **Learning:** `subprocess.run` calls without explicit `timeout` arguments can cause the application to hang indefinitely if the spawned process (e.g., `ffmpeg`, `ffprobe`, `brctl`) deadlocks or takes an unreasonable amount of time due to maliciously crafted input files or underlying system issues.
 **Prevention:** Always specify an explicit, appropriate `timeout` parameter for `subprocess.run` calls (e.g., 60s for probes/metadata, 3600s+ for intensive processing) and handle the resulting `subprocess.TimeoutExpired` exception to ensure the application fails securely and releases resources.
 
+## 2026-07-09 - [Sentinel: FastAPI Missing Defense-in-Depth Headers]
+**Vulnerability:** Missing defense-in-depth security headers like `Referrer-Policy` and `Permissions-Policy`.
+**Learning:** To enhance security in FastAPI applications, missing HTTP response headers could leak referrers or give access to APIs (e.g. geolocation) without explicit intent.
+**Prevention:** Implement an `@app.middleware('http')` function to globally inject defense-in-depth security headers such as `Content-Security-Policy`, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`, `X-XSS-Protection`, `Referrer-Policy` (e.g., `strict-origin-when-cross-origin`), and `Permissions-Policy` (e.g., `geolocation=(), microphone=(), camera=()`).
+
 ## 2026-07-10 - [Sentinel: Media Source Path Traversal]
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
