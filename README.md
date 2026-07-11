@@ -47,6 +47,28 @@ python3 media_shrinker.py .. \
 
 Outputs are written under `../under_2gb/`. Existing generated output directories and `split_over*` directories should be excluded from scans to avoid reconverting generated media. Files under 2GB are included by default; use `--over-limit-only` only when intentionally processing oversized sources exclusively.
 
+## Config file for repeat workflows
+
+Instead of re-typing long flag sets, store them once in a `.codec-carver.json` file in the scan root (checked first) or the current working directory:
+
+```json
+{
+    "flac_all": true,
+    "exclude_dir_prefix": ["split_over"],
+    "max_duration_seconds": 14400,
+    "workers": 2,
+    "output_dir": "under_2gb"
+}
+```
+
+Then repeat runs collapse to `python3 media_shrinker.py .. --execute --download-icloud`.
+
+- Keys map 1:1 to CLI options with dashes replaced by underscores (`--target-bytes` becomes `target_bytes`).
+- Explicit CLI flags always override config values; without a config file, behavior is identical to a plain invocation.
+- `root` and `--execute` are intentionally not configurable: the config file is discovered via the scan root, and a config file must never silently turn a dry run into a real conversion.
+- Unknown keys, wrong value types, and malformed JSON abort with a clear error listing the valid keys.
+- JSON is used instead of TOML because the stdlib TOML parser requires Python 3.11+, while this project also supports Python 3.10.
+
 ## Duration splitting
 
 - `--max-duration-seconds 14400` keeps every generated file below four hours.

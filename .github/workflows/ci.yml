@@ -34,7 +34,7 @@ jobs:
           python -m pip install --disable-pip-version-check --no-index --no-deps --no-build-isolation -e .
 
       - name: Compile check
-        run: python -m py_compile media_shrinker.py presets.py saas_web.py mcp_driver.py job_store.py
+        run: python -m py_compile media_shrinker.py config_file.py presets.py saas_web.py mcp_driver.py job_store.py
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
