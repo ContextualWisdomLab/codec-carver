@@ -251,34 +251,49 @@ class FindCandidateTests(unittest.TestCase):
             self.assertEqual(candidates, [])
 
     def test_find_candidates_skips_symlink_dir_when_realpath_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # Regression test for a Python-3.10-only CI failure
+        # ("OSError: [Errno 22] Invalid argument: '/tmp'"). On 3.10 pathlib
+        # binds os.path.realpath at import time (_NormalAccessor.realpath), so
+        # patch("os.path.realpath") never reaches Path.resolve(); the real
+        # posixpath._joinrealpath ran instead and consumed a blanket os.lstat
+        # mock that reported every path component (including /tmp) as a
+        # symlink, which made it os.readlink() a regular directory. To stay
+        # robust across pathlib implementations, this test uses a real
+        # symlinked directory plus a single delegating realpath mock, so the
+        # only faked behaviour is the one under test ("realpath fails for the
+        # symlink dir") and no version-specific pathlib internals are hit.
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
             root = Path(tmp)
             excluded = root / "excluded"
             excluded.mkdir()
-            root_str = str(root)
-            symlink_dir = os.path.join(root_str, "linked")
-            original_lstat = os.lstat
+            (Path(outside) / "hidden.wav").write_bytes(b"0" * 4)
 
-            def fake_lstat(path: str) -> object:
-                if path == symlink_dir:
-                    return _fake_lstat(stat.S_IFLNK)
-                return original_lstat(path)
+            symlink_dir = os.path.join(str(root), "linked")
+            try:
+                os.symlink(outside, symlink_dir, target_is_directory=True)
+            except (OSError, NotImplementedError):  # pragma: no cover
+                self.skipTest("platform does not support symlinks")
 
-            def flaky_realpath(path: str, *args: object, **kwargs: object) -> str:
-                if path == symlink_dir:
+            original_realpath = os.path.realpath
+            failed_realpath_calls: list[str] = []
+
+            def flaky_realpath(path: object, *args: object, **kwargs: object) -> str:
+                if os.fspath(path) == symlink_dir:
+                    failed_realpath_calls.append(symlink_dir)
                     raise OSError("cannot resolve symlink")
-                return os.path.abspath(path)
+                return original_realpath(path, *args, **kwargs)
 
-            with patch("os.walk", return_value=[(root_str, ["linked"], [])]):
-                with patch("os.lstat", fake_lstat):
-                    with patch("os.path.realpath", flaky_realpath):
-                        candidates = find_candidates(
-                            root,
-                            include_under_limit=True,
-                            exclude_paths=[excluded],
-                        )
+            with patch("os.path.realpath", flaky_realpath):
+                candidates = find_candidates(
+                    root,
+                    include_under_limit=True,
+                    exclude_paths=[excluded],
+                )
 
             self.assertEqual(candidates, [])
+            # The symlinked dir must have been skipped *because* realpath
+            # failed, not merely ignored by os.walk.
+            self.assertIn(symlink_dir, failed_realpath_calls)
 
 
 class ProbeMediaTests(unittest.TestCase):
