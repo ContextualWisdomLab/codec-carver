@@ -778,6 +778,10 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
 
     intervals: list[SilenceInterval] = []
     current_start: float | None = None
+
+    if "silence_" not in stderr:
+        return intervals
+
     # Fast path: Using re.finditer directly on the raw string avoids
     # OOM issues and overhead from str.splitlines() on massive ffmpeg logs.
     for match in SILENCE_RE.finditer(stderr):
