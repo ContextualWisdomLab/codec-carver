@@ -9,6 +9,7 @@ import io
 import json
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -76,6 +77,40 @@ class TranscribeModuleTests(unittest.TestCase):
         with patch.dict(sys.modules, {"faster_whisper": None}):
             with self.assertRaises(TranscriptionUnavailableError):
                 transcribe_file("a.flac")
+
+    def test_default_backend_converts_faster_whisper_segments(self) -> None:
+        calls: dict[str, object] = {}
+
+        class FakeWhisperModel:
+            def __init__(self, model_name: str) -> None:
+                calls["model_name"] = model_name
+
+            def transcribe(self, audio_path: str):
+                calls["audio_path"] = audio_path
+                return (
+                    [
+                        types.SimpleNamespace(start="0.25", end=1, text=" hello "),
+                        types.SimpleNamespace(start=1, end="2.5", text="world "),
+                    ],
+                    types.SimpleNamespace(language="en"),
+                )
+
+        fake_module = types.ModuleType("faster_whisper")
+        fake_module.WhisperModel = FakeWhisperModel
+
+        with patch.dict(sys.modules, {"faster_whisper": fake_module}):
+            result = transcribe._faster_whisper_backend(Path("clip.flac"), "tiny")
+
+        self.assertEqual(calls, {"model_name": "tiny", "audio_path": "clip.flac"})
+        self.assertEqual(result.text, "hello world")
+        self.assertEqual(result.language, "en")
+        self.assertEqual(
+            result.segments,
+            [
+                TranscriptSegment(start=0.25, end=1.0, text=" hello "),
+                TranscriptSegment(start=1.0, end=2.5, text="world "),
+            ],
+        )
 
 
 class PostProcessSeamTests(unittest.TestCase):
