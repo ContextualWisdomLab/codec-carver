@@ -1470,6 +1470,49 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(rc, 1)
 
+    def test_main_summary_does_not_count_skipped_existing_as_converted(self) -> None:
+        import contextlib
+        import io
+
+        converted = media_shrinker.ConversionResult(
+            source_path=Path("/scan/a.wav"),
+            output_path=Path("/scan/out/a.flac"),
+            status="converted",
+            original_size_bytes=4,
+            output_size_bytes=2,
+            strategy="flac-lossless",
+        )
+        skipped = media_shrinker.ConversionResult(
+            source_path=Path("/scan/b.wav"),
+            output_path=Path("/scan/out/b.flac"),
+            status="skipped_existing",
+            original_size_bytes=4,
+            output_size_bytes=2,
+            strategy="existing",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "a.wav").write_bytes(b"1234")
+            (root / "b.wav").write_bytes(b"1234")
+            buffer = io.StringIO()
+            with patch(
+                "media_shrinker._execute_conversions",
+                return_value=[converted, skipped],
+            ), contextlib.redirect_stdout(buffer):
+                rc = media_shrinker.main([str(root), "--execute"])
+
+        summary_line = next(
+            line
+            for line in buffer.getvalue().splitlines()
+            if line.startswith("SUMMARY")
+        )
+        self.assertEqual(rc, 0)
+        # Only one file was actually converted; the other reused an existing
+        # output, so it must not inflate the converted count.
+        self.assertIn("converted=1", summary_line)
+        self.assertIn("skipped_existing=1", summary_line)
+
     def test_execute_conversions_records_success_and_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
