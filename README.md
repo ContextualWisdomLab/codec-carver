@@ -4,6 +4,29 @@ Python CLI for carving long recordings into metadata-preserved FLAC/Opus files.
 
 Convert supported audio recordings to FLAC or, only when needed to fit each output under a target size, high-bitrate Opus. The tool preserves originals and writes generated files to a separate output directory. Each generated output is kept below the configured size target and below four hours; longer sources are split at long silence intervals when possible.
 
+## Install
+
+Requires Python 3.10+ and `ffmpeg`/`ffprobe` on `PATH`.
+
+```bash
+pip install -e .            # CLI core (stdlib only)
+pip install -e ".[web]"     # + FastAPI upload service
+pip install -e ".[mcp]"     # + MCP server
+```
+
+This installs the `codec-carver` console command:
+
+```bash
+codec-carver /path/to/recordings --execute --output-dir under_2gb
+```
+
+## Web service (Docker)
+
+```bash
+docker build -t codec-carver .
+docker run -p 8000:8000 codec-carver   # upload UI at http://localhost:8000
+```
+
 ## Verified command for this folder
 
 Run from `media_shrink_tool/`:
@@ -31,6 +54,27 @@ Outputs are written under `../under_2gb/`. Existing generated output directories
 - If no suitable silence is detected before a boundary, the tool hard-splits just under the configured maximum so the duration rule is still enforced.
 - Split outputs are named with part suffixes, for example `meeting.wav.part0001.flac`, `meeting.wav.part0002.flac`.
 - Tune silence detection with `--silence-noise` and `--silence-min-duration-seconds` when recordings need stricter or looser silence boundaries.
+
+## Transcription (optional)
+
+Turn each shrunk recording into searchable text. With `--transcribe`, a text and
+JSON transcript sidecar is written next to every generated audio file
+(`recording.wav.flac` → `recording.wav.flac.txt` / `.json`):
+
+```bash
+python3 media_shrinker.py .. --execute --output-dir under_2gb --transcribe
+```
+
+Transcription is opt-in and uses [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper),
+imported lazily. Install it to enable the feature:
+
+```bash
+pip install faster-whisper        # then pass --transcribe
+```
+
+If it is not installed, conversion runs normally and transcription is skipped
+with a `TRANSCRIBE_SKIP` notice. A failing transcript never aborts a conversion.
+Choose a model with `--transcribe-model` (default `base`).
 
 ## Safety notes
 
