@@ -87,7 +87,7 @@ OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
 MP3_MAX_BITRATE_BPS = 320_000  # libmp3lame ceiling
 OUTPUT_FORMATS = ("auto", "flac", "opus", "aac", "mp3")
-SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
+SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>-?[0-9]+(?:\.[0-9]+)?)")
 
 
 class MediaShrinkerError(RuntimeError):
@@ -698,7 +698,7 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
         kind = match.group(1)
         value = float(match.group("value"))
         if kind == "start":
-            current_start = value
+            current_start = max(value, 0.0)
         elif kind == "end" and current_start is not None:
             if value > current_start:
                 intervals.append(
