@@ -4,6 +4,29 @@ Python CLI for carving long recordings into metadata-preserved FLAC/Opus files.
 
 Convert supported audio recordings to FLAC or, only when needed to fit each output under a target size, high-bitrate Opus. The tool preserves originals and writes generated files to a separate output directory. Each generated output is kept below the configured size target and below four hours; longer sources are split at long silence intervals when possible.
 
+## Install
+
+Requires Python 3.10+ and `ffmpeg`/`ffprobe` on `PATH`.
+
+```bash
+pip install -e .            # CLI core (stdlib only)
+pip install -e ".[web]"     # + FastAPI upload service
+pip install -e ".[mcp]"     # + MCP server
+```
+
+This installs the `codec-carver` console command:
+
+```bash
+codec-carver /path/to/recordings --execute --output-dir under_2gb
+```
+
+## Web service (Docker)
+
+```bash
+docker build -t codec-carver .
+docker run -p 8000:8000 codec-carver   # upload UI at http://localhost:8000
+```
+
 ## Verified command for this folder
 
 Run from `media_shrink_tool/`:

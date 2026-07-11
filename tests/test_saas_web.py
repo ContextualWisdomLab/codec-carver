@@ -1,19 +1,30 @@
 import asyncio
 import io
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from types import SimpleNamespace
-from fastapi import BackgroundTasks
-from fastapi.testclient import TestClient
-from fastapi.responses import Response
+try:
+    from fastapi import BackgroundTasks
+    from fastapi.testclient import TestClient
+    from fastapi.responses import Response
 
-import saas_web
-from saas_web import app
+    import saas_web
+    from saas_web import app
+
+    _HAS_FASTAPI = True
+except ImportError:
+    _HAS_FASTAPI = False
+
 from media_shrinker import ConversionResult
+from job_store import JobStore
 
-client = TestClient(app)
+if _HAS_FASTAPI:
+    client = TestClient(app)
 
+
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class TestSaasWeb(unittest.TestCase):
 
     def test_get_ui(self):
@@ -51,6 +62,14 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(
             response.headers["Content-Security-Policy"],
             "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
+        )
+        self.assertEqual(
+            response.headers["Referrer-Policy"],
+            "strict-origin-when-cross-origin",
+        )
+        self.assertEqual(
+            response.headers["Permissions-Policy"],
+            "geolocation=(), microphone=(), camera=()",
         )
         self.assertNotIn("Strict-Transport-Security", response.headers)
 
@@ -301,28 +320,55 @@ class TestSaasWeb(unittest.TestCase):
         html = response.text
 
         self.assertIn('class="preset-container"', html)
-        self.assertIn('onclick="setTargetBytes(26214400)"', html)
-        self.assertIn('onclick="setTargetBytes(104857600)"', html)
-        self.assertIn('onclick="setTargetBytes(524288000)"', html)
-        self.assertIn('onclick="setTargetBytes(1073741824)"', html)
+        self.assertIn('onclick="setTargetBytes(26214400)" aria-pressed="false" data-bytes="26214400"', html)
+        self.assertIn('onclick="setTargetBytes(104857600)" aria-pressed="false" data-bytes="104857600"', html)
+        self.assertIn('onclick="setTargetBytes(524288000)" aria-pressed="false" data-bytes="524288000"', html)
+        self.assertIn('onclick="setTargetBytes(1073741824)" aria-pressed="false" data-bytes="1073741824"', html)
         self.assertIn('function setTargetBytes(bytes)', html)
 
 if __name__ == '__main__':
     unittest.main()
 
 
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class JobModelTests(unittest.TestCase):
     """Async job API: submit -> status -> result, plus all error paths."""
 
     def setUp(self) -> None:
-        saas_web._JOBS.clear()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._old_store = saas_web.JOB_STORE
+        self.addCleanup(setattr, saas_web, "JOB_STORE", self._old_store)
+        saas_web.JOB_STORE = JobStore(str(Path(self._tmp.name) / "jobs.db"))
 
     def tearDown(self) -> None:
-        for job in list(saas_web._JOBS.values()):
+        for job in saas_web.JOB_STORE.list_jobs():
             temp = job.get("temp_dir")
             if temp:
                 saas_web.cleanup_temp_dir(Path(temp))
-        saas_web._JOBS.clear()
+            saas_web.JOB_STORE.delete(job["id"])
+
+    def _create_job(
+        self,
+        job_id: str,
+        status: str,
+        temp_dir: str,
+        output_path: str | None = None,
+        output_name: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Insert a job-store row for direct endpoint edge-case tests."""
+
+        saas_web.JOB_STORE.create(job_id, temp_dir=temp_dir, now=saas_web._now())
+        if status != "queued":
+            saas_web.JOB_STORE.set_status(
+                job_id,
+                status,
+                now=saas_web._now(),
+                output_path=output_path,
+                output_name=output_name,
+                error=error,
+            )
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_job_lifecycle_submit_status_result(self, mock_convert_file):
@@ -363,12 +409,13 @@ class JobModelTests(unittest.TestCase):
         escaped = outside_dir / "escaped.flac"
         escaped.write_bytes(b"secret")
         try:
-            saas_web._JOBS["escape"] = {
-                "status": "done",
-                "output_path": str(escaped),
-                "output_name": "escaped.flac",
-                "temp_dir": str(workspace),
-            }
+            self._create_job(
+                "escape",
+                "done",
+                str(workspace),
+                output_path=str(escaped),
+                output_name="escaped.flac",
+            )
             response = client.get("/jobs/escape/result")
             self.assertEqual(response.status_code, 410)
         finally:
@@ -434,18 +481,19 @@ class JobModelTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_result_not_ready_returns_409(self):
-        saas_web._JOBS["pending"] = {"status": "processing", "temp_dir": ""}
+        self._create_job("pending", "processing", "")
         response = client.get("/jobs/pending/result")
         self.assertEqual(response.status_code, 409)
         self.assertIn("processing", response.json()["error"])
 
     def test_result_missing_file_returns_410(self):
-        saas_web._JOBS["gone"] = {
-            "status": "done",
-            "output_path": "/nonexistent/output.flac",
-            "output_name": "output.flac",
-            "temp_dir": "",
-        }
+        self._create_job(
+            "gone",
+            "done",
+            "",
+            output_path="/nonexistent/output.flac",
+            output_name="output.flac",
+        )
         response = client.get("/jobs/gone/result")
         self.assertEqual(response.status_code, 410)
 
@@ -453,12 +501,13 @@ class JobModelTests(unittest.TestCase):
         import tempfile
 
         temp_dir = Path(tempfile.mkdtemp(prefix="codec_carver_"))
-        saas_web._JOBS["c"] = {"status": "done", "temp_dir": str(temp_dir)}
+        self._create_job("c", "done", str(temp_dir))
         saas_web._cleanup_job("c")
         self.assertFalse(temp_dir.exists())
-        self.assertNotIn("c", saas_web._JOBS)
+        self.assertIsNone(saas_web.JOB_STORE.get("c"))
 
 
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class UploadValidationTests(unittest.TestCase):
     """Input hardening surfaced by the SAST review: target bound + content type."""
 

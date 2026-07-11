@@ -1,12 +1,15 @@
 """FastAPI upload UI for shrinking one media file through Codec Carver."""
 
-import tempfile
 import logging
+import os
 import shutil
+import tempfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from job_store import JobStore
 import media_shrinker
 
 app = FastAPI(title="Codec Carver SaaS")
@@ -85,6 +88,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -113,6 +118,7 @@ HTML_TEMPLATE = """
         .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
         .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
+        .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; }
     </style>
 </head>
 <body>
@@ -131,10 +137,10 @@ HTML_TEMPLATE = """
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="preset_buttons_container" class="preset-container">
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)">25 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)">100 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)">500 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)">1 GiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)" aria-pressed="false" data-bytes="26214400">25 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)" aria-pressed="false" data-bytes="104857600">100 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)" aria-pressed="false" data-bytes="524288000">500 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)" aria-pressed="false" data-bytes="1073741824">1 GiB</button>
                 </div>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
@@ -154,7 +160,7 @@ HTML_TEMPLATE = """
             function setTargetBytes(bytes) {
                 const input = document.getElementById('target_bytes');
                 input.value = bytes;
-                input.dispatchEvent(new Event('input'));
+                input.dispatchEvent(new Event('input', { bubbles: true }));
             }
 
             function updateFileSizePreview(input) {
@@ -178,12 +184,20 @@ HTML_TEMPLATE = """
                 preview.innerText = 'Selected file size: ' + text;
             }
 
-            document.getElementById('target_bytes').addEventListener('input', function() {
+            document.getElementById('target_bytes').addEventListener('input', function(e) {
                 const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
+
+                if (e.isTrusted) {
+                    document.querySelectorAll('.preset-btn').forEach(b => b.setAttribute('aria-pressed', 'false'));
+                } else {
+                    document.querySelectorAll('.preset-btn').forEach(b => {
+                        b.setAttribute('aria-pressed', b.getAttribute('data-bytes') == val ? 'true' : 'false');
+                    });
+                }
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
@@ -334,9 +348,32 @@ def shrink_media(
 # The synchronous /shrink endpoint blocks for the whole conversion, which is
 # impractical for long recordings. These endpoints let a client submit a job,
 # poll its status, and download the result when ready (Upload -> Processing ->
-# Result). The store is in-memory and per-process; swap for a shared store to
-# scale horizontally.
-_JOBS: dict[str, dict] = {}
+# Result). SQLite keeps status durable across restarts and visible across
+# worker/web processes.
+
+
+def _default_job_store_path() -> Path:
+    """Return the configured SQLite path for async job state."""
+
+    configured = os.environ.get("CODEC_CARVER_JOB_DB")
+    if configured:
+        return Path(configured)
+    return Path(tempfile.gettempdir()) / "codec_carver_jobs.sqlite3"
+
+
+JOB_STORE = JobStore(str(_default_job_store_path()))
+
+
+def _now() -> datetime:
+    """Return an aware UTC timestamp for job-store writes."""
+
+    return datetime.now(timezone.utc)
+
+
+def _get_job_store() -> JobStore:
+    """Return the active job store; tests replace ``JOB_STORE`` directly."""
+
+    return JOB_STORE
 
 
 def _run_job(
@@ -348,7 +385,14 @@ def _run_job(
     temp_dir_path: Path,
 ) -> None:
     """Background worker: shrink one uploaded file and record the outcome."""
-    _JOBS[job_id]["status"] = "processing"
+    store = _get_job_store()
+    try:
+        store.set_status(job_id, "processing", now=_now())
+    except KeyError:
+        logger.error("Job %s disappeared before processing", job_id)
+        cleanup_temp_dir(temp_dir_path)
+        return
+
     try:
         results = media_shrinker.convert_file(
             source=source_path,
@@ -358,22 +402,37 @@ def _run_job(
         )
     except Exception:
         logger.exception("Job processing failed")
-        _JOBS[job_id].update(status="failed", error="Processing failed")
+        try:
+            store.set_status(job_id, "failed", now=_now(), error="Processing failed")
+        except KeyError:
+            logger.error("Job %s disappeared while recording failure", job_id)
         cleanup_temp_dir(temp_dir_path)
         return
 
     if results and results[0].output_path and results[0].output_path.exists():
         output_path = results[0].output_path
-        _JOBS[job_id].update(
-            status="done",
-            output_path=str(output_path),
-            output_name=output_path.name,
-        )
+        try:
+            store.set_status(
+                job_id,
+                "done",
+                now=_now(),
+                output_path=str(output_path),
+                output_name=output_path.name,
+            )
+        except KeyError:
+            logger.error("Job %s disappeared while recording result", job_id)
+            cleanup_temp_dir(temp_dir_path)
     else:
         logger.error("Job produced no output: %r", results)
-        _JOBS[job_id].update(
-            status="failed", error="Processing failed or no output generated"
-        )
+        try:
+            store.set_status(
+                job_id,
+                "failed",
+                now=_now(),
+                error="Processing failed or no output generated",
+            )
+        except KeyError:
+            logger.error("Job %s disappeared while recording empty output", job_id)
         cleanup_temp_dir(temp_dir_path)
 
 
@@ -397,7 +456,15 @@ def submit_job(
         )
 
     job_id = uuid.uuid4().hex
-    _JOBS[job_id] = {"status": "queued", "temp_dir": str(temp_dir_path)}
+    try:
+        _get_job_store().create(job_id, temp_dir=str(temp_dir_path), now=_now())
+    except ValueError:
+        cleanup_temp_dir(temp_dir_path)
+        logger.exception("Failed to create async job record")
+        return JSONResponse(
+            status_code=500, content={"error": "Upload processing failed"}
+        )
+
     background_tasks.add_task(
         _run_job, job_id, source_path, input_dir, output_dir, target_bytes, temp_dir_path
     )
@@ -407,7 +474,7 @@ def submit_job(
 @app.get("/jobs/{job_id}")
 def job_status(job_id: str):
     """Return the current status of a previously submitted job."""
-    job = _JOBS.get(job_id)
+    job = _get_job_store().get(job_id)
     if job is None:
         return JSONResponse(status_code=404, content={"error": "Unknown job"})
     return {"job_id": job_id, "status": job["status"], "error": job.get("error")}
@@ -415,7 +482,9 @@ def job_status(job_id: str):
 
 def _cleanup_job(job_id: str) -> None:
     """Forget a job and remove its temporary workspace."""
-    job = _JOBS.pop(job_id, None)
+    store = _get_job_store()
+    job = store.get(job_id)
+    store.delete(job_id)
     if job is not None and job.get("temp_dir"):
         cleanup_temp_dir(Path(job["temp_dir"]))
 
@@ -423,7 +492,7 @@ def _cleanup_job(job_id: str) -> None:
 @app.get("/jobs/{job_id}/result")
 def job_result(job_id: str, background_tasks: BackgroundTasks):
     """Download a finished job's output, then clean up its workspace."""
-    job = _JOBS.get(job_id)
+    job = _get_job_store().get(job_id)
     if job is None:
         return JSONResponse(status_code=404, content={"error": "Unknown job"})
     if job["status"] != "done":
@@ -434,8 +503,14 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
     # job's own temp workspace. `job_id` is an opaque store key and is never
     # used to build a path, but confining the served path makes traversal
     # impossible even if the store were ever populated from untrusted data.
-    output_path = Path(job["output_path"]).resolve()
-    workspace = Path(job["temp_dir"]).resolve()
+    output_path_text = job.get("output_path")
+    temp_dir_text = job.get("temp_dir")
+    if not output_path_text or not temp_dir_text:
+        return JSONResponse(
+            status_code=410, content={"error": "Result no longer available"}
+        )
+    output_path = Path(output_path_text).resolve()
+    workspace = Path(temp_dir_text).resolve()
     if not output_path.is_relative_to(workspace) or not output_path.is_file():
         return JSONResponse(
             status_code=410, content={"error": "Result no longer available"}
