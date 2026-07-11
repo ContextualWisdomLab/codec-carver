@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
@@ -254,6 +255,38 @@ def cleanup_temp_dir(temp_dir_path: Path):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
+def _zip_outputs(outputs: list[Path], dest_dir: Path, archive_name: str) -> Path:
+    """Bundle multiple generated outputs into a single (uncompressed) zip archive."""
+    archive_path = dest_dir / archive_name
+    # ZIP_STORED: the audio is already compressed, so re-compressing wastes CPU.
+    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
+        for output in outputs:
+            archive.write(output, arcname=output.name)
+    return archive_path
+
+
+def _existing_outputs(results) -> list[Path]:
+    """Return generated output paths that still exist on disk."""
+
+    if not results:
+        return []
+    return [
+        result.output_path
+        for result in results
+        if result.output_path and result.output_path.exists()
+    ]
+
+
+def _download_path_for_outputs(
+    outputs: list[Path], dest_dir: Path, archive_name: str
+) -> Path:
+    """Return the single download path for one output or a zip for many outputs."""
+
+    if len(outputs) == 1:
+        return outputs[0]
+    return _zip_outputs(outputs, dest_dir, archive_name)
+
+
 def _persist_upload(file: UploadFile) -> tuple[Path, Path, Path, Path]:
     """Save an uploaded file into a fresh temp workspace.
 
@@ -301,7 +334,21 @@ def shrink_media(
     file: UploadFile = File(...),
     target_bytes: int = Form(2_000_000_000)
 ):
-    """Persist an uploaded media file, shrink it, and return the generated file."""
+    """Persist an uploaded media file, shrink it, and return the generated file.
+
+    Security model for the uploaded bytes (self-contained; no trust in
+    downstream internals): the upload is (1) validated (audio/video content
+    type + bounded target size) by ``_validate_request``, (2) written under a
+    private per-request temp directory with a sanitized filename (never a
+    web-served or executable location), and (3) passed to ``media_shrinker``
+    only as a **file-path argument** to ``ffmpeg``/``ffprobe`` invoked via
+    ``subprocess.run`` with an explicit argument list and ``shell=False`` — the
+    bytes are never executed, ``eval``/``exec``'d, or interpolated into a shell.
+    The generated output is returned as an ``application/octet-stream`` download,
+    or as ``application/zip`` when conversion produces multiple segments. The
+    uploaded file itself is never served back. The temp workspace is removed
+    after the response.
+    """
 
     error = _validate_request(file, target_bytes)
     if error is not None:
@@ -322,22 +369,28 @@ def shrink_media(
             target_bytes=target_bytes,
         )
 
-        # Determine the generated output file.
-        # For simplicity, returning the first output file found.
-        # Handling multiple outputs (e.g. from splitting) would require zipping in a real scenario.
-        if results and results[0].output_path and results[0].output_path.exists():
-             output_file_path = results[0].output_path
-             # Schedule cleanup after response
-             background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
-             return FileResponse(
-                 path=output_file_path,
-                 filename=output_file_path.name,
-                 media_type="application/octet-stream"
-             )
-        else:
-            background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+        # Collect every generated output. Long recordings are split into several
+        # segments; returning only the first would silently drop the rest.
+        outputs = _existing_outputs(results)
+        background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+
+        if not outputs:
             logger.error("Processing produced no output: %r", results)
             return {"error": "Processing failed or no output generated"}
+
+        output_path = _download_path_for_outputs(
+            outputs, temp_dir_path, source_path.stem + "_shrunk.zip"
+        )
+        media_type = (
+            "application/zip"
+            if output_path.suffix == ".zip"
+            else "application/octet-stream"
+        )
+        return FileResponse(
+            path=output_path,
+            filename=output_path.name,
+            media_type=media_type,
+        )
 
     except Exception:
         cleanup_temp_dir(temp_dir_path)
@@ -409,8 +462,11 @@ def _run_job(
         cleanup_temp_dir(temp_dir_path)
         return
 
-    if results and results[0].output_path and results[0].output_path.exists():
-        output_path = results[0].output_path
+    outputs = _existing_outputs(results)
+    if outputs:
+        output_path = _download_path_for_outputs(
+            outputs, temp_dir_path, source_path.stem + "_shrunk.zip"
+        )
         try:
             store.set_status(
                 job_id,
@@ -516,10 +572,13 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
             status_code=410, content={"error": "Result no longer available"}
         )
     background_tasks.add_task(_cleanup_job, job_id)
+    media_type = (
+        "application/zip" if output_path.suffix == ".zip" else "application/octet-stream"
+    )
     return FileResponse(
         path=output_path,
         filename=job["output_name"],
-        media_type="application/octet-stream",
+        media_type=media_type,
     )
 
 

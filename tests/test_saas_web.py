@@ -326,9 +326,37 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('onclick="setTargetBytes(1073741824)" aria-pressed="false" data-bytes="1073741824"', html)
         self.assertIn('function setTargetBytes(bytes)', html)
 
-if __name__ == '__main__':
-    unittest.main()
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+class MultiSegmentZipTests(unittest.TestCase):
+    """Long recordings split into multiple segments must all be returned (as a zip)."""
 
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_multiple_segments_returned_as_zip(self, mock_convert_file):
+        import io as _io
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            part1 = Path(temp_dir) / "rec.wav.part0001.flac"
+            part2 = Path(temp_dir) / "rec.wav.part0002.flac"
+            part1.write_bytes(b"segment-one")
+            part2.write_bytes(b"segment-two")
+            r1 = MagicMock(spec=ConversionResult)
+            r1.output_path = part1
+            r2 = MagicMock(spec=ConversionResult)
+            r2.output_path = part2
+            mock_convert_file.return_value = [r1, r2]
+
+            response = client.post(
+                "/shrink",
+                files={"file": ("rec.wav", _io.BytesIO(b"wav data"), "audio/wav")},
+                data={"target_bytes": 10000},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/zip")
+        names = zipfile.ZipFile(_io.BytesIO(response.content)).namelist()
+        self.assertEqual(sorted(names), ["rec.wav.part0001.flac", "rec.wav.part0002.flac"])
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class JobModelTests(unittest.TestCase):
@@ -418,6 +446,37 @@ class JobModelTests(unittest.TestCase):
         result = client.get(f"/jobs/{job_id}/result")
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.content, b"audio-bytes")
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_job_result_returns_zip_for_multiple_segments(self, mock_convert_file):
+        import zipfile
+
+        def fake_convert(**kwargs):
+            part1 = kwargs["output_dir"] / "in.wav.part0001.flac"
+            part2 = kwargs["output_dir"] / "in.wav.part0002.flac"
+            part1.write_bytes(b"segment-one")
+            part2.write_bytes(b"segment-two")
+            result1 = MagicMock(spec=ConversionResult)
+            result1.output_path = part1
+            result2 = MagicMock(spec=ConversionResult)
+            result2.output_path = part2
+            return [result1, result2]
+
+        mock_convert_file.side_effect = fake_convert
+
+        submit = client.post(
+            "/jobs",
+            files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+            data={"target_bytes": 10000},
+        )
+        job_id = submit.json()["job_id"]
+
+        result = client.get(f"/jobs/{job_id}/result")
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.headers["content-type"], "application/zip")
+        names = zipfile.ZipFile(io.BytesIO(result.content)).namelist()
+        self.assertEqual(sorted(names), ["in.wav.part0001.flac", "in.wav.part0002.flac"])
 
     def test_result_outside_workspace_rejected(self):
         # A "done" job whose output escaped its workspace must not be served.
@@ -679,3 +738,7 @@ class UploadValidationTests(unittest.TestCase):
                 10000,
             )
         )
+
+
+if __name__ == '__main__':
+    unittest.main()
