@@ -1,0 +1,1 @@
+frame= 42 fps=12 q=-1.0 size=1024kB time=00:01:00.00 bitrate=139.8kbits/s
