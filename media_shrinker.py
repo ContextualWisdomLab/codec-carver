@@ -26,6 +26,8 @@ from typing import Any, Callable, Iterable
 
 import presets
 
+import config_file
+
 
 SUPPORTED_EXTENSIONS = {
     ".3gp",
@@ -1461,14 +1463,8 @@ def _normalize_argv(argv: list[str] | None) -> list[str] | None:
     return normalized
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse CLI arguments.
-
-    The returned namespace also carries a ``tags`` dict collecting the
-    ``--set-title``/``--set-artist``/``--set-album``/``--set-comment`` values
-    that were actually provided; it is empty when none were passed, which
-    keeps generated ffmpeg commands byte-identical to the untagged behavior.
-    """
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
 
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -1644,6 +1640,66 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "always rejected."
         ),
     )
+    return parser
+
+
+def _explicitly_set_dests(
+    parser: argparse.ArgumentParser,
+    argv: list[str] | None,
+    dests: Iterable[str],
+) -> set[str]:
+    """Return the subset of dests the user explicitly set on the command line.
+
+    Uses the documented argparse behavior that pre-set namespace attributes
+    are kept unless an option is actually provided: each dest is seeded with
+    a unique sentinel, argv is re-parsed onto that namespace, and any dest
+    that no longer holds the sentinel was explicitly given by the user.
+    """
+
+    sentinel = object()
+    dests = tuple(dests)
+    namespace = argparse.Namespace(**{dest: sentinel for dest in dests})
+    parser.parse_args(argv, namespace=namespace)
+    return {dest for dest in dests if getattr(namespace, dest) is not sentinel}
+
+
+def _apply_config_file(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    argv: list[str] | None,
+) -> None:
+    """Overlay `.codec-carver.json` values onto args for unset CLI options.
+
+    Explicit CLI flags always win over config-file values; with no config
+    file present, args is returned untouched. Config problems (unknown keys,
+    type mismatches, malformed JSON) abort with a normal argparse error
+    message instead of a traceback.
+    """
+
+    try:
+        config = config_file.load_config(Path(args.root))
+    except config_file.ConfigFileError as exc:
+        parser.error(str(exc))
+    if not config:
+        return
+    explicit = _explicitly_set_dests(parser, argv, config)
+    for dest, value in config.items():
+        if dest not in explicit:
+            setattr(args, dest, value)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments, resolving presets then config-file defaults.
+
+    Precedence is command line, then `.codec-carver.json`, then `--preset`
+    defaults, then built-in defaults. Config problems abort with a normal
+    argparse error message instead of a traceback. The returned namespace also
+    carries a ``tags`` dict collecting the metadata values provided by
+    ``--set-title``/``--set-artist``/``--set-album``/``--set-comment``.
+    """
+
+    parser = _build_parser()
+    normalized = _normalize_argv(argv)
 
     # Capture the tool's built-in defaults, then seed the namespace with a
     # sentinel for every preset-tunable option so argparse leaves it untouched
@@ -1655,8 +1711,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     namespace = argparse.Namespace()
     for dest in presets.PRESET_TUNABLE_DESTS:
         setattr(namespace, dest, presets._UNSET)
-    args = parser.parse_args(_normalize_argv(argv), namespace)
+    args = parser.parse_args(normalized, namespace)
     args = presets.apply_preset(args, real_defaults)
+    _apply_config_file(parser, args, normalized)
     provided_tags = {
         "title": args.set_title,
         "artist": args.set_artist,
