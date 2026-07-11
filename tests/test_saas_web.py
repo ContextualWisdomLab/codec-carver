@@ -370,6 +370,25 @@ class JobModelTests(unittest.TestCase):
                 error=error,
             )
 
+    def _make_workspace(self) -> tuple[Path, Path, Path, Path]:
+        temp_dir = Path(tempfile.mkdtemp(prefix="codec_carver_"))
+        input_dir = temp_dir / "input"
+        output_dir = temp_dir / "output"
+        input_dir.mkdir()
+        output_dir.mkdir()
+        source_path = input_dir / "in.wav"
+        source_path.write_bytes(b"wav data")
+        return temp_dir, input_dir, output_dir, source_path
+
+    def test_default_job_store_path_uses_env(self):
+        with patch.dict(
+            saas_web.os.environ,
+            {"CODEC_CARVER_JOB_DB": "custom-jobs.sqlite3"},
+        ):
+            self.assertEqual(
+                saas_web._default_job_store_path(), Path("custom-jobs.sqlite3")
+            )
+
     @patch("saas_web.media_shrinker.convert_file")
     def test_job_lifecycle_submit_status_result(self, mock_convert_file):
         def fake_convert(**kwargs):
@@ -448,6 +467,17 @@ class JobModelTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 500)
 
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_run_job_cleans_unknown_job_before_processing(self, mock_convert_file):
+        temp_dir, input_dir, output_dir, source_path = self._make_workspace()
+
+        saas_web._run_job(
+            "missing", source_path, input_dir, output_dir, 10000, temp_dir
+        )
+
+        self.assertFalse(temp_dir.exists())
+        mock_convert_file.assert_not_called()
+
     @patch("saas_web.media_shrinker.convert_file", side_effect=RuntimeError("boom"))
     def test_run_job_records_failure_on_exception(self, _mock_convert):
         submit = client.post(
@@ -460,6 +490,31 @@ class JobModelTests(unittest.TestCase):
         self.assertEqual(status.json()["status"], "failed")
         self.assertEqual(status.json()["error"], "Processing failed")
 
+    @patch("saas_web._get_job_store")
+    @patch("saas_web.media_shrinker.convert_file", side_effect=RuntimeError("boom"))
+    def test_run_job_handles_missing_job_while_recording_failure(
+        self, _mock_convert, mock_get_store
+    ):
+        class VanishingFailureStore:
+            def set_status(self, _job_id, status, **_kwargs):
+                if status == "processing":
+                    return None
+                raise KeyError("gone")
+
+        mock_get_store.return_value = VanishingFailureStore()
+        temp_dir, input_dir, output_dir, source_path = self._make_workspace()
+
+        saas_web._run_job(
+            "missing-after-error",
+            source_path,
+            input_dir,
+            output_dir,
+            10000,
+            temp_dir,
+        )
+
+        self.assertFalse(temp_dir.exists())
+
     @patch("saas_web.media_shrinker.convert_file", return_value=[])
     def test_run_job_records_failure_on_empty_output(self, _mock_convert):
         submit = client.post(
@@ -471,6 +526,88 @@ class JobModelTests(unittest.TestCase):
         status = client.get(f"/jobs/{job_id}")
         self.assertEqual(status.json()["status"], "failed")
         self.assertIn("no output", status.json()["error"])
+
+    @patch("saas_web._get_job_store")
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_run_job_handles_missing_job_while_recording_result(
+        self, mock_convert_file, mock_get_store
+    ):
+        class VanishingResultStore:
+            def set_status(self, _job_id, status, **_kwargs):
+                if status == "processing":
+                    return None
+                raise KeyError("gone")
+
+        temp_dir, input_dir, output_dir, source_path = self._make_workspace()
+        output = output_dir / "out.flac"
+        output.write_bytes(b"audio")
+        mock_result = MagicMock(spec=ConversionResult)
+        mock_result.output_path = output
+        mock_convert_file.return_value = [mock_result]
+        mock_get_store.return_value = VanishingResultStore()
+
+        saas_web._run_job(
+            "missing-after-output",
+            source_path,
+            input_dir,
+            output_dir,
+            10000,
+            temp_dir,
+        )
+
+        self.assertFalse(temp_dir.exists())
+
+    @patch("saas_web._get_job_store")
+    @patch("saas_web.media_shrinker.convert_file", return_value=[])
+    def test_run_job_handles_missing_job_while_recording_empty_output(
+        self, _mock_convert, mock_get_store
+    ):
+        class VanishingEmptyOutputStore:
+            def set_status(self, _job_id, status, **_kwargs):
+                if status == "processing":
+                    return None
+                raise KeyError("gone")
+
+        mock_get_store.return_value = VanishingEmptyOutputStore()
+        temp_dir, input_dir, output_dir, source_path = self._make_workspace()
+
+        saas_web._run_job(
+            "missing-after-empty",
+            source_path,
+            input_dir,
+            output_dir,
+            10000,
+            temp_dir,
+        )
+
+        self.assertFalse(temp_dir.exists())
+
+    @patch("saas_web._get_job_store")
+    @patch("saas_web._persist_upload")
+    def test_submit_handles_job_store_create_failure(
+        self, mock_persist_upload, mock_get_store
+    ):
+        class RejectingStore:
+            def create(self, *_args, **_kwargs):
+                raise ValueError("duplicate")
+
+        temp_dir, input_dir, output_dir, source_path = self._make_workspace()
+        mock_persist_upload.return_value = (
+            temp_dir,
+            input_dir,
+            output_dir,
+            source_path,
+        )
+        mock_get_store.return_value = RejectingStore()
+
+        response = saas_web.submit_job(
+            BackgroundTasks(),
+            file=SimpleNamespace(filename="in.wav", file=io.BytesIO(b"wav data")),
+            target_bytes=10000,
+        )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(temp_dir.exists())
 
     def test_status_unknown_job_returns_404(self):
         response = client.get("/jobs/does-not-exist")
