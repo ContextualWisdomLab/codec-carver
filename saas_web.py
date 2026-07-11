@@ -182,6 +182,16 @@ HTML_TEMPLATE = """
                 } else {
                     preview.innerText = formatBinaryBytes(val);
                 }
+
+                const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
+                buttons.forEach(btn => {
+                    if (event && event.isTrusted) {
+                        btn.setAttribute('aria-pressed', 'false');
+                        return;
+                    }
+                    const isPressed = btn.dataset.bytes === this.value;
+                    btn.setAttribute('aria-pressed', isPressed ? 'true' : 'false');
+                });
             });
 
             document.getElementById('shrink-form').addEventListener('submit', function() {
