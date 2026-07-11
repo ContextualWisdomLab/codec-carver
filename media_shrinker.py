@@ -11,6 +11,7 @@ import argparse
 import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import math
 import os
 import re
 import shutil
@@ -21,7 +22,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 SUPPORTED_EXTENSIONS = {
@@ -86,8 +87,7 @@ OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
 MP3_MAX_BITRATE_BPS = 320_000  # libmp3lame ceiling
 OUTPUT_FORMATS = ("auto", "flac", "opus", "aac", "mp3")
-SILENCE_START_RE = re.compile(r"silence_start:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
-SILENCE_END_RE = re.compile(r"silence_end:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
+SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
 
 
 class MediaShrinkerError(RuntimeError):
@@ -324,21 +324,31 @@ def build_audio_plan(
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
     output_format: str = "auto",
+    allow_video: bool = False,
 ) -> ConversionPlan:
-    """Build the audio-only conversion plan for source_path.
+    """Build the preferred audio-only conversion plan for source_path.
 
     ``output_format`` selects the container/codec: ``auto`` (default) keeps the
     original behaviour (FLAC for lossless or ``--flac-all`` input, otherwise
     high-bitrate Opus); ``flac``/``opus`` force that codec; ``aac``/``mp3``
     produce a target-fitting lossy plan for broad device compatibility.
+
+    When ``allow_video`` is False (the default) any file containing a video
+    stream is rejected, preserving the audio-only contract. When True, the
+    audio track is extracted from a video container (the ffmpeg plan already
+    drops video with ``-vn``); a video file with no audio stream is still
+    rejected below.
     """
 
-    if probe.has_video:
+    if probe.has_video and not allow_video:
         raise MediaShrinkerError(
-            f"{source_path} contains video; this tool is configured for audio preservation"
+            f"{source_path} contains video; this tool is configured for audio "
+            f"preservation (pass --allow-video to extract the audio track)"
         )
     if not probe.audio_codec:
         raise MediaShrinkerError(f"{source_path} has no audio stream")
+    if output_format not in OUTPUT_FORMATS:
+        raise MediaShrinkerError(f"unsupported output format: {output_format}")
 
     if output_format == "aac":
         return _build_lossy_plan(
@@ -551,6 +561,26 @@ def _build_lossy_plan(
     )
 
 
+def _existing_output_suffixes(
+    output_format: str, *, prefer_flac: bool, probe: MediaProbe
+) -> tuple[str, ...]:
+    """Return generated output suffixes that may satisfy the selected format."""
+
+    if output_format == "aac":
+        return (".m4a",)
+    if output_format == "mp3":
+        return (".mp3",)
+    if output_format == "opus":
+        return (".opus",)
+    if output_format == "flac":
+        return (".flac",)
+    if output_format != "auto":
+        raise MediaShrinkerError(f"unsupported output format: {output_format}")
+    if prefer_flac or _is_lossless_probe(probe):
+        return (".flac", ".opus")
+    return (".opus",)
+
+
 def probe_media(
     source_path: Path,
     *,
@@ -572,9 +602,12 @@ def probe_media(
         "-i",
         str(Path(source_path).resolve()),
     ]
-    completed = subprocess.run(
-        command, check=False, capture_output=True, text=True, shell=False
-    )
+    try:
+        completed = subprocess.run(
+            command, check=False, capture_output=True, text=True, shell=False, timeout=60
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"ffprobe timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -627,18 +660,22 @@ def detect_silence_intervals(
 ) -> list[SilenceInterval]:
     """Run ffmpeg silencedetect and return paired silence intervals."""
 
-    completed = subprocess.run(
-        build_silencedetect_command(
-            source_path,
-            ffmpeg_path=ffmpeg_path,
-            silence_noise=silence_noise,
-            silence_min_duration_seconds=silence_min_duration_seconds,
-        ),
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        completed = subprocess.run(
+            build_silencedetect_command(
+                source_path,
+                ffmpeg_path=ffmpeg_path,
+                silence_noise=silence_noise,
+                silence_min_duration_seconds=silence_min_duration_seconds,
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=3600,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"silencedetect timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"silencedetect failed for {source_path}: {completed.stderr.strip()}"
@@ -651,23 +688,18 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
 
     intervals: list[SilenceInterval] = []
     current_start: float | None = None
-    for line in stderr.splitlines():
-        # Fast path: Substring search is much faster than regex.
-        # Most lines are ffmpeg progress updates (e.g., 'frame=...')
-        if "silence" not in line:
-            continue
-        start_match = SILENCE_START_RE.search(line)
-        if start_match:
-            current_start = float(start_match.group("value"))
-            continue
-
-        end_match = SILENCE_END_RE.search(line)
-        if end_match and current_start is not None:
-            end_seconds = float(end_match.group("value"))
-            if end_seconds > current_start:
+    # Fast path: Using re.finditer directly on the raw string avoids
+    # OOM issues and overhead from str.splitlines() on massive ffmpeg logs.
+    for match in SILENCE_RE.finditer(stderr):
+        kind = match.group(1)
+        value = float(match.group("value"))
+        if kind == "start":
+            current_start = value
+        elif kind == "end" and current_start is not None:
+            if value > current_start:
                 intervals.append(
                     SilenceInterval(
-                        start_seconds=current_start, end_seconds=end_seconds
+                        start_seconds=current_start, end_seconds=value
                     )
                 )
             current_start = None
@@ -753,13 +785,17 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
         raise MediaShrinkerError(
             f"iCloud download requested but '{brctl_path}' was not found"
         )
-    completed = subprocess.run(
-        build_icloud_download_command(source_path, brctl_path=brctl_path),
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        completed = subprocess.run(
+            build_icloud_download_command(source_path, brctl_path=brctl_path),
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=3600,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"iCloud download timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"iCloud download failed for {source_path}: {completed.stderr.strip()}"
@@ -835,17 +871,33 @@ def convert_file(
     protected_sources: Iterable[Path] = (),
     resolved_protected_sources: frozenset[Path] | None = None,
     original_size: int | None = None,
+    post_process: Callable[[ConversionResult], None] | None = None,
+    allow_video: bool = False,
 ) -> list[ConversionResult]:
-    """Convert one file and return generated segment results without deleting the source."""
+    """Convert one file and return generated segment results without deleting the source.
+
+    ``post_process`` is an optional hook invoked once per successfully generated
+    output (a ``converted`` result with an output path). It is the extension
+    seam used for follow-on steps such as transcription; a failing hook must not
+    abort the conversion, so callers are expected to handle their own errors.
+    ``allow_video`` preserves the default audio-only contract unless callers opt
+    into extracting the audio stream from video containers.
+    """
 
     source = Path(source)
     root = Path(root)
     output_dir = Path(output_dir)
+    resolved_source = source.resolve()
+    resolved_root = root.resolve()
+
+    if not resolved_source.is_relative_to(resolved_root):
+        raise MediaShrinkerError("Source path is outside the permitted root directory")
+
     original_size = (
         original_size if original_size is not None else safe_source_size(source)
     )
 
-    rel_source = source.relative_to(root)
+    rel_source = resolved_source.relative_to(resolved_root)
     if download_icloud:
         download_from_icloud(source, brctl_path=brctl_path)
     probe = probe_media(source, ffprobe_path=ffprobe_path, source_size=original_size)
@@ -869,7 +921,7 @@ def convert_file(
     if resolved_sources is None:
         resolved_sources = frozenset(Path(item).resolve() for item in protected_sources)
 
-    return [
+    results = [
         _convert_segment(
             source,
             rel_source=rel_source,
@@ -886,9 +938,24 @@ def convert_file(
             max_segment_duration_seconds=max_segment_duration_seconds,
             protected_sources=resolved_sources,
             output_format=output_format,
+            allow_video=allow_video,
         )
         for segment in segments
     ]
+    _run_post_process(results, post_process)
+    return results
+
+
+def _run_post_process(
+    results: list[ConversionResult],
+    post_process: Callable[[ConversionResult], None] | None,
+) -> None:
+    """Invoke ``post_process`` for each successfully generated output."""
+    if post_process is None:
+        return
+    for result in results:
+        if result.status == "converted" and result.output_path is not None:
+            post_process(result)
 
 
 def safe_source_size(source: Path) -> int:
@@ -984,6 +1051,7 @@ def _execute_segment_conversion(
     max_segment_duration_seconds: float,
     resolved_protected_sources: frozenset[Path],
     output_format: str = "auto",
+    allow_video: bool = False,
 ) -> ConversionResult:
     """Execute the conversion plan(s) for a single segment."""
     plan = build_audio_plan(
@@ -995,6 +1063,7 @@ def _execute_segment_conversion(
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
         output_format=output_format,
+        allow_video=allow_video,
     )
 
     final_output = _resolve_collision(plan.output_path, overwrite=overwrite)
@@ -1106,12 +1175,15 @@ def _convert_segment(
     max_segment_duration_seconds: float,
     protected_sources: frozenset[Path] = frozenset(),
     output_format: str = "auto",
+    allow_video: bool = False,
 ) -> ConversionResult:
     """Convert one media segment fitting the target size limit."""
     # protected_sources is passed from convert_file where it is already fully resolved.
     # _ensure_not_source_path explicitly checks against the current source independently.
     resolved_protected_sources = protected_sources
-    existing_suffixes = (".flac", ".opus")
+    existing_suffixes = _existing_output_suffixes(
+        output_format, prefer_flac=prefer_flac, probe=probe
+    )
     segment_rel_source = _segment_source_path(rel_source, segment)
     _remove_invalid_legacy_outputs(
         source,
@@ -1156,6 +1228,7 @@ def _convert_segment(
         max_segment_duration_seconds=max_segment_duration_seconds,
         resolved_protected_sources=resolved_protected_sources,
         output_format=output_format,
+        allow_video=allow_video,
     )
 
 
@@ -1370,7 +1443,59 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow overwriting generated output paths",
     )
+    parser.add_argument(
+        "--transcribe",
+        action="store_true",
+        help=(
+            "After each successful conversion, write a text + JSON transcript "
+            "sidecar next to the generated audio (requires the optional "
+            "'faster-whisper' dependency; skipped with a notice if unavailable)."
+        ),
+    )
+    parser.add_argument(
+        "--transcribe-model",
+        default="base",
+        help="faster-whisper model name to use when --transcribe is set (default: base)",
+    )
+    parser.add_argument(
+        "--allow-video",
+        action="store_true",
+        help=(
+            "Extract and shrink the audio track from video containers "
+            "(e.g. .mp4/.mov/.mkv Zoom/Teams/lecture recordings). By default "
+            "video files are rejected. Video files with no audio stream are "
+            "always rejected."
+        ),
+    )
     return parser.parse_args(_normalize_argv(argv))
+
+
+def _build_transcription_hook(
+    args: argparse.Namespace,
+) -> Callable[[ConversionResult], None] | None:
+    """Return a per-output transcription hook when --transcribe is requested.
+
+    Transcription is optional: the module is imported lazily and any failure is
+    reported without aborting the conversion batch.
+    """
+    if not getattr(args, "transcribe", False):
+        return None
+
+    import transcribe as _transcribe
+
+    def hook(result: ConversionResult) -> None:
+        """Transcribe one generated output; never raise into the conversion."""
+        try:
+            txt_path, _ = _transcribe.transcribe_output(
+                result.output_path, model=args.transcribe_model
+            )
+            print(f"TRANSCRIBED\t{txt_path}", flush=True)
+        except _transcribe.TranscriptionUnavailableError as exc:
+            print(f"TRANSCRIBE_SKIP\t{exc}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - a bad transcript must not fail conversion.
+            print(f"TRANSCRIBE_FAIL\t{result.output_path}\t{exc}", flush=True)
+
+    return hook
 
 
 def _execute_conversions(
@@ -1383,6 +1508,7 @@ def _execute_conversions(
     results: list[ConversionResult] = []
     workers = choose_worker_count(args.workers)
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
+    post_process = _build_transcription_hook(args)
 
     resolved_candidates = frozenset(Path(item[0]).resolve() for item in candidates)
     protected_sources = [c[0] for c in candidates]
@@ -1410,6 +1536,8 @@ def _execute_conversions(
                 protected_sources=protected_sources,
                 resolved_protected_sources=resolved_candidates,
                 original_size=size,
+                post_process=post_process,
+                allow_video=args.allow_video,
             )
         except Exception as exc:  # noqa: BLE001 - batch processing records per-file failures.
             return [
@@ -1662,9 +1790,12 @@ def _first_float(*values: Any) -> float:
         if value is None or value == "N/A":
             continue
         try:
-            return float(value)
+            parsed = float(value)
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(parsed):
+            continue
+        return parsed
     return 0.0
 
 
@@ -1674,9 +1805,12 @@ def _first_int(*values: Any) -> int | None:
         if value is None or value == "N/A":
             continue
         try:
-            return int(float(value))
+            parsed = float(value)
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(parsed):
+            continue
+        return int(parsed)
     return None
 
 
@@ -1714,10 +1848,12 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, shell=False
+                command, check=False, capture_output=True, text=True, shell=False, timeout=3600
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise MediaShrinkerError(f"ffmpeg timed out for {source}") from exc
 
         if completed.returncode != 0:
             raise MediaShrinkerError(
@@ -1782,13 +1918,17 @@ def _copy_macos_creation_time(
     creation_date = datetime.fromtimestamp(float(birthtime)).strftime(
         "%m/%d/%Y %H:%M:%S"
     )
-    subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest.resolve())],
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        subprocess.run(
+            [setfile_path, "-d", creation_date, str(dest.resolve())],
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # Metadata restoration failure is non-fatal
 
 
 def _format_result(root: Path, result: ConversionResult) -> str:
