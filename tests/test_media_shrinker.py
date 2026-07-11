@@ -1095,12 +1095,13 @@ class PlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_parse_silencedetect_intervals_keeps_negative_start_at_recording_head(
+    def test_parse_silencedetect_intervals_normalizes_negative_start_at_recording_head(
         self,
     ) -> None:
         # ffmpeg back-dates silence_start by the detection window, so a file that
-        # begins in silence reports a slightly negative silence_start. The whole
-        # interval must survive so it can still be used as a split boundary.
+        # begins in silence reports a slightly negative silence_start. The
+        # interval must survive, but the segment boundary is normalized to the
+        # start of the recording.
         stderr = """
         [silencedetect @ 0x1] silence_start: -0.00816327
         [silencedetect @ 0x1] silence_end: 150.5 | silence_duration: 150.5
@@ -1110,7 +1111,7 @@ class PlanningTests(unittest.TestCase):
 
         self.assertEqual(
             intervals,
-            [SilenceInterval(start_seconds=-0.00816327, end_seconds=150.5)],
+            [SilenceInterval(start_seconds=0.0, end_seconds=150.5)],
         )
 
     def test_negative_start_silence_still_drives_split_point(self) -> None:
