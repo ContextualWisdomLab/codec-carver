@@ -1,8 +1,10 @@
 import asyncio
 import io
+import json
 import os
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from types import SimpleNamespace
@@ -326,6 +328,263 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('onclick="setTargetBytes(524288000)" aria-pressed="false" data-bytes="524288000"', html)
         self.assertIn('onclick="setTargetBytes(1073741824)" aria-pressed="false" data-bytes="1073741824"', html)
         self.assertIn('function setTargetBytes(bytes)', html)
+
+
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+class TestShrinkBatch(unittest.TestCase):
+    """Tests for the POST /shrink-batch multi-file endpoint."""
+
+    @staticmethod
+    def _fake_convert(source, root, output_dir, target_bytes):
+        """Fake convert_file that writes a shrunk copy into output_dir."""
+        output_path = Path(output_dir) / (Path(source).stem + ".flac")
+        output_path.write_bytes(b"shrunk:" + Path(source).read_bytes())
+        result = MagicMock(spec=ConversionResult)
+        result.output_path = output_path
+        return [result]
+
+    @staticmethod
+    def _read_zip(response):
+        """Return (namelist, manifest dict, zipfile) for a zip response."""
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        manifest = json.loads(archive.read("results.json"))
+        return archive.namelist(), manifest, archive
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_two_files_returns_zip_with_outputs_and_manifest(self, mock_convert_file):
+        mock_convert_file.side_effect = self._fake_convert
+
+        response = client.post(
+            "/shrink-batch",
+            files=[
+                ("files", ("a.wav", b"audio-a", "audio/wav")),
+                ("files", ("b.mp4", b"video-b", "video/mp4")),
+            ],
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/zip")
+        names, manifest, archive = self._read_zip(response)
+        self.assertIn("01_a.flac", names)
+        self.assertIn("02_b.flac", names)
+        self.assertIn("results.json", names)
+        self.assertEqual(archive.read("01_a.flac"), b"shrunk:audio-a")
+        self.assertEqual(archive.read("02_b.flac"), b"shrunk:video-b")
+        self.assertEqual(manifest["target_bytes"], 10000)
+        self.assertEqual(len(manifest["results"]), 2)
+        self.assertEqual(manifest["results"][0]["status"], "ok")
+        self.assertEqual(manifest["results"][0]["filename"], "a.wav")
+        self.assertEqual(manifest["results"][0]["output_name"], "01_a.flac")
+        self.assertEqual(manifest["results"][0]["output_bytes"], len(b"shrunk:audio-a"))
+        self.assertEqual(manifest["results"][1]["status"], "ok")
+        self.assertEqual(mock_convert_file.call_count, 2)
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_one_failure_does_not_abort_batch(self, mock_convert_file):
+        def convert(source, root, output_dir, target_bytes):
+            if Path(source).name == "bad.wav":
+                raise RuntimeError("/tmp/codec_carver_secret/bad.wav")
+            return self._fake_convert(source, root, output_dir, target_bytes)
+
+        mock_convert_file.side_effect = convert
+
+        response = client.post(
+            "/shrink-batch",
+            files=[
+                ("files", ("bad.wav", b"broken", "audio/wav")),
+                ("files", ("good.wav", b"fine", "audio/wav")),
+            ],
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        names, manifest, archive = self._read_zip(response)
+        self.assertNotIn("01_bad.flac", names)
+        self.assertIn("02_good.flac", names)
+        self.assertEqual(manifest["results"][0]["status"], "error")
+        self.assertEqual(manifest["results"][0]["error"], "Upload processing failed")
+        self.assertNotIn("codec_carver_secret", archive.read("results.json").decode())
+        self.assertEqual(manifest["results"][1]["status"], "ok")
+
+    def test_shrink_batch_rejects_zero_files(self):
+        response = client.post("/shrink-batch", data={"target_bytes": 10000})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"error": "No files uploaded"})
+
+    def test_shrink_batch_rejects_too_many_files(self):
+        uploads = [
+            ("files", (f"f{i}.wav", b"x", "audio/wav"))
+            for i in range(saas_web.MAX_BATCH_FILES + 1)
+        ]
+        response = client.post("/shrink-batch", files=uploads, data={"target_bytes": 10000})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {"error": f"Too many files. Maximum is {saas_web.MAX_BATCH_FILES} files per batch."},
+        )
+
+    def test_shrink_batch_rejects_nonpositive_target_bytes(self):
+        response = client.post(
+            "/shrink-batch",
+            files=[("files", ("a.wav", b"audio", "audio/wav"))],
+            data={"target_bytes": 0},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid target_bytes value. Must be greater than 0."},
+        )
+
+    def test_shrink_batch_rejects_oversized_target_bytes(self):
+        response = client.post(
+            "/shrink-batch",
+            files=[("files", ("a.wav", b"audio", "audio/wav"))],
+            data={"target_bytes": saas_web.MAX_TARGET_BYTES + 1},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid target_bytes value. Exceeds the maximum allowed size."},
+        )
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_rejects_disallowed_content_type_per_file(self, mock_convert_file):
+        mock_convert_file.side_effect = self._fake_convert
+
+        response = client.post(
+            "/shrink-batch",
+            files=[
+                ("files", ("evil.sh", b"#!/bin/sh", "application/x-sh")),
+                ("files", ("good.wav", b"fine", "audio/wav")),
+            ],
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        names, manifest, _archive = self._read_zip(response)
+        self.assertEqual(names, ["02_good.flac", "results.json"])
+        self.assertEqual(manifest["results"][0]["status"], "error")
+        self.assertIn("Unsupported content type", manifest["results"][0]["error"])
+        self.assertEqual(manifest["results"][1]["status"], "ok")
+        mock_convert_file.assert_called_once()
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_records_no_output_as_error(self, mock_convert_file):
+        mock_convert_file.return_value = []
+
+        response = client.post(
+            "/shrink-batch",
+            files=[("files", ("a.wav", b"audio", "audio/wav"))],
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        names, manifest, _archive = self._read_zip(response)
+        self.assertEqual(names, ["results.json"])
+        self.assertEqual(manifest["results"][0]["status"], "error")
+        self.assertEqual(
+            manifest["results"][0]["error"],
+            "Processing failed or no output generated",
+        )
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_never_serves_output_outside_workspace(self, mock_convert_file):
+        with tempfile.TemporaryDirectory() as outside_dir:
+            outside_file = Path(outside_dir) / "secret.flac"
+            outside_file.write_bytes(b"secret contents")
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = outside_file
+            mock_convert_file.return_value = [mock_result]
+
+            response = client.post(
+                "/shrink-batch",
+                files=[("files", ("a.wav", b"audio", "audio/wav"))],
+                data={"target_bytes": 10000},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        names, manifest, _archive = self._read_zip(response)
+        self.assertEqual(names, ["results.json"])
+        self.assertEqual(manifest["results"][0]["status"], "error")
+        self.assertEqual(
+            manifest["results"][0]["error"],
+            "Processing failed or no output generated",
+        )
+        self.assertNotIn(b"secret contents", response.content)
+
+    def test_shrink_batch_records_oversized_file_as_error(self):
+        previous_limit = saas_web.MAX_UPLOAD_BYTES
+        saas_web.MAX_UPLOAD_BYTES = 3
+        try:
+            response = client.post(
+                "/shrink-batch",
+                files=[("files", ("big.wav", b"12345", "audio/wav"))],
+                data={"target_bytes": 10000},
+            )
+        finally:
+            saas_web.MAX_UPLOAD_BYTES = previous_limit
+
+        self.assertEqual(response.status_code, 200)
+        names, manifest, _archive = self._read_zip(response)
+        self.assertEqual(names, ["results.json"])
+        self.assertEqual(manifest["results"][0]["status"], "error")
+        self.assertEqual(manifest["results"][0]["error"], "Upload processing failed")
+
+    @patch("saas_web.tempfile.mkdtemp", side_effect=OSError("disk full"))
+    def test_shrink_batch_handles_workspace_creation_failure(self, _mock_mkdtemp):
+        response = client.post(
+            "/shrink-batch",
+            files=[("files", ("a.wav", b"audio", "audio/wav"))],
+            data={"target_bytes": 10000},
+        )
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json(), {"error": "Upload processing failed"})
+
+    @patch("saas_web.zipfile.ZipFile", side_effect=OSError("cannot write zip"))
+    def test_shrink_batch_handles_archive_failure(self, _mock_zipfile):
+        response = client.post(
+            "/shrink-batch",
+            files=[("files", ("a.wav", b"audio", "audio/wav"))],
+            data={"target_bytes": 10000},
+        )
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json(), {"error": "Upload processing failed"})
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_uses_safe_fallback_filename(self, mock_convert_file):
+        mock_convert_file.return_value = []
+
+        response = saas_web.shrink_media_batch(
+            BackgroundTasks(),
+            files=[
+                SimpleNamespace(
+                    filename="..",
+                    content_type="audio/wav",
+                    file=io.BytesIO(b"dummy"),
+                )
+            ],
+            target_bytes=10000,
+        )
+
+        archive = zipfile.ZipFile(response.path)
+        manifest = json.loads(archive.read("results.json"))
+        self.assertEqual(manifest["results"][0]["filename"], "upload.tmp")
+        self.assertEqual(
+            mock_convert_file.call_args.kwargs["source"].name, "upload.tmp"
+        )
+        saas_web.cleanup_temp_dir(Path(response.path).parent)
+
+    def test_get_ui_includes_batch_upload_form(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn('action="/shrink-batch"', html)
+        self.assertIn('id="batch_files"', html)
+        self.assertIn('multiple', html)
+        self.assertIn('accept="audio/*,video/*"', html)
+
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class TestApiKeyAuth(unittest.TestCase):
