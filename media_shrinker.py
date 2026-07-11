@@ -79,6 +79,7 @@ DEFAULT_SIZE_LIMIT_BYTES = 2_000_000_000
 DEFAULT_TARGET_BYTES = 1_900_000_000
 DEFAULT_MAX_SEGMENT_DURATION_SECONDS = 4 * 60 * 60
 DEFAULT_SILENCE_NOISE = "-35dB"
+LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
 DEFAULT_SILENCE_MIN_DURATION_SECONDS = 2.0
 HARD_SPLIT_EPSILON_SECONDS = 0.001
 DURATION_TOLERANCE_SECONDS = 2.0
@@ -327,6 +328,7 @@ def build_audio_plan(
     prefer_flac: bool = False,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    normalize: bool = False,
     output_format: str = "auto",
     allow_video: bool = False,
 ) -> ConversionPlan:
@@ -342,6 +344,9 @@ def build_audio_plan(
     audio track is extracted from a video container (the ffmpeg plan already
     drops video with ``-vn``); a video file with no audio stream is still
     rejected below.
+
+    When ``normalize`` is True the EBU R128 loudnorm audio filter is applied so
+    generated audio has consistent loudness; when False the args are unchanged.
     """
 
     if probe.has_video and not allow_video:
@@ -365,6 +370,7 @@ def build_audio_plan(
             strategy="aac-bitrate",
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            normalize=normalize,
         )
     if output_format == "mp3":
         return _build_lossy_plan(
@@ -378,6 +384,7 @@ def build_audio_plan(
             max_bitrate=MP3_MAX_BITRATE_BPS,
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            normalize=normalize,
         )
     if output_format == "opus":
         return build_opus_plan(
@@ -387,6 +394,7 @@ def build_audio_plan(
             output_dir=output_dir,
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            normalize=normalize,
         )
 
     force_flac = prefer_flac or output_format == "flac"
@@ -423,6 +431,7 @@ def build_audio_plan(
                 str(output_path),
             ]
         )
+        args = _with_loudnorm(args, normalize)
         args = _with_ffmpeg_threads(args, ffmpeg_threads)
         return ConversionPlan(
             strategy=strategy,
@@ -438,6 +447,7 @@ def build_audio_plan(
         output_dir=output_dir,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        normalize=normalize,
     )
 
 
@@ -449,8 +459,13 @@ def build_opus_plan(
     output_dir: Path,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    normalize: bool = False,
 ) -> ConversionPlan:
-    """Build a high-quality Opus plan that fits the target size."""
+    """Build a high-quality Opus plan that fits the target size.
+
+    When normalize is True the EBU R128 loudnorm audio filter is applied so
+    generated audio has consistent loudness; when False the args are unchanged.
+    """
 
     duration_seconds = (
         segment.duration_seconds if segment is not None else probe.duration_seconds
@@ -493,6 +508,7 @@ def build_opus_plan(
             str(output_path),
         ]
     )
+    args = _with_loudnorm(args, normalize)
     args = _with_ffmpeg_threads(args, ffmpeg_threads)
     return ConversionPlan(
         strategy="opus-bitrate",
@@ -515,6 +531,7 @@ def _build_lossy_plan(
     max_bitrate: int | None = None,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    normalize: bool = False,
 ) -> ConversionPlan:
     """Build a lossy audio plan (aac/mp3) whose bitrate fits the target size."""
 
@@ -555,6 +572,7 @@ def _build_lossy_plan(
             str(output_path),
         ]
     )
+    args = _with_loudnorm(args, normalize)
     args = _with_ffmpeg_threads(args, ffmpeg_threads)
     return ConversionPlan(
         strategy=strategy,
@@ -899,6 +917,7 @@ def convert_file(
     protected_sources: Iterable[Path] = (),
     resolved_protected_sources: frozenset[Path] | None = None,
     original_size: int | None = None,
+    normalize: bool = False,
     post_process: Callable[[ConversionResult], None] | None = None,
     allow_video: bool = False,
 ) -> list[ConversionResult]:
@@ -910,6 +929,8 @@ def convert_file(
     abort the conversion, so callers are expected to handle their own errors.
     ``allow_video`` preserves the default audio-only contract unless callers opt
     into extracting the audio stream from video containers.
+    When ``normalize`` is True generated audio is loudness-normalized with the
+    EBU R128 loudnorm filter; the default of False keeps prior output.
     """
 
     source = Path(source)
@@ -965,6 +986,7 @@ def convert_file(
             overwrite=overwrite,
             max_segment_duration_seconds=max_segment_duration_seconds,
             protected_sources=resolved_sources,
+            normalize=normalize,
             output_format=output_format,
             allow_video=allow_video,
         )
@@ -1078,10 +1100,15 @@ def _execute_segment_conversion(
     overwrite: bool,
     max_segment_duration_seconds: float,
     resolved_protected_sources: frozenset[Path],
+    normalize: bool = False,
     output_format: str = "auto",
     allow_video: bool = False,
 ) -> ConversionResult:
-    """Execute the conversion plan(s) for a single segment."""
+    """Execute the conversion plan(s) for a single segment.
+
+    ``output_format``/``allow_video`` select the conversion contract, while
+    ``normalize`` applies EBU R128 loudnorm to generated audio when requested.
+    """
     plan = build_audio_plan(
         rel_source,
         probe,
@@ -1090,6 +1117,7 @@ def _execute_segment_conversion(
         prefer_flac=prefer_flac,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        normalize=normalize,
         output_format=output_format,
         allow_video=allow_video,
     )
@@ -1118,6 +1146,7 @@ def _execute_segment_conversion(
             output_dir=output_dir,
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            normalize=normalize,
         )
         final_output = _resolve_collision(opus_plan.output_path, overwrite=overwrite)
         first_result = _execute_plan(
@@ -1222,10 +1251,15 @@ def _convert_segment(
     overwrite: bool,
     max_segment_duration_seconds: float,
     protected_sources: frozenset[Path] = frozenset(),
+    normalize: bool = False,
     output_format: str = "auto",
     allow_video: bool = False,
 ) -> ConversionResult:
-    """Convert one media segment fitting the target size limit."""
+    """Convert one media segment fitting the target size limit.
+
+    Format selection, video opt-in, and loudness normalization are threaded
+    through to the concrete conversion plan.
+    """
     # protected_sources is passed from convert_file where it is already fully resolved.
     # _ensure_not_source_path explicitly checks against the current source independently.
     resolved_protected_sources = protected_sources
@@ -1275,6 +1309,7 @@ def _convert_segment(
         overwrite=overwrite,
         max_segment_duration_seconds=max_segment_duration_seconds,
         resolved_protected_sources=resolved_protected_sources,
+        normalize=normalize,
         output_format=output_format,
         allow_video=allow_video,
     )
@@ -1452,6 +1487,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Prefer FLAC for every audio-only source, including lossy input",
     )
     parser.add_argument(
+        "--normalize",
+        action="store_true",
+        default=False,
+        help=(
+            "Apply EBU R128 loudness normalization (loudnorm=I=-16:TP=-1.5:LRA=11) "
+            "to generated audio. Off by default; output is byte-identical when omitted."
+        ),
+    )
+    parser.add_argument(
         "--format",
         choices=OUTPUT_FORMATS,
         default="auto",
@@ -1584,6 +1628,7 @@ def _execute_conversions(
                 protected_sources=protected_sources,
                 resolved_protected_sources=resolved_candidates,
                 original_size=size,
+                normalize=args.normalize,
                 post_process=post_process,
                 allow_video=args.allow_video,
             )
@@ -1785,6 +1830,18 @@ def _with_ffmpeg_threads(args: list[str], ffmpeg_threads: int | None) -> list[st
     if ffmpeg_threads is None:
         return args
     return [*args[:-1], "-threads", str(ffmpeg_threads), args[-1]]
+
+
+def _with_loudnorm(args: list[str], normalize: bool) -> list[str]:
+    """Insert the EBU R128 loudnorm audio filter before the output path when requested.
+
+    When normalize is False the argument list is returned unchanged so default
+    conversions remain byte-identical to prior behavior.
+    """
+
+    if not normalize:
+        return args
+    return [*args[:-1], "-af", LOUDNORM_FILTER, args[-1]]
 
 
 def _parse_probe_payload(
