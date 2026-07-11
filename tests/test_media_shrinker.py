@@ -369,6 +369,28 @@ class ProbeMediaTests(unittest.TestCase):
 
         self.assertEqual(probe.size_bytes, 123)
 
+    def test_parse_probe_payload_falls_back_to_format_duration_when_stream_is_zero(
+        self,
+    ) -> None:
+        # Real ffprobe output: some containers report a stream-level
+        # "duration": "0.000000" while the true duration lives in the format
+        # section. The stream's unusable zero must not shadow the format value.
+        payload = {
+            "streams": [
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "duration": "0.000000",
+                    "bit_rate": "128000",
+                }
+            ],
+            "format": {"duration": "123.5", "size": "456"},
+        }
+
+        probe = media_shrinker._parse_probe_payload(payload, Path("stream.mp4"))
+
+        self.assertEqual(probe.duration_seconds, 123.5)
+
 
 class PlanningTests(unittest.TestCase):
     def test_pcm_wav_uses_lossless_flac_first_and_preserves_container_metadata(
