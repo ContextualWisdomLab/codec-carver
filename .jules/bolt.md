@@ -60,3 +60,6 @@
 ## 2026-06-25 - [Optimize Path.exists() when paired with stat()]
 **Learning:** Checking `Path.exists()` before `Path.stat()` introduces a redundant system call because `exists()` internally uses `stat()`.
 **Action:** Rely on catching the `OSError` from `Path.stat()` to simultaneously check for existence and retrieve file attributes, saving measurable I/O overhead on large filesystems.
+## 2026-06-12 - [Optimize FFmpeg Log Parsing with finditer]
+**Learning:** When parsing large text logs from command-line tools like ffmpeg (which use carriage returns \r for progress updates), using str.splitlines() causes massive memory allocations and manual str.find() slicing fails on \r boundaries.
+**Action:** Compile a unified regex and use re.finditer() directly on the raw output string for safe, memory-efficient parsing without instantiating list of lines.
