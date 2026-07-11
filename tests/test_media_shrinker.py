@@ -1157,6 +1157,100 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(segments[0].duration_seconds, 150.5)
 
 
+class LoudnessNormalizationTests(unittest.TestCase):
+    _FLAC_PROBE = MediaProbe(
+        duration_seconds=3_600.0,
+        size_bytes=4_294_808_936,
+        audio_codec="pcm_s16le",
+        audio_bit_rate=1_411_200,
+        has_video=False,
+        format_name="wav",
+    )
+    _OPUS_PROBE = MediaProbe(
+        duration_seconds=10_000.0,
+        size_bytes=3_000_000_000,
+        audio_codec="aac",
+        audio_bit_rate=2_500_000,
+        has_video=False,
+        format_name="mov,mp4,m4a,3gp,3g2,mj2",
+    )
+
+    def _flac_plan(self, *, normalize: bool) -> ConversionPlan:
+        return build_audio_plan(
+            Path("meeting.wav"),
+            self._FLAC_PROBE,
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            normalize=normalize,
+        )
+
+    def _opus_plan(self, *, normalize: bool) -> ConversionPlan:
+        return build_audio_plan(
+            Path("long.m4a"),
+            self._OPUS_PROBE,
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            normalize=normalize,
+        )
+
+    def test_normalize_adds_loudnorm_filter_to_flac_plan(self) -> None:
+        plan = self._flac_plan(normalize=True)
+        self.assertEqual(plan.strategy, "flac-lossless")
+        self.assertIn("-af", plan.ffmpeg_args)
+        self.assertIn(media_shrinker.LOUDNORM_FILTER, plan.ffmpeg_args)
+        self.assertIn("loudnorm", media_shrinker.LOUDNORM_FILTER)
+        # The filter must precede the output path so ffmpeg applies it.
+        self.assertLess(
+            plan.ffmpeg_args.index(media_shrinker.LOUDNORM_FILTER),
+            len(plan.ffmpeg_args) - 1,
+        )
+
+    def test_normalize_adds_loudnorm_filter_to_opus_plan(self) -> None:
+        plan = self._opus_plan(normalize=True)
+        self.assertEqual(plan.strategy, "opus-bitrate")
+        self.assertIn("-af", plan.ffmpeg_args)
+        self.assertIn(media_shrinker.LOUDNORM_FILTER, plan.ffmpeg_args)
+
+    def test_default_off_flac_plan_is_byte_identical(self) -> None:
+        plan = self._flac_plan(normalize=False)
+        self.assertNotIn("-af", plan.ffmpeg_args)
+        self.assertNotIn(media_shrinker.LOUDNORM_FILTER, plan.ffmpeg_args)
+        # Default must equal the explicit normalize=False arg list unchanged.
+        self.assertEqual(
+            plan.ffmpeg_args,
+            build_audio_plan(
+                Path("meeting.wav"),
+                self._FLAC_PROBE,
+                target_bytes=1_900_000_000,
+                output_dir=Path("out"),
+            ).ffmpeg_args,
+        )
+
+    def test_default_off_opus_plan_is_byte_identical(self) -> None:
+        plan = self._opus_plan(normalize=False)
+        self.assertNotIn("-af", plan.ffmpeg_args)
+        self.assertNotIn(media_shrinker.LOUDNORM_FILTER, plan.ffmpeg_args)
+        self.assertEqual(
+            plan.ffmpeg_args,
+            build_audio_plan(
+                Path("long.m4a"),
+                self._OPUS_PROBE,
+                target_bytes=1_900_000_000,
+                output_dir=Path("out"),
+            ).ffmpeg_args,
+        )
+
+    def test_build_opus_plan_normalize_flag_adds_filter(self) -> None:
+        plan = media_shrinker.build_opus_plan(
+            Path("long.m4a"),
+            self._OPUS_PROBE,
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            normalize=True,
+        )
+        self.assertIn(media_shrinker.LOUDNORM_FILTER, plan.ffmpeg_args)
+
+
 class SilenceDetectionTests(unittest.TestCase):
     @patch("media_shrinker.subprocess.run")
     def test_detect_silence_intervals_success(self, mock_run: MagicMock) -> None:
@@ -1458,6 +1552,7 @@ class CliTests(unittest.TestCase):
                 "--exclude-dir-prefix",
                 "split_",
                 "--flac-all",
+                "--normalize",
                 "--workers",
                 "2",
                 "--ffmpeg-threads",
@@ -1484,12 +1579,17 @@ class CliTests(unittest.TestCase):
         self.assertFalse(args.include_under_limit)
         self.assertEqual(args.exclude_dir_prefix, ["split_"])
         self.assertTrue(args.flac_all)
+        self.assertTrue(args.normalize)
         self.assertEqual(args.workers, 2)
         self.assertEqual(args.ffmpeg_threads, -1)
         self.assertEqual(args.silence_noise, "-40dB")
         self.assertEqual(args.silence_min_duration_seconds, 3.5)
         self.assertTrue(args.execute)
         self.assertTrue(args.overwrite)
+
+    def test_parse_args_normalize_defaults_false_and_opts_in(self) -> None:
+        self.assertFalse(media_shrinker.parse_args(["root"]).normalize)
+        self.assertTrue(media_shrinker.parse_args(["root", "--normalize"]).normalize)
 
     def test_main_dry_run_lists_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -17,9 +17,17 @@ classifiers = [
     "Topic :: System :: Archiving :: Compression",
     "Environment :: Console",
 ]
-# The CLI core depends only on the Python standard library plus the external
-# `ffmpeg`/`ffprobe` binaries. Optional surfaces pull their own dependencies.
-dependencies = []
+# The coverage workflow imports the web and MCP entry points through the test
+# suite, so the package metadata must expose those runtime dependencies without
+# relying on requirements.txt side effects.
+dependencies = [
+    "aiofiles==25.1.0",
+    "fastapi==0.139.0",
+    "httpx==0.28.1",
+    "mcp==1.28.1",
+    "python-multipart==0.0.32",
+    "uvicorn==0.51.0",
+]
 
 [project.optional-dependencies]
 web = ["fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1"]
