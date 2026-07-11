@@ -847,12 +847,12 @@ def preserve_file_attributes(
 
     _copy_extended_attributes(source, dest)
 
-    os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+    _restore_timestamps(source_stat, dest)
 
     resolved_setfile = setfile_path if setfile_path is not None else _get_setfile_path()
     if resolved_setfile:
         _copy_macos_creation_time(source_stat, dest, resolved_setfile)
-        os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+        _restore_timestamps(source_stat, dest)
 
 
 def convert_file(
@@ -1917,6 +1917,19 @@ def _resolve_collision(path: Path, *, overwrite: bool) -> Path:
         if not candidate.exists():
             return candidate
     raise FileExistsError(f"Could not find free output path for {path}")
+
+
+def _restore_timestamps(source_stat: os.stat_result, dest: Path) -> None:
+    """Best-effort copy of nanosecond atime/mtime from source_stat onto dest.
+
+    A read-only destination or a filesystem lacking timestamp support can make
+    os.utime raise OSError; that is non-critical metadata, so the failure is
+    swallowed to keep attribute preservation best-effort.
+    """
+    try:
+        os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+    except OSError:
+        pass
 
 
 def _copy_extended_attributes(source: Path, dest: Path) -> None:
