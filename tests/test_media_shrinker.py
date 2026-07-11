@@ -19,6 +19,7 @@ from media_shrinker import (
     SilenceInterval,
     build_audio_plan,
     build_icloud_download_command,
+    build_opus_plan,
     build_segments,
     calculate_audio_bitrate,
     choose_worker_count,
@@ -1249,6 +1250,238 @@ class LoudnessNormalizationTests(unittest.TestCase):
             normalize=True,
         )
         self.assertIn(media_shrinker.LOUDNORM_FILTER, plan.ffmpeg_args)
+
+
+class MetadataTaggingTests(unittest.TestCase):
+    """Cover --set-* CLI tags flowing into ffmpeg -metadata arguments."""
+
+    @staticmethod
+    def _lossless_probe() -> MediaProbe:
+        return MediaProbe(
+            duration_seconds=3600.0,
+            size_bytes=4_294_808_936,
+            audio_codec="pcm_s16le",
+            audio_bit_rate=1_411_200,
+            has_video=False,
+            format_name="wav",
+        )
+
+    @staticmethod
+    def _lossy_probe() -> MediaProbe:
+        return MediaProbe(
+            duration_seconds=10_000.0,
+            size_bytes=3_000_000_000,
+            audio_codec="aac",
+            audio_bit_rate=2_500_000,
+            has_video=False,
+            format_name="mov,mp4,m4a,3gp,3g2,mj2",
+        )
+
+    def test_metadata_args_emits_pairs_in_sorted_key_order(self) -> None:
+        args = media_shrinker._metadata_args({"title": "T", "artist": "A"})
+
+        self.assertEqual(args, ["-metadata", "artist=A", "-metadata", "title=T"])
+
+    def test_metadata_args_returns_empty_list_for_none_and_empty(self) -> None:
+        self.assertEqual(media_shrinker._metadata_args(None), [])
+        self.assertEqual(media_shrinker._metadata_args({}), [])
+
+    def test_flac_plan_injects_metadata_overrides_after_map_metadata(self) -> None:
+        plan = build_audio_plan(
+            Path("meeting.wav"),
+            self._lossless_probe(),
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            tags={"title": "Board Meeting", "album": "Archive 2026"},
+        )
+
+        args = plan.ffmpeg_args
+        self.assertEqual(args.count("-metadata"), 2)
+        album_index = args.index("album=Archive 2026")
+        title_index = args.index("title=Board Meeting")
+        self.assertLess(album_index, title_index)
+        self.assertLess(args.index("-map_metadata"), album_index)
+        self.assertLess(title_index, args.index("-vn"))
+        self.assertEqual(args[album_index - 1], "-metadata")
+        self.assertEqual(args[title_index - 1], "-metadata")
+
+    def test_opus_plan_injects_metadata_overrides_after_map_metadata(self) -> None:
+        plan = build_opus_plan(
+            Path("long.m4a"),
+            self._lossy_probe(),
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            tags={"artist": "Field Recorder", "comment": "auto-archived"},
+        )
+
+        args = plan.ffmpeg_args
+        self.assertEqual(args.count("-metadata"), 2)
+        artist_index = args.index("artist=Field Recorder")
+        comment_index = args.index("comment=auto-archived")
+        self.assertLess(artist_index, comment_index)
+        self.assertLess(args.index("-map_metadata"), artist_index)
+        self.assertLess(comment_index, args.index("-vn"))
+        self.assertEqual(args[artist_index - 1], "-metadata")
+        self.assertEqual(args[comment_index - 1], "-metadata")
+
+    def test_forced_lossy_formats_inject_metadata_overrides(self) -> None:
+        for output_format, suffix in (("aac", ".m4a"), ("mp3", ".mp3")):
+            with self.subTest(output_format=output_format):
+                plan = build_audio_plan(
+                    Path("long.m4a"),
+                    self._lossy_probe(),
+                    target_bytes=1_900_000_000,
+                    output_dir=Path("out"),
+                    output_format=output_format,
+                    tags={"title": "Board Meeting"},
+                )
+
+                args = plan.ffmpeg_args
+                title_index = args.index("title=Board Meeting")
+                self.assertEqual(plan.output_path.suffix, suffix)
+                self.assertLess(args.index("-map_metadata"), title_index)
+                self.assertLess(title_index, args.index("-vn"))
+                self.assertEqual(args[title_index - 1], "-metadata")
+
+    def test_no_tags_keeps_plan_args_byte_identical(self) -> None:
+        for probe, source in (
+            (self._lossless_probe(), Path("meeting.wav")),
+            (self._lossy_probe(), Path("long.m4a")),
+        ):
+            with self.subTest(source=source):
+                baseline = build_audio_plan(
+                    source, probe, target_bytes=1_900_000_000, output_dir=Path("out")
+                )
+                with_none = build_audio_plan(
+                    source,
+                    probe,
+                    target_bytes=1_900_000_000,
+                    output_dir=Path("out"),
+                    tags=None,
+                )
+                with_empty = build_audio_plan(
+                    source,
+                    probe,
+                    target_bytes=1_900_000_000,
+                    output_dir=Path("out"),
+                    tags={},
+                )
+                self.assertEqual(baseline.ffmpeg_args, with_none.ffmpeg_args)
+                self.assertEqual(baseline.ffmpeg_args, with_empty.ffmpeg_args)
+
+    def test_no_tags_keeps_opus_plan_args_byte_identical(self) -> None:
+        baseline = build_opus_plan(
+            Path("long.m4a"),
+            self._lossy_probe(),
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+        )
+        with_none = build_opus_plan(
+            Path("long.m4a"),
+            self._lossy_probe(),
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            tags=None,
+        )
+
+        self.assertEqual(baseline.ffmpeg_args, with_none.ffmpeg_args)
+
+    def test_special_characters_pass_through_as_single_argv_items(self) -> None:
+        value = 'My "Great" Album; $(rm -rf /) && echo -n \'x\' 한글 = tricky'
+        plan = build_opus_plan(
+            Path("long.m4a"),
+            self._lossy_probe(),
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            tags={"album": value},
+        )
+
+        self.assertIn(f"album={value}", plan.ffmpeg_args)
+        metadata_index = plan.ffmpeg_args.index("-metadata")
+        self.assertEqual(plan.ffmpeg_args[metadata_index + 1], f"album={value}")
+
+    def test_parse_args_collects_all_provided_tags(self) -> None:
+        args = media_shrinker.parse_args(
+            [
+                "media",
+                "--set-title",
+                "Weekly Sync",
+                "--set-artist",
+                "Recorder",
+                "--set-album",
+                "Meetings",
+                "--set-comment",
+                "shrunk by codec-carver",
+            ]
+        )
+
+        self.assertEqual(
+            args.tags,
+            {
+                "title": "Weekly Sync",
+                "artist": "Recorder",
+                "album": "Meetings",
+                "comment": "shrunk by codec-carver",
+            },
+        )
+
+    def test_parse_args_collects_only_non_none_tags(self) -> None:
+        args = media_shrinker.parse_args(
+            ["media", "--set-title", "Weekly Sync", "--set-album", "Meetings"]
+        )
+
+        self.assertEqual(args.tags, {"title": "Weekly Sync", "album": "Meetings"})
+        self.assertIsNone(args.set_artist)
+        self.assertIsNone(args.set_comment)
+
+    def test_parse_args_defaults_to_empty_tags(self) -> None:
+        args = media_shrinker.parse_args(["media"])
+
+        self.assertEqual(args.tags, {})
+        self.assertIsNone(args.set_title)
+        self.assertIsNone(args.set_artist)
+        self.assertIsNone(args.set_album)
+        self.assertIsNone(args.set_comment)
+
+    def test_execute_conversions_forwards_tags_to_convert_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "ok.wav"
+            source.write_bytes(b"ok")
+            args = media_shrinker.parse_args(
+                [str(root), "--workers", "1", "--set-title", "Weekly Sync"]
+            )
+            captured: dict[str, object] = {}
+
+            def fake_convert_file(source_path: Path, **kwargs):
+                captured.update(kwargs)
+                return []
+
+            with patch("media_shrinker.convert_file", side_effect=fake_convert_file):
+                media_shrinker._execute_conversions(
+                    [(source, 2)], args, root, root / "out"
+                )
+
+        self.assertEqual(captured["tags"], {"title": "Weekly Sync"})
+
+    def test_execute_conversions_passes_none_when_no_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "ok.wav"
+            source.write_bytes(b"ok")
+            args = media_shrinker.parse_args([str(root), "--workers", "1"])
+            captured: dict[str, object] = {}
+
+            def fake_convert_file(source_path: Path, **kwargs):
+                captured.update(kwargs)
+                return []
+
+            with patch("media_shrinker.convert_file", side_effect=fake_convert_file):
+                media_shrinker._execute_conversions(
+                    [(source, 2)], args, root, root / "out"
+                )
+
+        self.assertIsNone(captured["tags"])
 
 
 class SilenceDetectionTests(unittest.TestCase):
