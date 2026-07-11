@@ -59,6 +59,7 @@ codec-carver = "media_shrinker:main"
 [tool.setuptools]
 py-modules = [
     "chapters",
+    "config_file",
     "diarize",
     "job_store",
     "mcp_driver",
