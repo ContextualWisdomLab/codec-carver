@@ -250,32 +250,42 @@ class FindCandidateTests(unittest.TestCase):
 
             self.assertEqual(candidates, [])
 
-    def test_find_candidates_skips_mocked_symlink_dir_when_realpath_fails(self) -> None:
-        root = Path("synthetic-root").resolve()
-        root_str = str(root)
-        link_name = "linked"
-        link_path = os.path.join(root_str, link_name)
-        original_realpath = os.path.realpath
+    def test_find_candidates_skips_mocked_symlink_dir_when_realpath_fails(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root_str = str(root)
+            excluded = root / "excluded"
+            excluded.mkdir()
+            link_dir = os.path.join(root_str, "linked")
 
-        def fake_lstat(path: str) -> object:
-            if os.fspath(path) == link_path:
-                return _fake_lstat(stat.S_IFLNK)
-            return _fake_lstat(stat.S_IFDIR)
+            original_lstat = os.lstat
+            original_realpath = os.path.realpath
+            failed_realpath_calls: list[str] = []
 
-        def flaky_realpath(path: object, *args: object, **kwargs: object) -> str:
-            if os.fspath(path) == link_path:
-                raise OSError("cannot resolve symlink")
-            return original_realpath(path, *args, **kwargs)
+            def fake_lstat(path: str) -> object:
+                if path == link_dir:
+                    return _fake_lstat(stat.S_IFLNK)
+                return original_lstat(path)
 
-        with patch("os.walk", return_value=[(root_str, [link_name], [])]):
-            with patch("os.lstat", fake_lstat):
-                with patch("os.path.realpath", flaky_realpath):
-                    candidates = find_candidates(
-                        root,
-                        include_under_limit=True,
-                        exclude_paths=[root / "excluded"],
-                    )
-        self.assertEqual(candidates, [])
+            def flaky_realpath(path: object, *args: object, **kwargs: object) -> str:
+                if os.fspath(path) == link_dir:
+                    failed_realpath_calls.append(link_dir)
+                    raise OSError("cannot resolve symlink")
+                return original_realpath(path, *args, **kwargs)
+
+            with patch("os.walk", return_value=[(root_str, ["linked"], [])]):
+                with patch("os.lstat", fake_lstat):
+                    with patch("os.path.realpath", flaky_realpath):
+                        candidates = find_candidates(
+                            root,
+                            include_under_limit=True,
+                            exclude_paths=[excluded],
+                        )
+
+            self.assertEqual(candidates, [])
+            self.assertEqual(failed_realpath_calls, [link_dir])
 
     def test_find_candidates_skips_symlink_dir_when_realpath_fails(self) -> None:
         # Regression test for a Python-3.10-only CI failure
