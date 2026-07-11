@@ -63,6 +63,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -91,6 +93,7 @@ HTML_TEMPLATE = """
         .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
         .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
+        .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; }
     </style>
 </head>
 <body>
@@ -109,10 +112,10 @@ HTML_TEMPLATE = """
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="preset_buttons_container" class="preset-container">
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)">25 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)">100 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)">500 MiB</button>
-                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)">1 GiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(26214400)" aria-pressed="false" data-bytes="26214400">25 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(104857600)" aria-pressed="false" data-bytes="104857600">100 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(524288000)" aria-pressed="false" data-bytes="524288000">500 MiB</button>
+                    <button type="button" class="preset-btn" onclick="setTargetBytes(1073741824)" aria-pressed="false" data-bytes="1073741824">1 GiB</button>
                 </div>
             </p>
             <button type="submit" id="submit-btn">Upload and Shrink</button>
@@ -132,7 +135,7 @@ HTML_TEMPLATE = """
             function setTargetBytes(bytes) {
                 const input = document.getElementById('target_bytes');
                 input.value = bytes;
-                input.dispatchEvent(new Event('input'));
+                input.dispatchEvent(new Event('input', { bubbles: true }));
             }
 
             function updateFileSizePreview(input) {
@@ -156,12 +159,20 @@ HTML_TEMPLATE = """
                 preview.innerText = 'Selected file size: ' + text;
             }
 
-            document.getElementById('target_bytes').addEventListener('input', function() {
+            document.getElementById('target_bytes').addEventListener('input', function(e) {
                 const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
+
+                if (e.isTrusted) {
+                    document.querySelectorAll('.preset-btn').forEach(b => b.setAttribute('aria-pressed', 'false'));
+                } else {
+                    document.querySelectorAll('.preset-btn').forEach(b => {
+                        b.setAttribute('aria-pressed', b.getAttribute('data-bytes') == val ? 'true' : 'false');
+                    });
+                }
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
@@ -239,6 +250,11 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
+    # Normalize the upload name before workspace setup so later file writes use a safe basename.
+    safe_filename = Path(file.filename).name
+    if not safe_filename or safe_filename in (".", ".."):
+        safe_filename = "upload.tmp"
+
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -253,11 +269,6 @@ def shrink_media(
         output_dir = temp_dir_path / "output"
         input_dir.mkdir()
         output_dir.mkdir()
-
-        # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename
         bytes_written = 0
