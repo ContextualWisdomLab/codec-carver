@@ -63,6 +63,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -133,7 +135,7 @@ HTML_TEMPLATE = """
             function setTargetBytes(bytes) {
                 const input = document.getElementById('target_bytes');
                 input.value = bytes;
-                input.dispatchEvent(new Event('input'));
+                input.dispatchEvent(new Event('input', { bubbles: true }));
             }
 
             function updateFileSizePreview(input) {
@@ -157,12 +159,20 @@ HTML_TEMPLATE = """
                 preview.innerText = 'Selected file size: ' + text;
             }
 
-            document.getElementById('target_bytes').addEventListener('input', function() {
+            document.getElementById('target_bytes').addEventListener('input', function(e) {
                 const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
+
+                if (e.isTrusted) {
+                    document.querySelectorAll('.preset-btn').forEach(b => b.setAttribute('aria-pressed', 'false'));
+                } else {
+                    document.querySelectorAll('.preset-btn').forEach(b => {
+                        b.setAttribute('aria-pressed', b.getAttribute('data-bytes') == val ? 'true' : 'false');
+                    });
+                }
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
@@ -172,12 +182,6 @@ HTML_TEMPLATE = """
                 } else {
                     preview.innerText = formatBinaryBytes(val);
                 }
-
-                const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
-                buttons.forEach(btn => {
-                    const isPressed = btn.dataset.bytes === this.value;
-                    btn.setAttribute('aria-pressed', isPressed ? 'true' : 'false');
-                });
             });
 
             document.getElementById('shrink-form').addEventListener('submit', function() {
@@ -246,6 +250,11 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
+    # Normalize the upload name before workspace setup so later file writes use a safe basename.
+    safe_filename = Path(file.filename).name
+    if not safe_filename or safe_filename in (".", ".."):
+        safe_filename = "upload.tmp"
+
     # Create a temporary directory that will hold the input and output
     try:
         temp_dir = tempfile.mkdtemp(prefix="codec_carver_")
@@ -260,11 +269,6 @@ def shrink_media(
         output_dir = temp_dir_path / "output"
         input_dir.mkdir()
         output_dir.mkdir()
-
-        # Save the uploaded file
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename
         bytes_written = 0

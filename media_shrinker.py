@@ -85,8 +85,7 @@ DURATION_TOLERANCE_SECONDS = 2.0
 BITRATE_SAFETY_MARGIN = 0.92
 OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
-SILENCE_START_RE = re.compile(r"silence_start:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
-SILENCE_END_RE = re.compile(r"silence_end:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
+SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
 
 
 class MediaShrinkerError(RuntimeError):
@@ -552,23 +551,18 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
 
     intervals: list[SilenceInterval] = []
     current_start: float | None = None
-    for line in stderr.splitlines():
-        # Fast path: Substring search is much faster than regex.
-        # Most lines are ffmpeg progress updates (e.g., 'frame=...')
-        if "silence" not in line:
-            continue
-        start_match = SILENCE_START_RE.search(line)
-        if start_match:
-            current_start = float(start_match.group("value"))
-            continue
-
-        end_match = SILENCE_END_RE.search(line)
-        if end_match and current_start is not None:
-            end_seconds = float(end_match.group("value"))
-            if end_seconds > current_start:
+    # Fast path: Using re.finditer directly on the raw string avoids
+    # OOM issues and overhead from str.splitlines() on massive ffmpeg logs.
+    for match in SILENCE_RE.finditer(stderr):
+        kind = match.group(1)
+        value = float(match.group("value"))
+        if kind == "start":
+            current_start = value
+        elif kind == "end" and current_start is not None:
+            if value > current_start:
                 intervals.append(
                     SilenceInterval(
-                        start_seconds=current_start, end_seconds=end_seconds
+                        start_seconds=current_start, end_seconds=value
                     )
                 )
             current_start = None
@@ -745,11 +739,17 @@ def convert_file(
     source = Path(source)
     root = Path(root)
     output_dir = Path(output_dir)
+    resolved_source = source.resolve()
+    resolved_root = root.resolve()
+
+    if not resolved_source.is_relative_to(resolved_root):
+        raise MediaShrinkerError("Source path is outside the permitted root directory")
+
     original_size = (
         original_size if original_size is not None else safe_source_size(source)
     )
 
-    rel_source = source.relative_to(root)
+    rel_source = resolved_source.relative_to(resolved_root)
     if download_icloud:
         download_from_icloud(source, brctl_path=brctl_path)
     probe = probe_media(source, ffprobe_path=ffprobe_path, source_size=original_size)

@@ -1,7 +1,3 @@
-## 2024-07-01 - Accessible Button Groups and State Toggles
-**Learning:** Using `aria-describedby` to associate a container of interactive buttons with an input causes excessive and confusing screen reader verbosity. Toggling visual states without ARIA state (like `aria-pressed`) leaves screen reader users blind to active selections.
-**Action:** Group related preset buttons with `role="group"` and `aria-label` on their container, avoid linking the container via `aria-describedby`, manage active states with `aria-pressed`, and avoid duplicating data in event handlers by using `dataset`.
-
 ## 2024-05-24 - CLI Arguments as UX
 **Learning:** In headless or CLI-only applications, the command-line help interface serves as the primary UI. Missing help strings and lack of default value visibility severely impacts developer/user experience and accessibility.
 **Action:** Always ensure `argparse` leverages `ArgumentDefaultsHelpFormatter` and that every argument has a descriptive `help` parameter to provide an intuitive "interface" for CLI tools.
@@ -50,3 +46,9 @@
 ## 2024-06-30 - Quick Preset Buttons for Raw Inputs
 **Learning:** Large raw byte inputs create high cognitive load and increase magnitude errors. Providing accessible quick preset buttons allows users to quickly select common values with confidence, reducing errors and reliance on manual typing.
 **Action:** Add quick preset buttons for common values near raw inputs (especially bytes), ensuring they are accessible via keyboard and properly associated with `aria-describedby`.
+## 2024-07-10 - Preset buttons active state with `aria-pressed`
+**Learning:** When implementing preset or toggle buttons in UI forms, using `aria-pressed` attributes dynamically managed by JavaScript is essential to track active states. This should always be paired with a corresponding CSS rule (e.g., `[aria-pressed="true"]`) to provide clear visual feedback, and the active state should be cleared when the user manually modifies the associated input field (distinguishable via `e.isTrusted` on the event).
+**Action:** Always implement `aria-pressed` with paired CSS for preset toggle buttons, and use `e.isTrusted` to properly reset states on manual user input.
+## 2026-07-11 - 프리셋 버튼 그룹 접근성 개선: role="group", aria-label, aria-describedby
+**Learning:** 프리셋 버튼 컨테이너를 `aria-describedby`에 포함하면 스크린 리더가 포커스 시 불필요하게 장황한 내용을 읽습니다. 관련 버튼을 묶을 때는 `role="group"` + `aria-label`을 사용하고, `aria-describedby`에서 컨테이너 ID를 제거하는 것이 올바른 패턴입니다. 또한, `data-bytes` 속성을 활용해 onclick에서 `this.dataset.bytes`를 쓰면 버튼 HTML이 간결해집니다.
+**Action:** 프리셋 버튼 그룹 컨테이너에 `role="group"` 및 `aria-label`을 추가하고, 입력 필드의 `aria-describedby`에서 컨테이너 ID를 제거하십시오. 버튼은 `data-bytes` + `this.dataset.bytes` 패턴으로 작성하세요.
