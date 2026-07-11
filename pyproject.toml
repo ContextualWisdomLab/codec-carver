@@ -55,6 +55,7 @@ py-modules = [
     "job_store",
     "mcp_driver",
     "media_shrinker",
+    "presets",
     "remote_input",
     "saas_web",
     "subtitles",
