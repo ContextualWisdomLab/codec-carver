@@ -263,6 +263,15 @@ HTML_TEMPLATE = """
                 }, 10);
             });
 
+            document.getElementById('shrink-batch-form').addEventListener('submit', function() {
+                const btn = document.getElementById('batch-submit-btn');
+                setTimeout(() => {
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Processing...';
+                    btn.setAttribute('aria-busy', 'true');
+                }, 10);
+            });
+
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file');
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
