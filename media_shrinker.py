@@ -85,6 +85,8 @@ DURATION_TOLERANCE_SECONDS = 2.0
 BITRATE_SAFETY_MARGIN = 0.92
 OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
+MP3_MAX_BITRATE_BPS = 320_000  # libmp3lame ceiling
+OUTPUT_FORMATS = ("auto", "flac", "opus", "aac", "mp3")
 SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
 
 
@@ -325,9 +327,15 @@ def build_audio_plan(
     prefer_flac: bool = False,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    output_format: str = "auto",
     allow_video: bool = False,
 ) -> ConversionPlan:
     """Build the preferred audio-only conversion plan for source_path.
+
+    ``output_format`` selects the container/codec: ``auto`` (default) keeps the
+    original behaviour (FLAC for lossless or ``--flac-all`` input, otherwise
+    high-bitrate Opus); ``flac``/``opus`` force that codec; ``aac``/``mp3``
+    produce a target-fitting lossy plan for broad device compatibility.
 
     When ``allow_video`` is False (the default) any file containing a video
     stream is rejected, preserving the audio-only contract. When True, the
@@ -343,8 +351,46 @@ def build_audio_plan(
         )
     if not probe.audio_codec:
         raise MediaShrinkerError(f"{source_path} has no audio stream")
+    if output_format not in OUTPUT_FORMATS:
+        raise MediaShrinkerError(f"unsupported output format: {output_format}")
 
-    suffix = ".flac" if prefer_flac or _is_lossless_probe(probe) else ".opus"
+    if output_format == "aac":
+        return _build_lossy_plan(
+            source_path,
+            probe,
+            target_bytes=target_bytes,
+            output_dir=output_dir,
+            suffix=".m4a",
+            codec="aac",
+            strategy="aac-bitrate",
+            ffmpeg_threads=ffmpeg_threads,
+            segment=segment,
+        )
+    if output_format == "mp3":
+        return _build_lossy_plan(
+            source_path,
+            probe,
+            target_bytes=target_bytes,
+            output_dir=output_dir,
+            suffix=".mp3",
+            codec="libmp3lame",
+            strategy="mp3-bitrate",
+            max_bitrate=MP3_MAX_BITRATE_BPS,
+            ffmpeg_threads=ffmpeg_threads,
+            segment=segment,
+        )
+    if output_format == "opus":
+        return build_opus_plan(
+            source_path,
+            probe,
+            target_bytes=target_bytes,
+            output_dir=output_dir,
+            ffmpeg_threads=ffmpeg_threads,
+            segment=segment,
+        )
+
+    force_flac = prefer_flac or output_format == "flac"
+    suffix = ".flac" if force_flac or _is_lossless_probe(probe) else ".opus"
     output_path = _planned_output_path(
         _segment_source_path(source_path, segment), output_dir, suffix
     )
@@ -455,6 +501,88 @@ def build_opus_plan(
         ffmpeg_args=args,
         audio_bitrate_bps=bitrate,
     )
+
+
+def _build_lossy_plan(
+    source_path: Path,
+    probe: MediaProbe,
+    *,
+    target_bytes: int,
+    output_dir: Path,
+    suffix: str,
+    codec: str,
+    strategy: str,
+    max_bitrate: int | None = None,
+    ffmpeg_threads: int | None = None,
+    segment: MediaSegment | None = None,
+) -> ConversionPlan:
+    """Build a lossy audio plan (aac/mp3) whose bitrate fits the target size."""
+
+    duration_seconds = (
+        segment.duration_seconds if segment is not None else probe.duration_seconds
+    )
+    bitrate = calculate_audio_bitrate(
+        duration_seconds, target_bytes, probe.audio_bit_rate
+    )
+    if max_bitrate is not None:
+        bitrate = min(bitrate, max_bitrate)
+    output_path = _planned_output_path(
+        _segment_source_path(source_path, segment), output_dir, suffix
+    )
+    args = [
+        "-nostdin",
+        "-hide_banner",
+        "-y",
+    ]
+    args.extend(_segment_input_args(segment))
+    args.extend(
+        [
+            "-protocol_whitelist",
+            "file,crypto,data",
+            "-i",
+            str(source_path),
+            "-map",
+            "0:a:0",
+            "-map_metadata",
+            "0",
+            "-map_chapters",
+            "0",
+            "-vn",
+            "-c:a",
+            codec,
+            "-b:a",
+            str(bitrate),
+            str(output_path),
+        ]
+    )
+    args = _with_ffmpeg_threads(args, ffmpeg_threads)
+    return ConversionPlan(
+        strategy=strategy,
+        input_path=source_path,
+        output_path=output_path,
+        ffmpeg_args=args,
+        audio_bitrate_bps=bitrate,
+    )
+
+
+def _existing_output_suffixes(
+    output_format: str, *, prefer_flac: bool, probe: MediaProbe
+) -> tuple[str, ...]:
+    """Return generated output suffixes that may satisfy the selected format."""
+
+    if output_format == "aac":
+        return (".m4a",)
+    if output_format == "mp3":
+        return (".mp3",)
+    if output_format == "opus":
+        return (".opus",)
+    if output_format == "flac":
+        return (".flac",)
+    if output_format != "auto":
+        raise MediaShrinkerError(f"unsupported output format: {output_format}")
+    if prefer_flac or _is_lossless_probe(probe):
+        return (".flac", ".opus")
+    return (".opus",)
 
 
 def probe_media(
@@ -738,6 +866,7 @@ def convert_file(
     download_icloud: bool = False,
     brctl_path: str = "brctl",
     prefer_flac: bool = False,
+    output_format: str = "auto",
     ffmpeg_threads: int | None = None,
     overwrite: bool = False,
     max_segment_duration_seconds: float = DEFAULT_MAX_SEGMENT_DURATION_SECONDS,
@@ -812,6 +941,7 @@ def convert_file(
             overwrite=overwrite,
             max_segment_duration_seconds=max_segment_duration_seconds,
             protected_sources=resolved_sources,
+            output_format=output_format,
             allow_video=allow_video,
         )
         for segment in segments
@@ -924,6 +1054,7 @@ def _execute_segment_conversion(
     overwrite: bool,
     max_segment_duration_seconds: float,
     resolved_protected_sources: frozenset[Path],
+    output_format: str = "auto",
     allow_video: bool = False,
 ) -> ConversionResult:
     """Execute the conversion plan(s) for a single segment."""
@@ -935,6 +1066,7 @@ def _execute_segment_conversion(
         prefer_flac=prefer_flac,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        output_format=output_format,
         allow_video=allow_video,
     )
 
@@ -1066,13 +1198,16 @@ def _convert_segment(
     overwrite: bool,
     max_segment_duration_seconds: float,
     protected_sources: frozenset[Path] = frozenset(),
+    output_format: str = "auto",
     allow_video: bool = False,
 ) -> ConversionResult:
     """Convert one media segment fitting the target size limit."""
     # protected_sources is passed from convert_file where it is already fully resolved.
     # _ensure_not_source_path explicitly checks against the current source independently.
     resolved_protected_sources = protected_sources
-    existing_suffixes = (".flac", ".opus")
+    existing_suffixes = _existing_output_suffixes(
+        output_format, prefer_flac=prefer_flac, probe=probe
+    )
     segment_rel_source = _segment_source_path(rel_source, segment)
     _remove_invalid_legacy_outputs(
         source,
@@ -1116,6 +1251,7 @@ def _convert_segment(
         overwrite=overwrite,
         max_segment_duration_seconds=max_segment_duration_seconds,
         resolved_protected_sources=resolved_protected_sources,
+        output_format=output_format,
         allow_video=allow_video,
     )
 
@@ -1292,6 +1428,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Prefer FLAC for every audio-only source, including lossy input",
     )
     parser.add_argument(
+        "--format",
+        choices=OUTPUT_FORMATS,
+        default="auto",
+        help=(
+            "Output audio format. 'auto' (default) keeps FLAC-for-lossless / "
+            "Opus behaviour; 'flac'/'opus' force that codec; 'aac' (.m4a) and "
+            "'mp3' produce broadly-compatible lossy output fitted to the target."
+        ),
+    )
+    parser.add_argument(
         "--workers", type=int, default=0, help="Parallel ffmpeg jobs. 0 = auto"
     )
     parser.add_argument(
@@ -1405,6 +1551,7 @@ def _execute_conversions(
                 download_icloud=args.download_icloud,
                 brctl_path=args.brctl,
                 prefer_flac=args.flac_all,
+                output_format=args.format,
                 ffmpeg_threads=ffmpeg_threads,
                 overwrite=args.overwrite,
                 max_segment_duration_seconds=args.max_duration_seconds,

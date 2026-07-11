@@ -2225,5 +2225,148 @@ class VideoAllowTests(unittest.TestCase):
         self.assertTrue(on.allow_video)
 
 
+class OutputFormatTests(unittest.TestCase):
+    """Selection of output codec/container via --format."""
+
+    def _lossy_probe(self, audio_bit_rate: int | None = 192_000) -> MediaProbe:
+        return MediaProbe(
+            duration_seconds=1800.0,
+            size_bytes=3_000_000_000,
+            audio_codec="aac",
+            audio_bit_rate=audio_bit_rate,
+            has_video=False,
+            format_name="mov",
+        )
+
+    def _plan(
+        self,
+        output_format: str,
+        probe: MediaProbe | None = None,
+        target_bytes: int = 1_900_000_000,
+    ) -> ConversionPlan:
+        return build_audio_plan(
+            Path("meeting.wav"),
+            probe or self._lossy_probe(),
+            target_bytes=target_bytes,
+            output_dir=Path("out"),
+            output_format=output_format,
+        )
+
+    def test_aac_plan(self) -> None:
+        plan = self._plan("aac")
+        self.assertEqual(plan.strategy, "aac-bitrate")
+        self.assertTrue(str(plan.output_path).endswith(".m4a"))
+        self.assertIn("-vn", plan.ffmpeg_args)
+        self.assertIn("aac", plan.ffmpeg_args)
+        self.assertIn("0:a:0", plan.ffmpeg_args)
+        self.assertIsNotNone(plan.audio_bitrate_bps)
+
+    def test_mp3_plan_and_bitrate_cap(self) -> None:
+        probe = MediaProbe(10.0, 3_000_000_000, "aac", None, False, "mov")
+        plan = build_audio_plan(
+            Path("clip.wav"),
+            probe,
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            output_format="mp3",
+        )
+        self.assertEqual(plan.strategy, "mp3-bitrate")
+        self.assertTrue(str(plan.output_path).endswith(".mp3"))
+        self.assertIn("libmp3lame", plan.ffmpeg_args)
+        self.assertEqual(plan.audio_bitrate_bps, media_shrinker.MP3_MAX_BITRATE_BPS)
+
+    def test_opus_forced_even_for_lossless_source(self) -> None:
+        lossless = MediaProbe(
+            1800.0, 3_000_000_000, "pcm_s16le", 1_411_200, False, "wav"
+        )
+        self.assertEqual(self._plan("opus", probe=lossless).strategy, "opus-bitrate")
+
+    def test_flac_forced_for_lossy_source(self) -> None:
+        plan = self._plan("flac")
+        self.assertEqual(plan.strategy, "flac-transcode")
+        self.assertTrue(str(plan.output_path).endswith(".flac"))
+
+    def test_auto_matches_legacy_behaviour(self) -> None:
+        lossless = MediaProbe(1800.0, 3_000_000_000, "flac", 900_000, False, "flac")
+        self.assertEqual(self._plan("auto", probe=lossless).strategy, "flac-lossless")
+        self.assertEqual(self._plan("auto").strategy, "opus-bitrate")
+
+    def test_forced_format_still_allows_opt_in_video_audio_extraction(self) -> None:
+        video_probe = MediaProbe(
+            1800.0,
+            3_000_000_000,
+            "aac",
+            192_000,
+            True,
+            "mov,mp4,m4a,3gp,3g2,mj2",
+        )
+        plan = build_audio_plan(
+            Path("meeting.mp4"),
+            video_probe,
+            target_bytes=1_900_000_000,
+            output_dir=Path("out"),
+            output_format="mp3",
+            allow_video=True,
+        )
+        self.assertEqual(plan.strategy, "mp3-bitrate")
+        self.assertTrue(str(plan.output_path).endswith(".mp3"))
+        self.assertIn("-vn", plan.ffmpeg_args)
+
+    def test_existing_output_suffixes_follow_selected_format(self) -> None:
+        probe = self._lossy_probe()
+        self.assertEqual(
+            media_shrinker._existing_output_suffixes(
+                "aac", prefer_flac=False, probe=probe
+            ),
+            (".m4a",),
+        )
+        self.assertEqual(
+            media_shrinker._existing_output_suffixes(
+                "mp3", prefer_flac=False, probe=probe
+            ),
+            (".mp3",),
+        )
+        self.assertEqual(
+            media_shrinker._existing_output_suffixes(
+                "opus", prefer_flac=False, probe=probe
+            ),
+            (".opus",),
+        )
+        self.assertEqual(
+            media_shrinker._existing_output_suffixes(
+                "flac", prefer_flac=False, probe=probe
+            ),
+            (".flac",),
+        )
+        self.assertEqual(
+            media_shrinker._existing_output_suffixes(
+                "auto", prefer_flac=False, probe=probe
+            ),
+            (".opus",),
+        )
+        self.assertEqual(
+            media_shrinker._existing_output_suffixes(
+                "auto", prefer_flac=True, probe=probe
+            ),
+            (".flac", ".opus"),
+        )
+        with self.assertRaisesRegex(MediaShrinkerError, "unsupported output format"):
+            media_shrinker._existing_output_suffixes(
+                "wav", prefer_flac=False, probe=probe
+            )
+
+    def test_unknown_output_format_rejected_for_direct_api_call(self) -> None:
+        with self.assertRaisesRegex(MediaShrinkerError, "unsupported output format"):
+            self._plan("wav")
+
+    def test_parse_args_format_flag(self) -> None:
+        self.assertEqual(media_shrinker.parse_args(["root"]).format, "auto")
+        self.assertEqual(
+            media_shrinker.parse_args(["root", "--format", "aac"]).format, "aac"
+        )
+        with self.assertRaises(SystemExit):
+            media_shrinker.parse_args(["root", "--format", "wav"])
+
+
 if __name__ == "__main__":
     unittest.main()
