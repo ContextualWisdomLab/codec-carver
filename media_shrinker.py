@@ -22,7 +22,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 SUPPORTED_EXTENSIONS = {
@@ -742,9 +742,18 @@ def convert_file(
     protected_sources: Iterable[Path] = (),
     resolved_protected_sources: frozenset[Path] | None = None,
     original_size: int | None = None,
+    post_process: Callable[[ConversionResult], None] | None = None,
     allow_video: bool = False,
 ) -> list[ConversionResult]:
-    """Convert one file and return generated segment results without deleting the source."""
+    """Convert one file and return generated segment results without deleting the source.
+
+    ``post_process`` is an optional hook invoked once per successfully generated
+    output (a ``converted`` result with an output path). It is the extension
+    seam used for follow-on steps such as transcription; a failing hook must not
+    abort the conversion, so callers are expected to handle their own errors.
+    ``allow_video`` preserves the default audio-only contract unless callers opt
+    into extracting the audio stream from video containers.
+    """
 
     source = Path(source)
     root = Path(root)
@@ -783,7 +792,7 @@ def convert_file(
     if resolved_sources is None:
         resolved_sources = frozenset(Path(item).resolve() for item in protected_sources)
 
-    return [
+    results = [
         _convert_segment(
             source,
             rel_source=rel_source,
@@ -803,6 +812,20 @@ def convert_file(
         )
         for segment in segments
     ]
+    _run_post_process(results, post_process)
+    return results
+
+
+def _run_post_process(
+    results: list[ConversionResult],
+    post_process: Callable[[ConversionResult], None] | None,
+) -> None:
+    """Invoke ``post_process`` for each successfully generated output."""
+    if post_process is None:
+        return
+    for result in results:
+        if result.status == "converted" and result.output_path is not None:
+            post_process(result)
 
 
 def safe_source_size(source: Path) -> int:
@@ -1275,6 +1298,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Allow overwriting generated output paths",
     )
     parser.add_argument(
+        "--transcribe",
+        action="store_true",
+        help=(
+            "After each successful conversion, write a text + JSON transcript "
+            "sidecar next to the generated audio (requires the optional "
+            "'faster-whisper' dependency; skipped with a notice if unavailable)."
+        ),
+    )
+    parser.add_argument(
+        "--transcribe-model",
+        default="base",
+        help="faster-whisper model name to use when --transcribe is set (default: base)",
+    )
+    parser.add_argument(
         "--allow-video",
         action="store_true",
         help=(
@@ -1287,6 +1324,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(_normalize_argv(argv))
 
 
+def _build_transcription_hook(
+    args: argparse.Namespace,
+) -> Callable[[ConversionResult], None] | None:
+    """Return a per-output transcription hook when --transcribe is requested.
+
+    Transcription is optional: the module is imported lazily and any failure is
+    reported without aborting the conversion batch.
+    """
+    if not getattr(args, "transcribe", False):
+        return None
+
+    import transcribe as _transcribe
+
+    def hook(result: ConversionResult) -> None:
+        """Transcribe one generated output; never raise into the conversion."""
+        try:
+            txt_path, _ = _transcribe.transcribe_output(
+                result.output_path, model=args.transcribe_model
+            )
+            print(f"TRANSCRIBED\t{txt_path}", flush=True)
+        except _transcribe.TranscriptionUnavailableError as exc:
+            print(f"TRANSCRIBE_SKIP\t{exc}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - a bad transcript must not fail conversion.
+            print(f"TRANSCRIBE_FAIL\t{result.output_path}\t{exc}", flush=True)
+
+    return hook
+
+
 def _execute_conversions(
     candidates: list[tuple[Path, int]],
     args: argparse.Namespace,
@@ -1297,6 +1362,7 @@ def _execute_conversions(
     results: list[ConversionResult] = []
     workers = choose_worker_count(args.workers)
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
+    post_process = _build_transcription_hook(args)
 
     resolved_candidates = frozenset(Path(item[0]).resolve() for item in candidates)
     protected_sources = [c[0] for c in candidates]
@@ -1323,6 +1389,7 @@ def _execute_conversions(
                 protected_sources=protected_sources,
                 resolved_protected_sources=resolved_candidates,
                 original_size=size,
+                post_process=post_process,
                 allow_video=args.allow_video,
             )
         except Exception as exc:  # noqa: BLE001 - batch processing records per-file failures.

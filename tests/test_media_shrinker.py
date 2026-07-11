@@ -250,6 +250,33 @@ class FindCandidateTests(unittest.TestCase):
 
             self.assertEqual(candidates, [])
 
+    def test_find_candidates_skips_mocked_symlink_dir_when_realpath_fails(self) -> None:
+        root = Path("synthetic-root").resolve()
+        root_str = str(root)
+        link_name = "linked"
+        link_path = os.path.join(root_str, link_name)
+        original_realpath = os.path.realpath
+
+        def fake_lstat(path: str) -> object:
+            if os.fspath(path) == link_path:
+                return _fake_lstat(stat.S_IFLNK)
+            return _fake_lstat(stat.S_IFDIR)
+
+        def flaky_realpath(path: object, *args: object, **kwargs: object) -> str:
+            if os.fspath(path) == link_path:
+                raise OSError("cannot resolve symlink")
+            return original_realpath(path, *args, **kwargs)
+
+        with patch("os.walk", return_value=[(root_str, [link_name], [])]):
+            with patch("os.lstat", fake_lstat):
+                with patch("os.path.realpath", flaky_realpath):
+                    candidates = find_candidates(
+                        root,
+                        include_under_limit=True,
+                        exclude_paths=[root / "excluded"],
+                    )
+        self.assertEqual(candidates, [])
+
     def test_find_candidates_skips_symlink_dir_when_realpath_fails(self) -> None:
         # Regression test for a Python-3.10-only CI failure
         # ("OSError: [Errno 22] Invalid argument: '/tmp'"). On 3.10 pathlib

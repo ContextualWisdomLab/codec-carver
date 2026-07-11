@@ -55,6 +55,27 @@ Outputs are written under `../under_2gb/`. Existing generated output directories
 - Split outputs are named with part suffixes, for example `meeting.wav.part0001.flac`, `meeting.wav.part0002.flac`.
 - Tune silence detection with `--silence-noise` and `--silence-min-duration-seconds` when recordings need stricter or looser silence boundaries.
 
+## Transcription (optional)
+
+Turn each shrunk recording into searchable text. With `--transcribe`, a text and
+JSON transcript sidecar is written next to every generated audio file
+(`recording.wav.flac` → `recording.wav.flac.txt` / `.json`):
+
+```bash
+python3 media_shrinker.py .. --execute --output-dir under_2gb --transcribe
+```
+
+Transcription is opt-in and uses [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper),
+imported lazily. Install it to enable the feature:
+
+```bash
+pip install faster-whisper        # then pass --transcribe
+```
+
+If it is not installed, conversion runs normally and transcription is skipped
+with a `TRANSCRIBE_SKIP` notice. A failing transcript never aborts a conversion.
+Choose a model with `--transcribe-model` (default `base`).
+
 ## Safety notes
 
 - Source files selected by the scan are protected from deletion or overwrite; keep `--output-dir` as a generated-only directory so excluded originals are never mistaken for stale generated outputs.
