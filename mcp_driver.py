@@ -24,6 +24,10 @@ def shrink_media(source_path: str, output_dir: str, target_bytes: int = 2_000_00
 
     if not source.exists():
         return f"Error: Source file does not exist: {source}"
+    if not source.is_file():
+        return f"Error: Source path is not a file: {source}"
+    if target_bytes <= 0:
+        return "Error: target_bytes must be greater than 0."
 
     out_dir.mkdir(parents=True, exist_ok=True)
     root = source.parent
