@@ -1,6 +1,7 @@
 """FastAPI upload UI for shrinking one media file through Codec Carver."""
 
 import json
+import hmac
 import logging
 import os
 import shutil
@@ -81,6 +82,46 @@ async def limit_request_size(request: Request, call_next):
         return await call_next(request)
     except RequestTooLarge:
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
+
+def get_configured_api_keys():
+    """Return the API keys configured via the CODEC_CARVER_API_KEYS env var.
+
+    The variable holds a comma-separated list of keys. Whitespace around each
+    key is stripped and empty entries are ignored. Keys are read from the
+    environment at request time (not import time) so tests can patch the
+    environment easily and key rotation needs no server restart. Returns an
+    empty list when the variable is unset or contains no usable keys, which
+    leaves the service open (today's default behaviour).
+    """
+
+    raw = os.environ.get("CODEC_CARVER_API_KEYS", "")
+    return [key.strip() for key in raw.split(",") if key.strip()]
+
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    """Enforce opt-in API-key authentication on all endpoints except GET /.
+
+    When one or more keys are configured via CODEC_CARVER_API_KEYS, every
+    request other than GET / (the upload UI page) must carry an X-API-Key
+    header matching a configured key; comparison uses hmac.compare_digest to
+    stay constant-time. Requests failing the check receive a 401 JSON error
+    without echoing any key material. When no keys are configured, all
+    requests pass through unchanged.
+    """
+
+    configured_keys = get_configured_api_keys()
+    if configured_keys and not (request.method == "GET" and request.url.path == "/"):
+        provided_key = request.headers.get("x-api-key", "")
+        if not any(
+            hmac.compare_digest(provided_key, key) for key in configured_keys
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Invalid or missing API key"},
+            )
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
