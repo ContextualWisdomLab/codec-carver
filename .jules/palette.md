@@ -1,3 +1,10 @@
+## 2024-07-12 - Intercepting batch form submissions for testing visual loading states
+**Learning:** Extending the learning from 2024-06-13, intercepting form submissions using `e.preventDefault()` via `page.evaluate()` is essential for capturing screenshot and video evidence of loading states (e.g., button disabling, spinner appearing) on forms like batch upload where the submission would normally reload the page or download an archive.
+**Action:** When testing visual loading states with Playwright, always inject an event listener using `page.evaluate()` to call `e.preventDefault()` on the form's `submit` event to freeze the UI in its loading state for verification.
+
+## 2024-07-12 - Asynchronous button disabling for form submission
+**Learning:** Disabling a submit button synchronously inside a `submit` event listener can sometimes cancel the submission entirely in certain browsers or frameworks.
+**Action:** Always wrap the logic that disables the submit button and updates its UI (like adding a loading spinner) inside a short `setTimeout` (e.g., 10ms) within the `submit` event listener to ensure the browser registers the form submission correctly.
 ## 2024-05-24 - CLI Arguments as UX
 **Learning:** In headless or CLI-only applications, the command-line help interface serves as the primary UI. Missing help strings and lack of default value visibility severely impacts developer/user experience and accessibility.
 **Action:** Always ensure `argparse` leverages `ArgumentDefaultsHelpFormatter` and that every argument has a descriptive `help` parameter to provide an intuitive "interface" for CLI tools.
