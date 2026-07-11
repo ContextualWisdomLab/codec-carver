@@ -4,3 +4,7 @@ python-multipart
 mcp
 aiofiles
 httpx
+httpx2==2.5.0
+exceptiongroup==1.3.1; python_version < "3.11"
+rpds-py==0.30.0
+setuptools==82.0.1
