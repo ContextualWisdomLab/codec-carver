@@ -163,6 +163,7 @@ HTML_TEMPLATE = """
         .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
         .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; }
+        input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
     </style>
 </head>
 <body>

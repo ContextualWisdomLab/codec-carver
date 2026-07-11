@@ -49,3 +49,6 @@
 ## 2024-07-10 - Preset buttons active state with `aria-pressed`
 **Learning:** When implementing preset or toggle buttons in UI forms, using `aria-pressed` attributes dynamically managed by JavaScript is essential to track active states. This should always be paired with a corresponding CSS rule (e.g., `[aria-pressed="true"]`) to provide clear visual feedback, and the active state should be cleared when the user manually modifies the associated input field (distinguishable via `e.isTrusted` on the event).
 **Action:** Always implement `aria-pressed` with paired CSS for preset toggle buttons, and use `e.isTrusted` to properly reset states on manual user input.
+## 2024-05-24 - Visual Feedback for aria-invalid
+**Learning:** Screen readers announce `aria-invalid="true"`, but sighted users need visual cues when form validation fails dynamically on the client side.
+**Action:** When setting `aria-invalid="true"` via JS, always pair it with a CSS rule like `input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }` for reliable visual feedback.
