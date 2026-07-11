@@ -63,3 +63,6 @@
 ## 2026-06-12 - [Optimize FFmpeg Log Parsing with finditer]
 **Learning:** When parsing large text logs from command-line tools like ffmpeg (which use carriage returns \r for progress updates), using str.splitlines() causes massive memory allocations and manual str.find() slicing fails on \r boundaries.
 **Action:** Compile a unified regex and use re.finditer() directly on the raw output string for safe, memory-efficient parsing without instantiating list of lines.
+## 2024-06-26 - [Optimize find_candidates batch gathering]
+**Learning:** During batch directory traversal (e.g. `os.walk` in `find_candidates`), attempting to resolve every directory with `os.path.realpath()` introduces heavy filesystem access and instantiation overhead, especially when no directories are actually excluded (`exclude_paths=[]`).
+**Action:** Guard the entire directory exclusion check block with `if excluded_exact_strs:` so the fast path completely skips redundant realpath and stat calls when no `exclude_paths` are configured.

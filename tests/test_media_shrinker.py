@@ -198,7 +198,7 @@ class FindCandidateTests(unittest.TestCase):
             with patch("os.path.realpath", flaky_realpath):
                 candidates = [
                     p[0].relative_to(root)
-                    for p in find_candidates(root, include_under_limit=True)
+                    for p in find_candidates(root, include_under_limit=True, exclude_paths=[Path("bogus")])
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])
