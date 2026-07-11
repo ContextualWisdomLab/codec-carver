@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import types
 
+from media_shrinker import ConversionResult
+
 
 class _FakeFastMCP:
     def __init__(self, name):
@@ -39,8 +41,6 @@ except ImportError as exc:
     from mcp_driver import shrink_media
 
     _HAS_MCP = True
-
-from media_shrinker import ConversionResult
 
 
 @unittest.skipUnless(_HAS_MCP, "mcp not installed (optional integration dependency)")

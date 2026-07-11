@@ -87,7 +87,7 @@ OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
 MP3_MAX_BITRATE_BPS = 320_000  # libmp3lame ceiling
 OUTPUT_FORMATS = ("auto", "flac", "opus", "aac", "mp3")
-SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
+SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>-?[0-9]+(?:\.[0-9]+)?)")
 
 
 class MediaShrinkerError(RuntimeError):
@@ -722,7 +722,7 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
         kind = match.group(1)
         value = float(match.group("value"))
         if kind == "start":
-            current_start = value
+            current_start = max(value, 0.0)
         elif kind == "end" and current_start is not None:
             if value > current_start:
                 intervals.append(
@@ -871,12 +871,12 @@ def preserve_file_attributes(
 
     _copy_extended_attributes(source, dest)
 
-    os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+    _restore_timestamps(source_stat, dest)
 
     resolved_setfile = setfile_path if setfile_path is not None else _get_setfile_path()
     if resolved_setfile:
         _copy_macos_creation_time(source_stat, dest, resolved_setfile)
-        os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+        _restore_timestamps(source_stat, dest)
 
 
 def convert_file(
@@ -1939,6 +1939,19 @@ def _resolve_collision(path: Path, *, overwrite: bool) -> Path:
         if not candidate.exists():
             return candidate
     raise FileExistsError(f"Could not find free output path for {path}")
+
+
+def _restore_timestamps(source_stat: os.stat_result, dest: Path) -> None:
+    """Best-effort copy of nanosecond atime/mtime from source_stat onto dest.
+
+    A read-only destination or a filesystem lacking timestamp support can make
+    os.utime raise OSError; that is non-critical metadata, so the failure is
+    swallowed to keep attribute preservation best-effort.
+    """
+    try:
+        os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+    except OSError:
+        pass
 
 
 def _copy_extended_attributes(source: Path, dest: Path) -> None:

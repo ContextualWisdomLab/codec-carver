@@ -8,7 +8,11 @@ SSRF guard is exercised without a single real socket.
 import socket
 import sys
 import tempfile
+import http.client
+import io
+import urllib.error
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -108,6 +112,38 @@ class SchemeRejectionTests(unittest.TestCase):
             fetch_media("https://user:pw@example.com/a.mp4", tempfile.gettempdir())
         self.assertIn("credential", str(ctx.exception))
 
+    def test_malformed_url_rejected(self):
+        """Unparseable URLs produce RemoteInputError, not ValueError."""
+        with self.assertRaises(RemoteInputError) as ctx:
+            fetch_media("https://[::1", tempfile.gettempdir())
+        self.assertIn("could not be parsed", str(ctx.exception))
+
+    def test_invalid_hostname_property_rejected(self):
+        """Late hostname parser errors are wrapped as RemoteInputError."""
+        class Parsed:
+            scheme = "https"
+            username = None
+            password = None
+
+            @property
+            def hostname(self):
+                raise ValueError("bad host")
+
+        with mock.patch.object(
+            remote_input.urllib.parse,
+            "urlsplit",
+            return_value=Parsed(),
+        ):
+            with self.assertRaises(RemoteInputError) as ctx:
+                fetch_media("https://bad.example/a.mp4", tempfile.gettempdir())
+        self.assertIn("invalid host", str(ctx.exception))
+
+    def test_missing_hostname_rejected(self):
+        """A URL with an empty authority is rejected before DNS lookup."""
+        with self.assertRaises(RemoteInputError) as ctx:
+            fetch_media("https:///missing-host.mp4", tempfile.gettempdir())
+        self.assertIn("no hostname", str(ctx.exception))
+
 
 class AddressRejectionTests(unittest.TestCase):
     """Private, loopback, link-local and localhost targets are refused."""
@@ -178,6 +214,29 @@ class AddressRejectionTests(unittest.TestCase):
                 fetch_media("https://nope.example/a.mp4", tempfile.gettempdir())
             self.assertIn("resolve", str(ctx.exception))
 
+    def test_empty_host_helper_rejected(self):
+        """The lower-level host validator rejects empty hostnames clearly."""
+        with self.assertRaises(RemoteInputError) as ctx:
+            remote_input._validate_host("")
+        self.assertIn("empty hostname", str(ctx.exception))
+
+    def test_public_numeric_ip_needs_no_dns_lookup(self):
+        """A global numeric IP literal passes without DNS resolution."""
+        with mock.patch.object(remote_input.socket, "getaddrinfo") as getaddrinfo:
+            remote_input._validate_host("93.184.216.34")
+        getaddrinfo.assert_not_called()
+
+    def test_hostname_with_no_dns_answers_rejected(self):
+        """An empty DNS answer is rejected before fetching."""
+        with mock.patch.object(
+            remote_input.socket,
+            "getaddrinfo",
+            return_value=[],
+        ):
+            with self.assertRaises(RemoteInputError) as ctx:
+                remote_input._validate_host("empty.example")
+        self.assertIn("no addresses", str(ctx.exception))
+
 
 class RedirectRefusalTests(unittest.TestCase):
     """Redirects must raise, never be followed."""
@@ -241,6 +300,16 @@ class SizeLimitTests(unittest.TestCase):
                 fetch_media("https://example.com/big.mp4", tmp, max_bytes=100)
             self.assertIn("Content-Length", str(ctx.exception))
             self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_missing_and_malformed_content_length_are_tolerated(self):
+        """Only a trustworthy oversized Content-Length is rejected early."""
+        remote_input._precheck_content_length(None, 10, "https://example.com/a")
+        remote_input._precheck_content_length({}, 10, "https://example.com/a")
+        remote_input._precheck_content_length(
+            {"Content-Length": "not-an-int"},
+            10,
+            "https://example.com/a",
+        )
 
     def test_streaming_overrun_deletes_partial(self):
         """Exceeding max_bytes mid-stream aborts and deletes the partial."""
@@ -358,6 +427,122 @@ class HappyPathTests(unittest.TestCase):
                     fetch_media("https://cdn.example.com/media/episode.mp4", tmp)
             self.assertIn("already exists", str(ctx.exception))
             self.assertEqual(existing.read_bytes(), b"keep me")
+
+    def test_destination_directory_creation_failure_is_reported(self):
+        """mkdir failures explain that the destination directory is invalid."""
+        with mock.patch.object(
+            remote_input.socket,
+            "getaddrinfo",
+            return_value=PUBLIC_ADDRINFO,
+        ), mock.patch.object(Path, "mkdir", side_effect=OSError("mkdir failed")):
+            with self.assertRaises(RemoteInputError) as ctx:
+                fetch_media("https://cdn.example.com/media/episode.mp4", "out")
+        self.assertIn("destination directory", str(ctx.exception))
+
+    def test_http_error_is_reported(self):
+        """HTTP status failures retain status code and reason."""
+        error = urllib.error.HTTPError(
+            "https://cdn.example.com/a.mp4",
+            403,
+            "Forbidden",
+            {},
+            None,
+        )
+        opener = FakeOpener(error=error)
+        with mock.patch.object(
+            remote_input.socket,
+            "getaddrinfo",
+            return_value=PUBLIC_ADDRINFO,
+        ), mock.patch.object(remote_input, "_build_opener", return_value=opener):
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(RemoteInputError) as ctx:
+                    fetch_media("https://cdn.example.com/a.mp4", tmp)
+        self.assertIn("HTTP 403", str(ctx.exception))
+
+    def test_url_error_is_reported(self):
+        """Network opener failures are wrapped with a fetch hint."""
+        opener = FakeOpener(error=urllib.error.URLError("offline"))
+        with mock.patch.object(
+            remote_input.socket,
+            "getaddrinfo",
+            return_value=PUBLIC_ADDRINFO,
+        ), mock.patch.object(remote_input, "_build_opener", return_value=opener):
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(RemoteInputError) as ctx:
+                    fetch_media("https://cdn.example.com/a.mp4", tmp)
+        self.assertIn("Could not fetch", str(ctx.exception))
+
+    def test_destination_file_creation_failure_is_reported(self):
+        """open(..., 'xb') failures are surfaced and no file is left behind."""
+        response = FakeResponse([b"data"])
+        opener = FakeOpener(response=response)
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                remote_input.socket,
+                "getaddrinfo",
+                return_value=PUBLIC_ADDRINFO,
+            ), mock.patch.object(
+                remote_input, "_build_opener", return_value=opener
+            ), mock.patch(
+                "builtins.open", side_effect=OSError("create failed")
+            ):
+                with self.assertRaises(RemoteInputError) as ctx:
+                    fetch_media("https://cdn.example.com/a.mp4", tmp)
+        self.assertIn("destination file", str(ctx.exception))
+
+    def test_mid_transfer_protocol_failure_deletes_partial_file(self):
+        """Read failures are wrapped and partial downloads are deleted."""
+        class FailingResponse(FakeResponse):
+            def read(self, size=-1):
+                if not self._chunks:
+                    raise http.client.HTTPException("socket reset")
+                return super().read(size)
+
+        response = FailingResponse([b"partial"])
+        opener = FakeOpener(response=response)
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                remote_input.socket,
+                "getaddrinfo",
+                return_value=PUBLIC_ADDRINFO,
+            ), mock.patch.object(remote_input, "_build_opener", return_value=opener):
+                with self.assertRaises(RemoteInputError) as ctx:
+                    fetch_media("https://cdn.example.com/a.mp4", tmp)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+        self.assertIn("mid-transfer", str(ctx.exception))
+
+
+class CliTests(unittest.TestCase):
+    """The tiny CLI reports success and failure reasons."""
+
+    def test_main_usage_error(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            code = remote_input._main([])
+        self.assertEqual(code, 2)
+        self.assertIn("usage:", stderr.getvalue())
+
+    def test_main_fetch_error(self):
+        stderr = io.StringIO()
+        with mock.patch.object(
+            remote_input,
+            "fetch_media",
+            side_effect=RemoteInputError("blocked"),
+        ), redirect_stderr(stderr):
+            code = remote_input._main(["https://cdn.example/a.mp4", "out"])
+        self.assertEqual(code, 1)
+        self.assertIn("blocked", stderr.getvalue())
+
+    def test_main_success_prints_path(self):
+        stdout = io.StringIO()
+        with mock.patch.object(
+            remote_input,
+            "fetch_media",
+            return_value=Path("out/a.mp4"),
+        ), redirect_stdout(stdout):
+            code = remote_input._main(["https://cdn.example/a.mp4", "out"])
+        self.assertEqual(code, 0)
+        self.assertIn("out", stdout.getvalue())
 
 
 if __name__ == "__main__":

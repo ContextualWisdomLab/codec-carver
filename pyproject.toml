@@ -49,7 +49,20 @@ Repository = "https://github.com/Seongho-Bae/codec-carver"
 codec-carver = "media_shrinker:main"
 
 [tool.setuptools]
-py-modules = ["media_shrinker", "saas_web", "mcp_driver", "job_store", "transcribe"]
+py-modules = [
+    "chapters",
+    "diarize",
+    "job_store",
+    "mcp_driver",
+    "media_shrinker",
+    "remote_input",
+    "saas_web",
+    "subtitles",
+    "summarize",
+    "transcribe",
+    "transcript_search",
+    "usage_metering",
+]
 
 [tool.interrogate]
 fail-under = 100

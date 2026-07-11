@@ -815,7 +815,7 @@ class PlanningTests(unittest.TestCase):
             source = root / "source.wav"
             output_dir = root / "out"
             source.write_bytes(b"source")
-            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg", output=b"junk")
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py", output=b"junk")
             source_probe = MediaProbe(60.0, 1_000, "pcm_s16le", 1_411_200, False, "wav")
             original_probe_media = media_shrinker.probe_media
 
@@ -1119,6 +1119,40 @@ class PlanningTests(unittest.TestCase):
                 SilenceInterval(start_seconds=28_000.0, end_seconds=28_008.0),
             ],
         )
+
+    def test_parse_silencedetect_intervals_normalizes_negative_start_at_recording_head(
+        self,
+    ) -> None:
+        # ffmpeg back-dates silence_start by the detection window, so a file that
+        # begins in silence reports a slightly negative silence_start. The
+        # interval must survive, but the segment boundary is normalized to the
+        # start of the recording.
+        stderr = """
+        [silencedetect @ 0x1] silence_start: -0.00816327
+        [silencedetect @ 0x1] silence_end: 150.5 | silence_duration: 150.5
+        """
+
+        intervals = parse_silencedetect_intervals(stderr)
+
+        self.assertEqual(
+            intervals,
+            [SilenceInterval(start_seconds=0.0, end_seconds=150.5)],
+        )
+
+    def test_negative_start_silence_still_drives_split_point(self) -> None:
+        # A silence that opens the recording but extends well past the midpoint is
+        # the best split boundary; dropping it forces an unwanted mid-audio cut.
+        intervals = parse_silencedetect_intervals(
+            "[silencedetect @ 0x1] silence_start: -0.008\n"
+            "[silencedetect @ 0x1] silence_end: 150.5 | silence_duration: 150.5\n"
+        )
+        segments = build_segments(
+            duration_seconds=300.0,
+            max_segment_duration_seconds=200.0,
+            silence_intervals=intervals,
+        )
+
+        self.assertEqual(segments[0].duration_seconds, 150.5)
 
 
 class SilenceDetectionTests(unittest.TestCase):
@@ -2153,6 +2187,36 @@ class FastPathTests(unittest.TestCase):
                 with patch("media_shrinker._copy_macos_creation_time"):
                     with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
+
+    def test_preserve_file_attributes_ignores_utime_error(self) -> None:
+        """os.utime failure must not abort best-effort metadata copy.
+
+        A read-only or timestamp-unsupporting destination filesystem can make
+        os.utime raise OSError. The documented contract is best-effort, so the
+        completed conversion must not be lost and the macOS creation-time step
+        must still run.
+        """
+        from media_shrinker import preserve_file_attributes
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.txt"
+            src.write_text("hello")
+            dest = Path(tmp) / "dest.txt"
+            dest.write_text("world")
+            with patch(
+                "media_shrinker.os.utime", side_effect=OSError("read-only fs")
+            ):
+                with patch(
+                    "media_shrinker._copy_macos_creation_time"
+                ) as mock_creation:
+                    with patch(
+                        "media_shrinker._get_setfile_path", return_value="/bin/echo"
+                    ):
+                        # Must not raise despite os.utime failing.
+                        preserve_file_attributes(src, dest)
+            # Best-effort continues to the creation-time step after utime fails.
+            mock_creation.assert_called_once()
+
     @patch("subprocess.run")
     def test_ffprobe_timeout(self, mock_run: MagicMock) -> None:
         """Test ffprobe handles TimeoutExpired correctly."""
