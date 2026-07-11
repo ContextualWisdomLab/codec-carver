@@ -63,6 +63,7 @@
 ## 2026-06-12 - [Optimize FFmpeg Log Parsing with finditer]
 **Learning:** When parsing large text logs from command-line tools like ffmpeg (which use carriage returns \r for progress updates), using str.splitlines() causes massive memory allocations and manual str.find() slicing fails on \r boundaries.
 **Action:** Compile a unified regex and use re.finditer() directly on the raw output string for safe, memory-efficient parsing without instantiating list of lines.
+
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.

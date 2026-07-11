@@ -210,12 +210,12 @@ def find_candidates(
     excluded_exact_set = frozenset(excluded_exact_strs)
 
     for dirpath_str, dirnames, filenames in os.walk(str(root)):
-        try:
-            resolved_dir_str = os.path.realpath(dirpath_str)
-        except OSError:
-            continue
-
         if excluded_exact_strs:
+            try:
+                resolved_dir_str = os.path.realpath(dirpath_str)
+            except OSError:
+                continue
+
             if resolved_dir_str in excluded_exact_set or resolved_dir_str.startswith(
                 excluded_prefix_strs
             ):
@@ -228,15 +228,14 @@ def find_candidates(
             if d.casefold().startswith(excluded_prefixes):
                 continue
 
-            d_path_str = os.path.join(dirpath_str, d)
-
-            try:
-                d_stat = os.lstat(d_path_str)
-                is_symlink = stat.S_ISLNK(d_stat.st_mode)
-            except OSError:
-                continue
-
             if excluded_exact_strs:
+                d_path_str = os.path.join(dirpath_str, d)
+                try:
+                    d_stat = os.lstat(d_path_str)
+                    is_symlink = stat.S_ISLNK(d_stat.st_mode)
+                except OSError:
+                    continue
+
                 if not is_symlink:
                     resolved_d_str = os.path.join(resolved_dir_str, d)
                 else:

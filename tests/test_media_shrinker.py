@@ -198,7 +198,7 @@ class FindCandidateTests(unittest.TestCase):
             with patch("os.path.realpath", flaky_realpath):
                 candidates = [
                     p[0].relative_to(root)
-                    for p in find_candidates(root, include_under_limit=True)
+                    for p in find_candidates(root, include_under_limit=True, exclude_paths=[Path("/something")])
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])
@@ -229,7 +229,7 @@ class FindCandidateTests(unittest.TestCase):
             with patch("os.lstat", flaky_lstat):
                 candidates = [
                     p[0].relative_to(root)
-                    for p in find_candidates(root, include_under_limit=True)
+                    for p in find_candidates(root, include_under_limit=True, exclude_paths=[Path("/something")])
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])
@@ -3044,3 +3044,9 @@ class OutputFormatTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class MediaShrinkerParseCoverageTests(unittest.TestCase):
+    def test_parse_silencedetect_intervals_no_silence(self) -> None:
+        stderr = "some random ffmpeg progress output"
+        intervals = parse_silencedetect_intervals(stderr)
+        self.assertEqual(intervals, [])
