@@ -1,8 +1,10 @@
 [run]
 source =
+    job_store
     mcp_driver
     media_shrinker
     saas_web
+    transcribe
 
 [report]
 fail_under = 100
