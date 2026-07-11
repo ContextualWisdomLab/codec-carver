@@ -85,7 +85,7 @@ DURATION_TOLERANCE_SECONDS = 2.0
 BITRATE_SAFETY_MARGIN = 0.92
 OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
-SILENCE_EVENT_RE = re.compile(r"silence_(?P<event>start|end):\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
+SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
 
 
 class MediaShrinkerError(RuntimeError):
@@ -556,13 +556,14 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
     intervals: list[SilenceInterval] = []
     current_start: float | None = None
 
-    for match in SILENCE_EVENT_RE.finditer(stderr):
-        event = match.group("event")
+    # Fast path: Using re.finditer directly on the raw string avoids
+    # OOM issues and overhead from str.splitlines() on massive ffmpeg logs.
+    for match in SILENCE_RE.finditer(stderr):
+        kind = match.group(1)
         value = float(match.group("value"))
-
-        if event == "start":
+        if kind == "start":
             current_start = value
-        elif event == "end" and current_start is not None:
+        elif kind == "end" and current_start is not None:
             if value > current_start:
                 intervals.append(
                     SilenceInterval(
