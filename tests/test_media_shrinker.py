@@ -789,15 +789,8 @@ class PlanningTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "source.wav"
             output_dir = root / "out"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
             source.write_bytes(b"source")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'junk')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py", b"junk")
             source_probe = MediaProbe(60.0, 1_000, "pcm_s16le", 1_411_200, False, "wav")
             original_probe_media = media_shrinker.probe_media
 
@@ -1101,6 +1094,40 @@ class PlanningTests(unittest.TestCase):
                 SilenceInterval(start_seconds=28_000.0, end_seconds=28_008.0),
             ],
         )
+
+    def test_parse_silencedetect_intervals_normalizes_negative_start_at_recording_head(
+        self,
+    ) -> None:
+        # ffmpeg back-dates silence_start by the detection window, so a file that
+        # begins in silence reports a slightly negative silence_start. The
+        # interval must survive, but the segment boundary is normalized to the
+        # start of the recording.
+        stderr = """
+        [silencedetect @ 0x1] silence_start: -0.00816327
+        [silencedetect @ 0x1] silence_end: 150.5 | silence_duration: 150.5
+        """
+
+        intervals = parse_silencedetect_intervals(stderr)
+
+        self.assertEqual(
+            intervals,
+            [SilenceInterval(start_seconds=0.0, end_seconds=150.5)],
+        )
+
+    def test_negative_start_silence_still_drives_split_point(self) -> None:
+        # A silence that opens the recording but extends well past the midpoint is
+        # the best split boundary; dropping it forces an unwanted mid-audio cut.
+        intervals = parse_silencedetect_intervals(
+            "[silencedetect @ 0x1] silence_start: -0.008\n"
+            "[silencedetect @ 0x1] silence_end: 150.5 | silence_duration: 150.5\n"
+        )
+        segments = build_segments(
+            duration_seconds=300.0,
+            max_segment_duration_seconds=200.0,
+            silence_intervals=intervals,
+        )
+
+        self.assertEqual(segments[0].duration_seconds, 150.5)
 
 
 class SilenceDetectionTests(unittest.TestCase):

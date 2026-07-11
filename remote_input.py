@@ -387,5 +387,5 @@ def _main(argv: list[str]) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(_main(sys.argv[1:]))

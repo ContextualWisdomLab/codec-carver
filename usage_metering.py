@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -118,8 +119,9 @@ class UsageStore:
             )
         self._db_path = path
         self._lock = threading.Lock()
-        with self._connect() as conn:
-            conn.execute(_SCHEMA)
+        with closing(self._connect()) as conn:
+            with conn:
+                conn.execute(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
         """Open a new short-lived connection with WAL mode enabled.
@@ -152,18 +154,19 @@ class UsageStore:
         if input_bytes < 0 or output_bytes < 0:
             raise ValueError("input_bytes and output_bytes must be non-negative")
         period = _period(now)
-        with self._lock, self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO usage (api_key, period, conversions, input_bytes, output_bytes)
-                VALUES (?, ?, 1, ?, ?)
-                ON CONFLICT (api_key, period) DO UPDATE SET
-                    conversions = conversions + 1,
-                    input_bytes = input_bytes + excluded.input_bytes,
-                    output_bytes = output_bytes + excluded.output_bytes
-                """,
-                (api_key, period, input_bytes, output_bytes),
-            )
+        with self._lock, closing(self._connect()) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO usage (api_key, period, conversions, input_bytes, output_bytes)
+                    VALUES (?, ?, 1, ?, ?)
+                    ON CONFLICT (api_key, period) DO UPDATE SET
+                        conversions = conversions + 1,
+                        input_bytes = input_bytes + excluded.input_bytes,
+                        output_bytes = output_bytes + excluded.output_bytes
+                    """,
+                    (api_key, period, input_bytes, output_bytes),
+                )
 
     def usage(self, api_key: str, now: datetime) -> dict:
         """Return ``api_key``'s usage totals for the period containing ``now``.
@@ -178,7 +181,7 @@ class UsageStore:
             report zero for all counters.
         """
         period = _period(now)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT conversions, input_bytes, output_bytes FROM usage "
                 "WHERE api_key = ? AND period = ?",
@@ -240,8 +243,9 @@ class UsageStore:
         Args:
             api_key: The API key whose usage rows should be removed.
         """
-        with self._lock, self._connect() as conn:
-            conn.execute("DELETE FROM usage WHERE api_key = ?", (api_key,))
+        with self._lock, closing(self._connect()) as conn:
+            with conn:
+                conn.execute("DELETE FROM usage WHERE api_key = ?", (api_key,))
 
     def all_usage(self, period: str) -> dict:
         """Return usage for every API key active in ``period``.
@@ -256,7 +260,7 @@ class UsageStore:
             a dict of its ``conversions``, ``input_bytes``, and
             ``output_bytes``. Keys with no usage that period are absent.
         """
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT api_key, conversions, input_bytes, output_bytes "
                 "FROM usage WHERE period = ? ORDER BY api_key",

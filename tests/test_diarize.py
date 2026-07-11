@@ -6,6 +6,7 @@ model download or network access ever happens here.
 """
 
 import sys
+import types
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,6 +107,43 @@ class TestDefaultBackendUnavailable(unittest.TestCase):
         with self.assertRaises(DiarizationUnavailableError) as ctx:
             self._call_with_import_blocked()
         self.assertIsInstance(ctx.exception.__cause__, ImportError)
+
+
+class TestDefaultBackendSuccess(unittest.TestCase):
+    """The default pyannote adapter is covered with local fakes."""
+
+    def test_default_backend_converts_annotation_tracks(self):
+        testcase = self
+
+        class FakeTimelineSegment:
+            start = 1.25
+            end = 2.5
+
+        class FakeAnnotation:
+            def itertracks(self, *, yield_label=False):
+                testcase.assertTrue(yield_label)
+                yield FakeTimelineSegment(), None, "SPEAKER_X"
+
+        class FakePipeline:
+            @classmethod
+            def from_pretrained(cls, name):
+                testcase.assertEqual(name, diarize.DEFAULT_PIPELINE_NAME)
+                return cls()
+
+            def __call__(self, audio_path):
+                testcase.assertEqual(audio_path, "audio.wav")
+                return FakeAnnotation()
+
+        pyannote_module = types.ModuleType("pyannote")
+        audio_module = types.ModuleType("pyannote.audio")
+        audio_module.Pipeline = FakePipeline
+        with patch.dict(
+            sys.modules,
+            {"pyannote": pyannote_module, "pyannote.audio": audio_module},
+        ):
+            turns = diarize._default_backend("audio.wav")
+
+        self.assertEqual(turns, [SpeakerTurn(1.25, 2.5, "SPEAKER_X")])
 
 
 class TestMergeWithTranscript(unittest.TestCase):
