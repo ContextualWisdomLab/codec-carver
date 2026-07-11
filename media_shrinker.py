@@ -585,6 +585,35 @@ def _existing_output_suffixes(
     return (".opus",)
 
 
+def _run_media_tool(
+    command: list[str],
+    *,
+    tool: str,
+    timeout: float | None = None,
+    timeout_message: str | None = None,
+) -> "subprocess.CompletedProcess[str]":
+    """Run an ffmpeg/ffprobe command, mapping missing binaries clearly."""
+
+    try:
+        return subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        raise MediaShrinkerError(
+            f"{tool} not found: could not run '{command[0]}'. "
+            "Install ffmpeg (it provides both ffmpeg and ffprobe) and make sure "
+            "it is on your PATH; for example, 'brew install ffmpeg' (macOS) or "
+            "'sudo apt install ffmpeg' (Debian/Ubuntu)."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(timeout_message or f"{tool} timed out") from exc
+
+
 def probe_media(
     source_path: Path,
     *,
@@ -606,12 +635,12 @@ def probe_media(
         "-i",
         str(Path(source_path).resolve()),
     ]
-    try:
-        completed = subprocess.run(
-            command, check=False, capture_output=True, text=True, shell=False, timeout=60
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise MediaShrinkerError(f"ffprobe timed out for {source_path}") from exc
+    completed = _run_media_tool(
+        command,
+        tool="ffprobe",
+        timeout=60,
+        timeout_message=f"ffprobe timed out for {source_path}",
+    )
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -664,22 +693,17 @@ def detect_silence_intervals(
 ) -> list[SilenceInterval]:
     """Run ffmpeg silencedetect and return paired silence intervals."""
 
-    try:
-        completed = subprocess.run(
-            build_silencedetect_command(
-                source_path,
-                ffmpeg_path=ffmpeg_path,
-                silence_noise=silence_noise,
-                silence_min_duration_seconds=silence_min_duration_seconds,
-            ),
-            check=False,
-            capture_output=True,
-            text=True,
-            shell=False,
-            timeout=3600,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise MediaShrinkerError(f"silencedetect timed out for {source_path}") from exc
+    completed = _run_media_tool(
+        build_silencedetect_command(
+            source_path,
+            ffmpeg_path=ffmpeg_path,
+            silence_noise=silence_noise,
+            silence_min_duration_seconds=silence_min_duration_seconds,
+        ),
+        tool="ffmpeg",
+        timeout=3600,
+        timeout_message=f"silencedetect timed out for {source_path}",
+    )
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"silencedetect failed for {source_path}: {completed.stderr.strip()}"
@@ -1875,14 +1899,12 @@ def _execute_plan(
             output_path=temp_output,
             overwrite=True,
         )
-        try:
-            completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, shell=False, timeout=3600
-            )
-        except FileNotFoundError as exc:
-            raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise MediaShrinkerError(f"ffmpeg timed out for {source}") from exc
+        completed = _run_media_tool(
+            command,
+            tool="ffmpeg",
+            timeout=3600,
+            timeout_message=f"ffmpeg timed out for {source}",
+        )
 
         if completed.returncode != 0:
             raise MediaShrinkerError(
