@@ -2,4 +2,24 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .coverage
+
+# Packaging
+*.egg-info/
+*.egg
+build/
+dist/
+.venv/
 venv/
+.venv*/
+
+# CodeGraph / tooling indexes
+.codegraph/
+
+# libFuzzer/Atheris crash reproducers (do not commit)
+crash-*
+oom-*
+timeout-*
+leak-*
+
+# Generated conversion outputs / reports
+under_2gb/

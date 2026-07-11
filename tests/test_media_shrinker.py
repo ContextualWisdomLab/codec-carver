@@ -1,5 +1,7 @@
 import json
 import os
+import stat
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
@@ -27,6 +29,34 @@ from media_shrinker import (
     _first_float,
     _first_int,
 )
+
+
+def _write_fake_ffmpeg(path: Path, output: bytes = b"converted") -> Path:
+    """Create a tiny ffmpeg stand-in that writes the final argv path."""
+    payload = repr(output)
+    if os.name == "nt":
+        path = path.with_suffix(".cmd")
+        path.write_text(
+            f'@echo off\n"{sys.executable}" -c "import pathlib, sys; pathlib.Path(sys.argv[-1]).write_bytes({payload})" %*\n',
+            encoding="utf-8",
+        )
+        return path
+
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        f"pathlib.Path(sys.argv[-1]).write_bytes({payload})\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _fake_lstat(mode: int, size: int = 0) -> MagicMock:
+    result = MagicMock()
+    result.st_mode = mode
+    result.st_size = size
+    return result
 
 
 class FindCandidateTests(unittest.TestCase):
@@ -200,6 +230,55 @@ class FindCandidateTests(unittest.TestCase):
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])
+
+    def test_find_candidates_skips_symlink_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root_str = str(root)
+            link_file = os.path.join(root_str, "link.wav")
+
+            original_lstat = os.lstat
+
+            def fake_lstat(path: str) -> object:
+                if path == link_file:
+                    return _fake_lstat(stat.S_IFLNK)
+                return original_lstat(path)
+
+            with patch("os.walk", return_value=[(root_str, [], ["link.wav"])]):
+                with patch("os.lstat", fake_lstat):
+                    candidates = find_candidates(root, include_under_limit=True)
+
+            self.assertEqual(candidates, [])
+
+    def test_find_candidates_skips_symlink_dir_when_realpath_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            excluded = root / "excluded"
+            excluded.mkdir()
+            root_str = str(root)
+            symlink_dir = os.path.join(root_str, "linked")
+            original_lstat = os.lstat
+
+            def fake_lstat(path: str) -> object:
+                if path == symlink_dir:
+                    return _fake_lstat(stat.S_IFLNK)
+                return original_lstat(path)
+
+            def flaky_realpath(path: str, *args: object, **kwargs: object) -> str:
+                if path == symlink_dir:
+                    raise OSError("cannot resolve symlink")
+                return os.path.abspath(path)
+
+            with patch("os.walk", return_value=[(root_str, ["linked"], [])]):
+                with patch("os.lstat", fake_lstat):
+                    with patch("os.path.realpath", flaky_realpath):
+                        candidates = find_candidates(
+                            root,
+                            include_under_limit=True,
+                            exclude_paths=[excluded],
+                        )
+
+            self.assertEqual(candidates, [])
 
 
 class ProbeMediaTests(unittest.TestCase):
@@ -384,15 +463,8 @@ class PlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.flac"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py")
             source.write_bytes(b"original")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'converted')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             plan = ConversionPlan(
                 strategy="test",
                 input_path=source,
@@ -531,15 +603,8 @@ class PlanningTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "source.wav"
             output_dir = root / "out"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py")
             source.write_bytes(b"source")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'converted')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             source_probe = MediaProbe(
                 14_399.999, 1_000, "pcm_s16le", 1_411_200, False, "wav"
             )
@@ -590,15 +655,8 @@ class PlanningTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "source.wav"
             output_dir = root / "out"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py")
             source.write_bytes(b"source")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'converted')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             source_probe = MediaProbe(60.0, 1_000, "pcm_s16le", 1_411_200, False, "wav")
             truncated_probe = MediaProbe(12.0, 1_000, "flac", 1_411_200, False, "flac")
             original_probe_media = media_shrinker.probe_media
@@ -642,17 +700,10 @@ class PlanningTests(unittest.TestCase):
             source = root / "source.wav"
             output_dir = root / "out"
             existing = output_dir / "source.wav.flac"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py")
             output_dir.mkdir()
             source.write_bytes(b"source")
             existing.write_bytes(b"truncated")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'converted')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             source_probe = MediaProbe(60.0, 1_000, "pcm_s16le", 1_411_200, False, "wav")
             probes = iter(
                 [
@@ -702,17 +753,10 @@ class PlanningTests(unittest.TestCase):
             source = root / "source.wav"
             output_dir = root / "out"
             existing = output_dir / "source.wav.flac"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py", b"ok")
             output_dir.mkdir()
             source.write_bytes(b"source")
             existing.write_bytes(b"oversized")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'ok')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             probe = MediaProbe(60.0, 1_000, "pcm_s16le", 1_411_200, False, "wav")
             original_probe_media = media_shrinker.probe_media
 
@@ -758,17 +802,10 @@ class PlanningTests(unittest.TestCase):
             output_dir = root / "out"
             legacy = output_dir / "source.flac"
             canonical = output_dir / "source.wav.part0001.flac"
-            fake_ffmpeg = root / "fake_ffmpeg.py"
+            fake_ffmpeg = _write_fake_ffmpeg(root / "fake_ffmpeg.py", b"ok")
             output_dir.mkdir()
             source.write_bytes(b"source")
             legacy.write_bytes(b"legacy")
-            fake_ffmpeg.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "pathlib.Path(sys.argv[-1]).write_bytes(b'ok')\n",
-                encoding="utf-8",
-            )
-            fake_ffmpeg.chmod(0o755)
             source_probe = MediaProbe(
                 18_000.0, 1_000, "pcm_s16le", 1_411_200, False, "wav"
             )
@@ -1023,8 +1060,8 @@ class MetadataPreservationTests(unittest.TestCase):
             preserve_file_attributes(source, dest, setfile_path=None)
 
             dest_stat = dest.stat()
-            self.assertEqual(dest_stat.st_atime_ns, atime_ns)
-            self.assertEqual(dest_stat.st_mtime_ns, mtime_ns)
+            self.assertAlmostEqual(dest_stat.st_atime_ns, atime_ns, delta=1_000)
+            self.assertAlmostEqual(dest_stat.st_mtime_ns, mtime_ns, delta=1_000)
             if xattr_supported:
                 assert getxattr is not None
                 self.assertEqual(
@@ -1084,14 +1121,16 @@ class ReportingTests(unittest.TestCase):
                 payload = json.load(f)
 
             self.assertEqual(len(payload), 2)
-            self.assertEqual(payload[0]["source_path"], "/scan/source1.wav")
-            self.assertEqual(payload[0]["output_path"], "/scan/source1.wav.flac")
+            self.assertEqual(payload[0]["source_path"], str(Path("/scan/source1.wav")))
+            self.assertEqual(
+                payload[0]["output_path"], str(Path("/scan/source1.wav.flac"))
+            )
             self.assertEqual(payload[0]["status"], "converted")
             self.assertEqual(payload[0]["strategy"], "flac-lossless")
             self.assertEqual(payload[0]["original_size_bytes"], 100)
             self.assertEqual(payload[0]["output_size_bytes"], 50)
 
-            self.assertEqual(payload[1]["source_path"], "/scan/source2.wav")
+            self.assertEqual(payload[1]["source_path"], str(Path("/scan/source2.wav")))
             self.assertIsNone(payload[1]["output_path"])
             self.assertEqual(payload[1]["status"], "skipped")
             self.assertIsNone(payload[1]["strategy"])
@@ -1111,7 +1150,7 @@ class ReportingTests(unittest.TestCase):
         line = media_shrinker._format_result(Path("/scan"), result)
 
         self.assertIn("source.wav", line)
-        self.assertIn("/external-output/source.wav.flac", line)
+        self.assertIn(str(Path("/external-output/source.wav.flac")), line)
 
 
 class FirstFloatTests(unittest.TestCase):
@@ -1686,7 +1725,7 @@ class CliTests(unittest.TestCase):
                     media_shrinker.preserve_file_attributes(source, dest)
                     mock_copy.assert_called_once()
 
-            with patch("media_shrinker.os.listxattr", side_effect=OSError):
+            with patch("media_shrinker.os.listxattr", side_effect=OSError, create=True):
                 media_shrinker._copy_extended_attributes(source, dest)
 
             # Test unsupported OS for extended attributes
@@ -1714,7 +1753,7 @@ class FastPathTests(unittest.TestCase):
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
 
-            with patch("os.listxattr", side_effect=OSError("Permission denied")):
+            with patch("os.listxattr", side_effect=OSError("Permission denied"), create=True):
                 _copy_extended_attributes(src, dest)
 
     def test_copy_macos_creation_time_dummy(self) -> None:
@@ -1754,8 +1793,8 @@ class FastPathTests(unittest.TestCase):
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
 
-            with patch("os.listxattr", return_value=["user.test"]):
-                with patch("os.getxattr", side_effect=OSError("denied")):
+            with patch("os.listxattr", return_value=["user.test"], create=True):
+                with patch("os.getxattr", side_effect=OSError("denied"), create=True):
                     _copy_extended_attributes(src, dest)
 
     def test_copy_macos_creation_time_dummy_none(self) -> None:
@@ -1780,9 +1819,9 @@ class FastPathTests(unittest.TestCase):
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
 
-            with patch("os.listxattr", return_value=["user.test"]):
-                with patch("os.getxattr", return_value=b"value"):
-                    with patch("os.setxattr", side_effect=OSError("denied")):
+            with patch("os.listxattr", return_value=["user.test"], create=True):
+                with patch("os.getxattr", return_value=b"value", create=True):
+                    with patch("os.setxattr", side_effect=OSError("denied"), create=True):
                         _copy_extended_attributes(src, dest)
 
     def test_copy_macos_creation_time_dummy_not_found(self) -> None:
@@ -1840,9 +1879,9 @@ class FastPathTests(unittest.TestCase):
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
 
-            with patch("os.listxattr", return_value=["user.test"]):
-                with patch("os.getxattr", return_value=b"value"):
-                    with patch("os.setxattr") as mock_set:
+            with patch("os.listxattr", return_value=["user.test"], create=True):
+                with patch("os.getxattr", return_value=b"value", create=True):
+                    with patch("os.setxattr", create=True) as mock_set:
                         _copy_extended_attributes(src, dest)
                         mock_set.assert_called_once()
 

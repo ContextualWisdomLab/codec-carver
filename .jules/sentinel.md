@@ -55,3 +55,8 @@
 **Vulnerability:** Missing defense-in-depth security headers like `Referrer-Policy` and `Permissions-Policy`.
 **Learning:** To enhance security in FastAPI applications, missing HTTP response headers could leak referrers or give access to APIs (e.g. geolocation) without explicit intent.
 **Prevention:** Implement an `@app.middleware('http')` function to globally inject defense-in-depth security headers such as `Content-Security-Policy`, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`, `X-XSS-Protection`, `Referrer-Policy` (e.g., `strict-origin-when-cross-origin`), and `Permissions-Policy` (e.g., `geolocation=(), microphone=(), camera=()`).
+
+## 2026-07-10 - [Sentinel: Media Source Path Traversal]
+**Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
+**Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
+**Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.

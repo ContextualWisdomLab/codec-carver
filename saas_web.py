@@ -241,7 +241,7 @@ def shrink_media(
     if not file.filename:
         return {"error": "No file uploaded or filename missing"}
 
-    # Validate and sanitize filename before allocating any server resources
+    # Normalize the upload name before workspace setup so later file writes use a safe basename.
     safe_filename = Path(file.filename).name
     if not safe_filename or safe_filename in (".", ".."):
         safe_filename = "upload.tmp"
@@ -260,8 +260,6 @@ def shrink_media(
         output_dir = temp_dir_path / "output"
         input_dir.mkdir()
         output_dir.mkdir()
-
-        # Save the uploaded file
 
         source_path = input_dir / safe_filename
         bytes_written = 0
