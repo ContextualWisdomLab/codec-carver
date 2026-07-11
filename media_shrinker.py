@@ -323,6 +323,28 @@ def calculate_audio_bitrate(
     return bitrate
 
 
+def _metadata_args(tags: dict[str, str] | None) -> list[str]:
+    """Return ffmpeg ``-metadata key=value`` arguments for the given tags.
+
+    Keys are emitted in sorted order so generated commands are deterministic.
+    The pairs are meant to be inserted after ``-map_metadata 0`` in a plan:
+    ffmpeg applies them on top of the metadata copied from the source, so each
+    provided key overrides the corresponding source tag while every other
+    source tag is preserved. Values are passed through verbatim as single
+    argv items (plans run without a shell), so special characters are safe.
+
+    Returns an empty list when tags is None or empty, keeping default plans
+    byte-identical to those built before metadata tagging existed.
+    """
+
+    if not tags:
+        return []
+    args: list[str] = []
+    for key in sorted(tags):
+        args.extend(("-metadata", f"{key}={tags[key]}"))
+    return args
+
+
 def build_audio_plan(
     source_path: Path,
     probe: MediaProbe,
@@ -332,6 +354,7 @@ def build_audio_plan(
     prefer_flac: bool = False,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    tags: dict[str, str] | None = None,
     normalize: bool = False,
     output_format: str = "auto",
     allow_video: bool = False,
@@ -351,6 +374,10 @@ def build_audio_plan(
 
     When ``normalize`` is True the EBU R128 loudnorm audio filter is applied so
     generated audio has consistent loudness; when False the args are unchanged.
+
+    When ``tags`` is provided, ``-metadata key=value`` pairs are injected after
+    ``-map_metadata 0`` so they override those specific keys copied from the
+    source while leaving all other source metadata intact.
     """
 
     if probe.has_video and not allow_video:
@@ -374,6 +401,7 @@ def build_audio_plan(
             strategy="aac-bitrate",
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            tags=tags,
             normalize=normalize,
         )
     if output_format == "mp3":
@@ -388,6 +416,7 @@ def build_audio_plan(
             max_bitrate=MP3_MAX_BITRATE_BPS,
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            tags=tags,
             normalize=normalize,
         )
     if output_format == "opus":
@@ -398,6 +427,7 @@ def build_audio_plan(
             output_dir=output_dir,
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            tags=tags,
             normalize=normalize,
         )
 
@@ -427,6 +457,7 @@ def build_audio_plan(
                 "0",
                 "-map_chapters",
                 "0",
+                *_metadata_args(tags),
                 "-vn",
                 "-c:a",
                 "flac",
@@ -451,6 +482,7 @@ def build_audio_plan(
         output_dir=output_dir,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        tags=tags,
         normalize=normalize,
     )
 
@@ -463,12 +495,16 @@ def build_opus_plan(
     output_dir: Path,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    tags: dict[str, str] | None = None,
     normalize: bool = False,
 ) -> ConversionPlan:
     """Build a high-quality Opus plan that fits the target size.
 
     When normalize is True the EBU R128 loudnorm audio filter is applied so
     generated audio has consistent loudness; when False the args are unchanged.
+    When tags is provided, ``-metadata key=value`` pairs are injected after
+    ``-map_metadata 0`` so they override those specific keys copied from the
+    source while leaving all other source metadata intact.
     """
 
     duration_seconds = (
@@ -498,6 +534,7 @@ def build_opus_plan(
             "0",
             "-map_chapters",
             "0",
+            *_metadata_args(tags),
             "-vn",
             "-c:a",
             "libopus",
@@ -535,6 +572,7 @@ def _build_lossy_plan(
     max_bitrate: int | None = None,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    tags: dict[str, str] | None = None,
     normalize: bool = False,
 ) -> ConversionPlan:
     """Build a lossy audio plan (aac/mp3) whose bitrate fits the target size."""
@@ -568,6 +606,7 @@ def _build_lossy_plan(
             "0",
             "-map_chapters",
             "0",
+            *_metadata_args(tags),
             "-vn",
             "-c:a",
             codec,
@@ -921,6 +960,7 @@ def convert_file(
     protected_sources: Iterable[Path] = (),
     resolved_protected_sources: frozenset[Path] | None = None,
     original_size: int | None = None,
+    tags: dict[str, str] | None = None,
     normalize: bool = False,
     post_process: Callable[[ConversionResult], None] | None = None,
     allow_video: bool = False,
@@ -935,6 +975,8 @@ def convert_file(
     into extracting the audio stream from video containers.
     When ``normalize`` is True generated audio is loudness-normalized with the
     EBU R128 loudnorm filter; the default of False keeps prior output.
+    When ``tags`` is provided, each generated output is stamped with those
+    ``-metadata`` key/value pairs on top of the metadata copied from the source.
     """
 
     source = Path(source)
@@ -990,6 +1032,7 @@ def convert_file(
             overwrite=overwrite,
             max_segment_duration_seconds=max_segment_duration_seconds,
             protected_sources=resolved_sources,
+            tags=tags,
             normalize=normalize,
             output_format=output_format,
             allow_video=allow_video,
@@ -1104,6 +1147,7 @@ def _execute_segment_conversion(
     overwrite: bool,
     max_segment_duration_seconds: float,
     resolved_protected_sources: frozenset[Path],
+    tags: dict[str, str] | None = None,
     normalize: bool = False,
     output_format: str = "auto",
     allow_video: bool = False,
@@ -1121,6 +1165,7 @@ def _execute_segment_conversion(
         prefer_flac=prefer_flac,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        tags=tags,
         normalize=normalize,
         output_format=output_format,
         allow_video=allow_video,
@@ -1150,6 +1195,7 @@ def _execute_segment_conversion(
             output_dir=output_dir,
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            tags=tags,
             normalize=normalize,
         )
         final_output = _resolve_collision(opus_plan.output_path, overwrite=overwrite)
@@ -1255,6 +1301,7 @@ def _convert_segment(
     overwrite: bool,
     max_segment_duration_seconds: float,
     protected_sources: frozenset[Path] = frozenset(),
+    tags: dict[str, str] | None = None,
     normalize: bool = False,
     output_format: str = "auto",
     allow_video: bool = False,
@@ -1313,6 +1360,7 @@ def _convert_segment(
         overwrite=overwrite,
         max_segment_duration_seconds=max_segment_duration_seconds,
         resolved_protected_sources=resolved_protected_sources,
+        tags=tags,
         normalize=normalize,
         output_format=output_format,
         allow_video=allow_video,
@@ -1540,6 +1588,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Allow overwriting generated output paths",
     )
     parser.add_argument(
+        "--set-title",
+        default=None,
+        help="Set the 'title' metadata tag on every generated output",
+    )
+    parser.add_argument(
+        "--set-artist",
+        default=None,
+        help="Set the 'artist' metadata tag on every generated output",
+    )
+    parser.add_argument(
+        "--set-album",
+        default=None,
+        help="Set the 'album' metadata tag on every generated output",
+    )
+    parser.add_argument(
+        "--set-comment",
+        default=None,
+        help="Set the 'comment' metadata tag on every generated output",
+    )
+    parser.add_argument(
         "--preset",
         choices=presets.preset_names(),
         default=None,
@@ -1625,7 +1693,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     Precedence is command line, then `.codec-carver.json`, then `--preset`
     defaults, then built-in defaults. Config problems abort with a normal
-    argparse error message instead of a traceback.
+    argparse error message instead of a traceback. The returned namespace also
+    carries a ``tags`` dict collecting the metadata values provided by
+    ``--set-title``/``--set-artist``/``--set-album``/``--set-comment``.
     """
 
     parser = _build_parser()
@@ -1644,6 +1714,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(normalized, namespace)
     args = presets.apply_preset(args, real_defaults)
     _apply_config_file(parser, args, normalized)
+    provided_tags = {
+        "title": args.set_title,
+        "artist": args.set_artist,
+        "album": args.set_album,
+        "comment": args.set_comment,
+    }
+    args.tags = {key: value for key, value in provided_tags.items() if value is not None}
     return args
 
 
@@ -1713,6 +1790,7 @@ def _execute_conversions(
                 protected_sources=protected_sources,
                 resolved_protected_sources=resolved_candidates,
                 original_size=size,
+                tags=args.tags or None,
                 normalize=args.normalize,
                 post_process=post_process,
                 allow_video=args.allow_video,
