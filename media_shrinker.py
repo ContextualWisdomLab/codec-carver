@@ -11,6 +11,7 @@ import argparse
 import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import math
 import os
 import re
 import shutil
@@ -84,8 +85,7 @@ DURATION_TOLERANCE_SECONDS = 2.0
 BITRATE_SAFETY_MARGIN = 0.92
 OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
-SILENCE_START_RE = re.compile(r"silence_start:\s*(?P<value>-?[0-9]+(?:\.[0-9]+)?)")
-SILENCE_END_RE = re.compile(r"silence_end:\s*(?P<value>-?[0-9]+(?:\.[0-9]+)?)")
+SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>-?[0-9]+(?:\.[0-9]+)?)")
 
 
 class MediaShrinkerError(RuntimeError):
@@ -465,9 +465,12 @@ def probe_media(
         "-i",
         str(Path(source_path).resolve()),
     ]
-    completed = subprocess.run(
-        command, check=False, capture_output=True, text=True, shell=False
-    )
+    try:
+        completed = subprocess.run(
+            command, check=False, capture_output=True, text=True, shell=False, timeout=60
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"ffprobe timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"ffprobe failed for {source_path}: {completed.stderr.strip()}"
@@ -520,18 +523,22 @@ def detect_silence_intervals(
 ) -> list[SilenceInterval]:
     """Run ffmpeg silencedetect and return paired silence intervals."""
 
-    completed = subprocess.run(
-        build_silencedetect_command(
-            source_path,
-            ffmpeg_path=ffmpeg_path,
-            silence_noise=silence_noise,
-            silence_min_duration_seconds=silence_min_duration_seconds,
-        ),
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        completed = subprocess.run(
+            build_silencedetect_command(
+                source_path,
+                ffmpeg_path=ffmpeg_path,
+                silence_noise=silence_noise,
+                silence_min_duration_seconds=silence_min_duration_seconds,
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=3600,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"silencedetect timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"silencedetect failed for {source_path}: {completed.stderr.strip()}"
@@ -544,23 +551,18 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
 
     intervals: list[SilenceInterval] = []
     current_start: float | None = None
-    for line in stderr.splitlines():
-        # Fast path: Substring search is much faster than regex.
-        # Most lines are ffmpeg progress updates (e.g., 'frame=...')
-        if "silence" not in line:
-            continue
-        start_match = SILENCE_START_RE.search(line)
-        if start_match:
-            current_start = float(start_match.group("value"))
-            continue
-
-        end_match = SILENCE_END_RE.search(line)
-        if end_match and current_start is not None:
-            end_seconds = float(end_match.group("value"))
-            if end_seconds > current_start:
+    # Fast path: Using re.finditer directly on the raw string avoids
+    # OOM issues and overhead from str.splitlines() on massive ffmpeg logs.
+    for match in SILENCE_RE.finditer(stderr):
+        kind = match.group(1)
+        value = float(match.group("value"))
+        if kind == "start":
+            current_start = value
+        elif kind == "end" and current_start is not None:
+            if value > current_start:
                 intervals.append(
                     SilenceInterval(
-                        start_seconds=current_start, end_seconds=end_seconds
+                        start_seconds=current_start, end_seconds=value
                     )
                 )
             current_start = None
@@ -646,13 +648,17 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
         raise MediaShrinkerError(
             f"iCloud download requested but '{brctl_path}' was not found"
         )
-    completed = subprocess.run(
-        build_icloud_download_command(source_path, brctl_path=brctl_path),
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        completed = subprocess.run(
+            build_icloud_download_command(source_path, brctl_path=brctl_path),
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=3600,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"iCloud download timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"iCloud download failed for {source_path}: {completed.stderr.strip()}"
@@ -733,11 +739,17 @@ def convert_file(
     source = Path(source)
     root = Path(root)
     output_dir = Path(output_dir)
+    resolved_source = source.resolve()
+    resolved_root = root.resolve()
+
+    if not resolved_source.is_relative_to(resolved_root):
+        raise MediaShrinkerError("Source path is outside the permitted root directory")
+
     original_size = (
         original_size if original_size is not None else safe_source_size(source)
     )
 
-    rel_source = source.relative_to(root)
+    rel_source = resolved_source.relative_to(resolved_root)
     if download_icloud:
         download_from_icloud(source, brctl_path=brctl_path)
     probe = probe_media(source, ffprobe_path=ffprobe_path, source_size=original_size)
@@ -1538,9 +1550,12 @@ def _first_float(*values: Any) -> float:
         if value is None or value == "N/A":
             continue
         try:
-            return float(value)
+            parsed = float(value)
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(parsed):
+            continue
+        return parsed
     return 0.0
 
 
@@ -1550,9 +1565,12 @@ def _first_int(*values: Any) -> int | None:
         if value is None or value == "N/A":
             continue
         try:
-            return int(float(value))
+            parsed = float(value)
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(parsed):
+            continue
+        return int(parsed)
     return None
 
 
@@ -1590,10 +1608,12 @@ def _execute_plan(
         )
         try:
             completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, shell=False
+                command, check=False, capture_output=True, text=True, shell=False, timeout=3600
             )
         except FileNotFoundError as exc:
             raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise MediaShrinkerError(f"ffmpeg timed out for {source}") from exc
 
         if completed.returncode != 0:
             raise MediaShrinkerError(
@@ -1658,13 +1678,17 @@ def _copy_macos_creation_time(
     creation_date = datetime.fromtimestamp(float(birthtime)).strftime(
         "%m/%d/%Y %H:%M:%S"
     )
-    subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest.resolve())],
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        subprocess.run(
+            [setfile_path, "-d", creation_date, str(dest.resolve())],
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # Metadata restoration failure is non-fatal
 
 
 def _format_result(root: Path, result: ConversionResult) -> str:
