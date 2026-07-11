@@ -1700,6 +1700,36 @@ class CliTests(unittest.TestCase):
                 media_shrinker._copy_macos_creation_time(mock_stat, dest, "SetFile")
                 mock_run.assert_called_once()
 
+class PathTraversalTests(unittest.TestCase):
+    def test_convert_file_raises_on_path_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Create a source path that is lexically relative to root but actually escapes
+            # e.g. root/../etc/passwd
+            source = root / ".." / "etc" / "passwd"
+
+            with self.assertRaisesRegex(MediaShrinkerError, "outside the root directory"):
+                media_shrinker.convert_file(
+                    source=source,
+                    root=root,
+                    output_dir=root / "out",
+                    original_size=10,
+                )
+
+    def test_display_path_resolves_symlinks_or_traversals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # path escaping root should be returned absolute
+            escaping_path = root / ".." / "etc" / "passwd"
+            displayed = media_shrinker._display_path(root, escaping_path)
+            self.assertEqual(displayed, escaping_path)
+
+            # path inside root should be returned relative
+            inside_path = root / "subdir" / "file.txt"
+            displayed = media_shrinker._display_path(root, inside_path)
+            self.assertEqual(displayed, Path("subdir/file.txt"))
+
+
 if __name__ == "__main__":
     unittest.main()
 
