@@ -19,6 +19,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -1752,13 +1753,32 @@ def _build_transcription_hook(
     return hook
 
 
+def _format_progress(completed: int, total: int, eta_seconds: float) -> str:
+    """Format a tab-separated batch progress line with an mm:ss ETA.
+
+    ``completed`` and ``total`` are the number of finished and queued
+    candidates respectively (``total`` must be positive). ``eta_seconds`` is
+    the estimated remaining wall time; it is clamped at zero and truncated to
+    whole seconds before formatting, and minutes may exceed 59 for long
+    batches.
+    """
+    percent = completed * 100 // total
+    eta = max(0, int(eta_seconds))
+    return f"PROGRESS\t{completed}/{total}\t{percent}%\tETA {eta // 60:02d}:{eta % 60:02d}"
+
+
 def _execute_conversions(
     candidates: list[tuple[Path, int]],
     args: argparse.Namespace,
     root: Path,
     output_dir: Path,
 ) -> list[ConversionResult]:
-    """Execute conversions in parallel."""
+    """Execute conversions in parallel, printing per-file results and progress.
+
+    After each candidate finishes, a ``PROGRESS`` line reports the completed
+    count, percentage, and an ETA extrapolated from the average per-file wall
+    time so far (measured with a monotonic clock).
+    """
     results: list[ConversionResult] = []
     workers = choose_worker_count(args.workers)
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
@@ -1807,6 +1827,9 @@ def _execute_conversions(
             ]
 
     print(f"WORKERS\t{workers}\tFFMPEG_THREADS\t{ffmpeg_threads}")
+    total = len(candidates)
+    completed = 0
+    start_time = time.monotonic()
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_candidate = {
             executor.submit(process_candidate, candidate): candidate
@@ -1817,6 +1840,10 @@ def _execute_conversions(
             results.extend(candidate_results)
             for result in candidate_results:
                 print(_format_result(root, result), flush=True)
+            completed += 1
+            elapsed = time.monotonic() - start_time
+            eta_seconds = (elapsed / completed) * (total - completed)
+            print(_format_progress(completed, total, eta_seconds), flush=True)
 
     return results
 
