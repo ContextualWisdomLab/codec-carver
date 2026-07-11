@@ -1,10 +1,17 @@
 [run]
 source =
+    chapters
+    diarize
     job_store
     mcp_driver
     media_shrinker
+    remote_input
     saas_web
+    subtitles
+    summarize
     transcribe
+    transcript_search
+    usage_metering
 
 [report]
 fail_under = 100

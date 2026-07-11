@@ -34,6 +34,11 @@ class DetectChaptersTest(unittest.TestCase):
         self.assertEqual(chapters[0].end, 600.0)
         self.assertEqual(chapters[0].title, "Chapter 1")
 
+    def test_chapter_duration_property(self) -> None:
+        """duration reports the covered interval length."""
+
+        self.assertEqual(Chapter(1, 2.5, 7.0, "Intro").duration, 4.5)
+
     def test_boundary_at_long_silence_midpoint(self) -> None:
         """A qualifying silence splits chapters at its midpoint."""
 

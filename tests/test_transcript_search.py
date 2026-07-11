@@ -150,6 +150,23 @@ class SearchTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             idx.add("bad", [{"start": 0.0, "end": 1.0}])
 
+    def test_add_rejects_object_missing_attribute(self):
+        """Object-shaped segments must expose start, end and text."""
+        class MissingText:
+            start = 0.0
+            end = 1.0
+
+        idx = TranscriptIndex()
+        with self.assertRaises(TypeError) as ctx:
+            idx.add("bad", [MissingText()])
+        self.assertIn("attribute", str(ctx.exception))
+
+    def test_search_returns_empty_when_postings_intersection_is_empty(self):
+        """Known terms with disjoint postings produce no matches."""
+        idx = TranscriptIndex()
+        idx.add("r", [Segment(0.0, 1.0, "alpha"), Segment(1.0, 2.0, "beta")])
+        self.assertEqual(idx.search("alpha beta"), [])
+
 
 class LoadTranscriptJsonTest(unittest.TestCase):
     """Reading the transcription sidecar JSON shape."""
@@ -200,6 +217,18 @@ class LoadTranscriptJsonTest(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 load_transcript_json(path)
         self.assertIn("text", str(ctx.exception))
+
+    def test_rejects_non_object_segment_entry(self):
+        """Each segment entry must be an object."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.json"
+            path.write_text(
+                json.dumps({"segments": ["not-an-object"]}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError) as ctx:
+                load_transcript_json(path)
+        self.assertIn("not an object", str(ctx.exception))
 
 
 if __name__ == "__main__":
