@@ -24,6 +24,7 @@ dependencies = []
 [project.optional-dependencies]
 web = ["fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1"]
 mcp = ["mcp==1.28.1"]
+transcribe = ["faster-whisper==1.2.1"]
 dev = [
     "interrogate==1.7.0",
     "fastapi==0.139.0",
@@ -37,6 +38,7 @@ dev = [
 all = [
     "fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1",
     "mcp==1.28.1",
+    "faster-whisper==1.2.1",
 ]
 
 [project.urls]
@@ -47,7 +49,7 @@ Repository = "https://github.com/Seongho-Bae/codec-carver"
 codec-carver = "media_shrinker:main"
 
 [tool.setuptools]
-py-modules = ["media_shrinker", "saas_web", "mcp_driver", "job_store"]
+py-modules = ["media_shrinker", "saas_web", "mcp_driver", "job_store", "transcribe"]
 
 [tool.interrogate]
 fail-under = 100
