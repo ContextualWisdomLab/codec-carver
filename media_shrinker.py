@@ -698,7 +698,7 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
         kind = match.group(1)
         value = float(match.group("value"))
         if kind == "start":
-            current_start = value
+            current_start = max(value, 0.0)
         elif kind == "end" and current_start is not None:
             if value > current_start:
                 intervals.append(
