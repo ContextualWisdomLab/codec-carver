@@ -11,6 +11,7 @@ import argparse
 import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import math
 import os
 import re
 import shutil
@@ -21,7 +22,9 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
+
+import presets
 
 import config_file
 
@@ -80,14 +83,16 @@ DEFAULT_SIZE_LIMIT_BYTES = 2_000_000_000
 DEFAULT_TARGET_BYTES = 1_900_000_000
 DEFAULT_MAX_SEGMENT_DURATION_SECONDS = 4 * 60 * 60
 DEFAULT_SILENCE_NOISE = "-35dB"
+LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
 DEFAULT_SILENCE_MIN_DURATION_SECONDS = 2.0
 HARD_SPLIT_EPSILON_SECONDS = 0.001
 DURATION_TOLERANCE_SECONDS = 2.0
 BITRATE_SAFETY_MARGIN = 0.92
 OPUS_MAX_BITRATE_BPS = 510_000
 OPUS_MIN_REASONABLE_BITRATE_BPS = 16_000
-SILENCE_START_RE = re.compile(r"silence_start:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
-SILENCE_END_RE = re.compile(r"silence_end:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)")
+MP3_MAX_BITRATE_BPS = 320_000  # libmp3lame ceiling
+OUTPUT_FORMATS = ("auto", "flac", "opus", "aac", "mp3")
+SILENCE_RE = re.compile(r"silence_(start|end):\s*(?P<value>-?[0-9]+(?:\.[0-9]+)?)")
 
 
 class MediaShrinkerError(RuntimeError):
@@ -304,13 +309,17 @@ def calculate_audio_bitrate(
 
     fitting_bitrate = int((target_bytes * 8 * safety_margin) / duration_seconds)
     bitrate = min(fitting_bitrate, OPUS_MAX_BITRATE_BPS)
-    if source_bitrate_bps and source_bitrate_bps > 0:
-        bitrate = min(bitrate, source_bitrate_bps)
+    # The floor guards against targets too small to fit at a usable quality.
+    # It must be applied to the target-driven bitrate only: a source that is
+    # already below the floor (e.g. a 12 kbps voice recording) still fits the
+    # target and should be transcoded at its own bitrate, not rejected.
     if bitrate < OPUS_MIN_REASONABLE_BITRATE_BPS:
         raise MediaShrinkerError(
             f"Target size requires {bitrate} bps, below the safe floor of "
             f"{OPUS_MIN_REASONABLE_BITRATE_BPS} bps"
         )
+    if source_bitrate_bps and source_bitrate_bps > 0:
+        bitrate = min(bitrate, source_bitrate_bps)
     return bitrate
 
 
@@ -323,17 +332,77 @@ def build_audio_plan(
     prefer_flac: bool = False,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    normalize: bool = False,
+    output_format: str = "auto",
+    allow_video: bool = False,
 ) -> ConversionPlan:
-    """Build the preferred audio-only conversion plan for source_path."""
+    """Build the preferred audio-only conversion plan for source_path.
 
-    if probe.has_video:
+    ``output_format`` selects the container/codec: ``auto`` (default) keeps the
+    original behaviour (FLAC for lossless or ``--flac-all`` input, otherwise
+    high-bitrate Opus); ``flac``/``opus`` force that codec; ``aac``/``mp3``
+    produce a target-fitting lossy plan for broad device compatibility.
+
+    When ``allow_video`` is False (the default) any file containing a video
+    stream is rejected, preserving the audio-only contract. When True, the
+    audio track is extracted from a video container (the ffmpeg plan already
+    drops video with ``-vn``); a video file with no audio stream is still
+    rejected below.
+
+    When ``normalize`` is True the EBU R128 loudnorm audio filter is applied so
+    generated audio has consistent loudness; when False the args are unchanged.
+    """
+
+    if probe.has_video and not allow_video:
         raise MediaShrinkerError(
-            f"{source_path} contains video; this tool is configured for audio preservation"
+            f"{source_path} contains video; this tool is configured for audio "
+            f"preservation (pass --allow-video to extract the audio track)"
         )
     if not probe.audio_codec:
         raise MediaShrinkerError(f"{source_path} has no audio stream")
+    if output_format not in OUTPUT_FORMATS:
+        raise MediaShrinkerError(f"unsupported output format: {output_format}")
 
-    suffix = ".flac" if prefer_flac or _is_lossless_probe(probe) else ".opus"
+    if output_format == "aac":
+        return _build_lossy_plan(
+            source_path,
+            probe,
+            target_bytes=target_bytes,
+            output_dir=output_dir,
+            suffix=".m4a",
+            codec="aac",
+            strategy="aac-bitrate",
+            ffmpeg_threads=ffmpeg_threads,
+            segment=segment,
+            normalize=normalize,
+        )
+    if output_format == "mp3":
+        return _build_lossy_plan(
+            source_path,
+            probe,
+            target_bytes=target_bytes,
+            output_dir=output_dir,
+            suffix=".mp3",
+            codec="libmp3lame",
+            strategy="mp3-bitrate",
+            max_bitrate=MP3_MAX_BITRATE_BPS,
+            ffmpeg_threads=ffmpeg_threads,
+            segment=segment,
+            normalize=normalize,
+        )
+    if output_format == "opus":
+        return build_opus_plan(
+            source_path,
+            probe,
+            target_bytes=target_bytes,
+            output_dir=output_dir,
+            ffmpeg_threads=ffmpeg_threads,
+            segment=segment,
+            normalize=normalize,
+        )
+
+    force_flac = prefer_flac or output_format == "flac"
+    suffix = ".flac" if force_flac or _is_lossless_probe(probe) else ".opus"
     output_path = _planned_output_path(
         _segment_source_path(source_path, segment), output_dir, suffix
     )
@@ -366,6 +435,7 @@ def build_audio_plan(
                 str(output_path),
             ]
         )
+        args = _with_loudnorm(args, normalize)
         args = _with_ffmpeg_threads(args, ffmpeg_threads)
         return ConversionPlan(
             strategy=strategy,
@@ -381,6 +451,7 @@ def build_audio_plan(
         output_dir=output_dir,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        normalize=normalize,
     )
 
 
@@ -392,8 +463,13 @@ def build_opus_plan(
     output_dir: Path,
     ffmpeg_threads: int | None = None,
     segment: MediaSegment | None = None,
+    normalize: bool = False,
 ) -> ConversionPlan:
-    """Build a high-quality Opus plan that fits the target size."""
+    """Build a high-quality Opus plan that fits the target size.
+
+    When normalize is True the EBU R128 loudnorm audio filter is applied so
+    generated audio has consistent loudness; when False the args are unchanged.
+    """
 
     duration_seconds = (
         segment.duration_seconds if segment is not None else probe.duration_seconds
@@ -436,6 +512,7 @@ def build_opus_plan(
             str(output_path),
         ]
     )
+    args = _with_loudnorm(args, normalize)
     args = _with_ffmpeg_threads(args, ffmpeg_threads)
     return ConversionPlan(
         strategy="opus-bitrate",
@@ -444,6 +521,119 @@ def build_opus_plan(
         ffmpeg_args=args,
         audio_bitrate_bps=bitrate,
     )
+
+
+def _build_lossy_plan(
+    source_path: Path,
+    probe: MediaProbe,
+    *,
+    target_bytes: int,
+    output_dir: Path,
+    suffix: str,
+    codec: str,
+    strategy: str,
+    max_bitrate: int | None = None,
+    ffmpeg_threads: int | None = None,
+    segment: MediaSegment | None = None,
+    normalize: bool = False,
+) -> ConversionPlan:
+    """Build a lossy audio plan (aac/mp3) whose bitrate fits the target size."""
+
+    duration_seconds = (
+        segment.duration_seconds if segment is not None else probe.duration_seconds
+    )
+    bitrate = calculate_audio_bitrate(
+        duration_seconds, target_bytes, probe.audio_bit_rate
+    )
+    if max_bitrate is not None:
+        bitrate = min(bitrate, max_bitrate)
+    output_path = _planned_output_path(
+        _segment_source_path(source_path, segment), output_dir, suffix
+    )
+    args = [
+        "-nostdin",
+        "-hide_banner",
+        "-y",
+    ]
+    args.extend(_segment_input_args(segment))
+    args.extend(
+        [
+            "-protocol_whitelist",
+            "file,crypto,data",
+            "-i",
+            str(source_path),
+            "-map",
+            "0:a:0",
+            "-map_metadata",
+            "0",
+            "-map_chapters",
+            "0",
+            "-vn",
+            "-c:a",
+            codec,
+            "-b:a",
+            str(bitrate),
+            str(output_path),
+        ]
+    )
+    args = _with_loudnorm(args, normalize)
+    args = _with_ffmpeg_threads(args, ffmpeg_threads)
+    return ConversionPlan(
+        strategy=strategy,
+        input_path=source_path,
+        output_path=output_path,
+        ffmpeg_args=args,
+        audio_bitrate_bps=bitrate,
+    )
+
+
+def _existing_output_suffixes(
+    output_format: str, *, prefer_flac: bool, probe: MediaProbe
+) -> tuple[str, ...]:
+    """Return generated output suffixes that may satisfy the selected format."""
+
+    if output_format == "aac":
+        return (".m4a",)
+    if output_format == "mp3":
+        return (".mp3",)
+    if output_format == "opus":
+        return (".opus",)
+    if output_format == "flac":
+        return (".flac",)
+    if output_format != "auto":
+        raise MediaShrinkerError(f"unsupported output format: {output_format}")
+    if prefer_flac or _is_lossless_probe(probe):
+        return (".flac", ".opus")
+    return (".opus",)
+
+
+def _run_media_tool(
+    command: list[str],
+    *,
+    tool: str,
+    timeout: float | None = None,
+    timeout_message: str | None = None,
+) -> "subprocess.CompletedProcess[str]":
+    """Run an ffmpeg/ffprobe command, mapping missing binaries clearly."""
+
+    try:
+        return subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        raise MediaShrinkerError(
+            f"{tool} not found: could not run '{command[0]}'. "
+            "Install ffmpeg (it provides both ffmpeg and ffprobe) and make sure "
+            "it is on your PATH; for example, 'brew install ffmpeg' (macOS) or "
+            "'sudo apt install ffmpeg' (Debian/Ubuntu)."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(timeout_message or f"{tool} timed out") from exc
 
 
 def probe_media(
@@ -467,8 +657,11 @@ def probe_media(
         "-i",
         str(Path(source_path).resolve()),
     ]
-    completed = subprocess.run(
-        command, check=False, capture_output=True, text=True, shell=False
+    completed = _run_media_tool(
+        command,
+        tool="ffprobe",
+        timeout=60,
+        timeout_message=f"ffprobe timed out for {source_path}",
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -522,17 +715,16 @@ def detect_silence_intervals(
 ) -> list[SilenceInterval]:
     """Run ffmpeg silencedetect and return paired silence intervals."""
 
-    completed = subprocess.run(
+    completed = _run_media_tool(
         build_silencedetect_command(
             source_path,
             ffmpeg_path=ffmpeg_path,
             silence_noise=silence_noise,
             silence_min_duration_seconds=silence_min_duration_seconds,
         ),
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
+        tool="ffmpeg",
+        timeout=3600,
+        timeout_message=f"silencedetect timed out for {source_path}",
     )
     if completed.returncode != 0:
         raise MediaShrinkerError(
@@ -546,23 +738,18 @@ def parse_silencedetect_intervals(stderr: str) -> list[SilenceInterval]:
 
     intervals: list[SilenceInterval] = []
     current_start: float | None = None
-    for line in stderr.splitlines():
-        # Fast path: Substring search is much faster than regex.
-        # Most lines are ffmpeg progress updates (e.g., 'frame=...')
-        if "silence" not in line:
-            continue
-        start_match = SILENCE_START_RE.search(line)
-        if start_match:
-            current_start = float(start_match.group("value"))
-            continue
-
-        end_match = SILENCE_END_RE.search(line)
-        if end_match and current_start is not None:
-            end_seconds = float(end_match.group("value"))
-            if end_seconds > current_start:
+    # Fast path: Using re.finditer directly on the raw string avoids
+    # OOM issues and overhead from str.splitlines() on massive ffmpeg logs.
+    for match in SILENCE_RE.finditer(stderr):
+        kind = match.group(1)
+        value = float(match.group("value"))
+        if kind == "start":
+            current_start = max(value, 0.0)
+        elif kind == "end" and current_start is not None:
+            if value > current_start:
                 intervals.append(
                     SilenceInterval(
-                        start_seconds=current_start, end_seconds=end_seconds
+                        start_seconds=current_start, end_seconds=value
                     )
                 )
             current_start = None
@@ -648,13 +835,17 @@ def download_from_icloud(source_path: Path, *, brctl_path: str = "brctl") -> Non
         raise MediaShrinkerError(
             f"iCloud download requested but '{brctl_path}' was not found"
         )
-    completed = subprocess.run(
-        build_icloud_download_command(source_path, brctl_path=brctl_path),
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        completed = subprocess.run(
+            build_icloud_download_command(source_path, brctl_path=brctl_path),
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=3600,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaShrinkerError(f"iCloud download timed out for {source_path}") from exc
     if completed.returncode != 0:
         raise MediaShrinkerError(
             f"iCloud download failed for {source_path}: {completed.stderr.strip()}"
@@ -702,12 +893,12 @@ def preserve_file_attributes(
 
     _copy_extended_attributes(source, dest)
 
-    os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+    _restore_timestamps(source_stat, dest)
 
     resolved_setfile = setfile_path if setfile_path is not None else _get_setfile_path()
     if resolved_setfile:
         _copy_macos_creation_time(source_stat, dest, resolved_setfile)
-        os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+        _restore_timestamps(source_stat, dest)
 
 
 def convert_file(
@@ -721,6 +912,7 @@ def convert_file(
     download_icloud: bool = False,
     brctl_path: str = "brctl",
     prefer_flac: bool = False,
+    output_format: str = "auto",
     ffmpeg_threads: int | None = None,
     overwrite: bool = False,
     max_segment_duration_seconds: float = DEFAULT_MAX_SEGMENT_DURATION_SECONDS,
@@ -729,17 +921,36 @@ def convert_file(
     protected_sources: Iterable[Path] = (),
     resolved_protected_sources: frozenset[Path] | None = None,
     original_size: int | None = None,
+    normalize: bool = False,
+    post_process: Callable[[ConversionResult], None] | None = None,
+    allow_video: bool = False,
 ) -> list[ConversionResult]:
-    """Convert one file and return generated segment results without deleting the source."""
+    """Convert one file and return generated segment results without deleting the source.
+
+    ``post_process`` is an optional hook invoked once per successfully generated
+    output (a ``converted`` result with an output path). It is the extension
+    seam used for follow-on steps such as transcription; a failing hook must not
+    abort the conversion, so callers are expected to handle their own errors.
+    ``allow_video`` preserves the default audio-only contract unless callers opt
+    into extracting the audio stream from video containers.
+    When ``normalize`` is True generated audio is loudness-normalized with the
+    EBU R128 loudnorm filter; the default of False keeps prior output.
+    """
 
     source = Path(source)
     root = Path(root)
     output_dir = Path(output_dir)
+    resolved_source = source.resolve()
+    resolved_root = root.resolve()
+
+    if not resolved_source.is_relative_to(resolved_root):
+        raise MediaShrinkerError("Source path is outside the permitted root directory")
+
     original_size = (
         original_size if original_size is not None else safe_source_size(source)
     )
 
-    rel_source = source.relative_to(root)
+    rel_source = resolved_source.relative_to(resolved_root)
     if download_icloud:
         download_from_icloud(source, brctl_path=brctl_path)
     probe = probe_media(source, ffprobe_path=ffprobe_path, source_size=original_size)
@@ -763,7 +974,7 @@ def convert_file(
     if resolved_sources is None:
         resolved_sources = frozenset(Path(item).resolve() for item in protected_sources)
 
-    return [
+    results = [
         _convert_segment(
             source,
             rel_source=rel_source,
@@ -779,9 +990,26 @@ def convert_file(
             overwrite=overwrite,
             max_segment_duration_seconds=max_segment_duration_seconds,
             protected_sources=resolved_sources,
+            normalize=normalize,
+            output_format=output_format,
+            allow_video=allow_video,
         )
         for segment in segments
     ]
+    _run_post_process(results, post_process)
+    return results
+
+
+def _run_post_process(
+    results: list[ConversionResult],
+    post_process: Callable[[ConversionResult], None] | None,
+) -> None:
+    """Invoke ``post_process`` for each successfully generated output."""
+    if post_process is None:
+        return
+    for result in results:
+        if result.status == "converted" and result.output_path is not None:
+            post_process(result)
 
 
 def safe_source_size(source: Path) -> int:
@@ -876,8 +1104,15 @@ def _execute_segment_conversion(
     overwrite: bool,
     max_segment_duration_seconds: float,
     resolved_protected_sources: frozenset[Path],
+    normalize: bool = False,
+    output_format: str = "auto",
+    allow_video: bool = False,
 ) -> ConversionResult:
-    """Execute the conversion plan(s) for a single segment."""
+    """Execute the conversion plan(s) for a single segment.
+
+    ``output_format``/``allow_video`` select the conversion contract, while
+    ``normalize`` applies EBU R128 loudnorm to generated audio when requested.
+    """
     plan = build_audio_plan(
         rel_source,
         probe,
@@ -886,6 +1121,9 @@ def _execute_segment_conversion(
         prefer_flac=prefer_flac,
         ffmpeg_threads=ffmpeg_threads,
         segment=segment,
+        normalize=normalize,
+        output_format=output_format,
+        allow_video=allow_video,
     )
 
     final_output = _resolve_collision(plan.output_path, overwrite=overwrite)
@@ -912,6 +1150,7 @@ def _execute_segment_conversion(
             output_dir=output_dir,
             ffmpeg_threads=ffmpeg_threads,
             segment=segment,
+            normalize=normalize,
         )
         final_output = _resolve_collision(opus_plan.output_path, overwrite=overwrite)
         first_result = _execute_plan(
@@ -925,9 +1164,29 @@ def _execute_segment_conversion(
         plan = opus_plan
         output_size = first_result.stat().st_size
 
-    output_duration = _probe_output_duration(
-        first_result, ffprobe_path=ffprobe_path, output_size=output_size
-    )
+    try:
+        output_duration = _probe_output_duration(
+            first_result, ffprobe_path=ffprobe_path, output_size=output_size
+        )
+    except MediaShrinkerError as exc:
+        return _discard_invalid_generated_output(
+            source,
+            first_result,
+            {
+                "source_path": source,
+                "output_path": first_result,
+                "original_size_bytes": original_size,
+                "output_size_bytes": output_size,
+                "strategy": plan.strategy,
+                "segment_index": segment.index,
+                "segment_count": segment.total_segments,
+                "start_seconds": segment.start_seconds,
+                "duration_seconds": None,
+            },
+            status="duration_mismatch",
+            message=f"Generated output has no usable duration: {exc}",
+            protected_sources=resolved_protected_sources,
+        )
     preserve_file_attributes(source, first_result)
     common_fields = {
         "source_path": source,
@@ -996,12 +1255,21 @@ def _convert_segment(
     overwrite: bool,
     max_segment_duration_seconds: float,
     protected_sources: frozenset[Path] = frozenset(),
+    normalize: bool = False,
+    output_format: str = "auto",
+    allow_video: bool = False,
 ) -> ConversionResult:
-    """Convert one media segment fitting the target size limit."""
+    """Convert one media segment fitting the target size limit.
+
+    Format selection, video opt-in, and loudness normalization are threaded
+    through to the concrete conversion plan.
+    """
     # protected_sources is passed from convert_file where it is already fully resolved.
     # _ensure_not_source_path explicitly checks against the current source independently.
     resolved_protected_sources = protected_sources
-    existing_suffixes = (".flac", ".opus")
+    existing_suffixes = _existing_output_suffixes(
+        output_format, prefer_flac=prefer_flac, probe=probe
+    )
     segment_rel_source = _segment_source_path(rel_source, segment)
     _remove_invalid_legacy_outputs(
         source,
@@ -1045,6 +1313,9 @@ def _convert_segment(
         overwrite=overwrite,
         max_segment_duration_seconds=max_segment_duration_seconds,
         resolved_protected_sources=resolved_protected_sources,
+        normalize=normalize,
+        output_format=output_format,
+        allow_video=allow_video,
     )
 
 
@@ -1220,6 +1491,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Prefer FLAC for every audio-only source, including lossy input",
     )
     parser.add_argument(
+        "--normalize",
+        action="store_true",
+        default=False,
+        help=(
+            "Apply EBU R128 loudness normalization (loudnorm=I=-16:TP=-1.5:LRA=11) "
+            "to generated audio. Off by default; output is byte-identical when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--format",
+        choices=OUTPUT_FORMATS,
+        default="auto",
+        help=(
+            "Output audio format. 'auto' (default) keeps FLAC-for-lossless / "
+            "Opus behaviour; 'flac'/'opus' force that codec; 'aac' (.m4a) and "
+            "'mp3' produce broadly-compatible lossy output fitted to the target."
+        ),
+    )
+    parser.add_argument(
         "--workers", type=int, default=0, help="Parallel ffmpeg jobs. 0 = auto"
     )
     parser.add_argument(
@@ -1248,6 +1538,39 @@ def _build_parser() -> argparse.ArgumentParser:
         "--overwrite",
         action="store_true",
         help="Allow overwriting generated output paths",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=presets.preset_names(),
+        default=None,
+        help=(
+            "Apply bundled defaults for a scenario. Explicit flags always win "
+            "over the preset."
+        ),
+    )
+    parser.add_argument(
+        "--transcribe",
+        action="store_true",
+        help=(
+            "After each successful conversion, write a text + JSON transcript "
+            "sidecar next to the generated audio (requires the optional "
+            "'faster-whisper' dependency; skipped with a notice if unavailable)."
+        ),
+    )
+    parser.add_argument(
+        "--transcribe-model",
+        default="base",
+        help="faster-whisper model name to use when --transcribe is set (default: base)",
+    )
+    parser.add_argument(
+        "--allow-video",
+        action="store_true",
+        help=(
+            "Extract and shrink the audio track from video containers "
+            "(e.g. .mp4/.mov/.mkv Zoom/Teams/lecture recordings). By default "
+            "video files are rejected. Video files with no audio stream are "
+            "always rejected."
+        ),
     )
     return parser
 
@@ -1298,19 +1621,58 @@ def _apply_config_file(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse CLI arguments, overlaying `.codec-carver.json` config defaults.
+    """Parse CLI arguments, resolving presets then config-file defaults.
 
-    A `.codec-carver.json` file in the scan root (or the current working
-    directory) supplies defaults for repeat workflows; see the config_file
-    module for the format and the allowed keys. Values from the config file
-    apply only where the user did not pass the corresponding CLI flag.
+    Precedence is command line, then `.codec-carver.json`, then `--preset`
+    defaults, then built-in defaults. Config problems abort with a normal
+    argparse error message instead of a traceback.
     """
 
     parser = _build_parser()
     normalized = _normalize_argv(argv)
-    args = parser.parse_args(normalized)
+
+    # Capture the tool's built-in defaults, then seed the namespace with a
+    # sentinel for every preset-tunable option so argparse leaves it untouched
+    # unless the user passes the flag. That lets apply_preset tell "unset" apart
+    # from "set to the default value" and give explicit flags precedence.
+    real_defaults = {
+        dest: parser.get_default(dest) for dest in presets.PRESET_TUNABLE_DESTS
+    }
+    namespace = argparse.Namespace()
+    for dest in presets.PRESET_TUNABLE_DESTS:
+        setattr(namespace, dest, presets._UNSET)
+    args = parser.parse_args(normalized, namespace)
+    args = presets.apply_preset(args, real_defaults)
     _apply_config_file(parser, args, normalized)
     return args
+
+
+def _build_transcription_hook(
+    args: argparse.Namespace,
+) -> Callable[[ConversionResult], None] | None:
+    """Return a per-output transcription hook when --transcribe is requested.
+
+    Transcription is optional: the module is imported lazily and any failure is
+    reported without aborting the conversion batch.
+    """
+    if not getattr(args, "transcribe", False):
+        return None
+
+    import transcribe as _transcribe
+
+    def hook(result: ConversionResult) -> None:
+        """Transcribe one generated output; never raise into the conversion."""
+        try:
+            txt_path, _ = _transcribe.transcribe_output(
+                result.output_path, model=args.transcribe_model
+            )
+            print(f"TRANSCRIBED\t{txt_path}", flush=True)
+        except _transcribe.TranscriptionUnavailableError as exc:
+            print(f"TRANSCRIBE_SKIP\t{exc}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - a bad transcript must not fail conversion.
+            print(f"TRANSCRIBE_FAIL\t{result.output_path}\t{exc}", flush=True)
+
+    return hook
 
 
 def _execute_conversions(
@@ -1323,6 +1685,7 @@ def _execute_conversions(
     results: list[ConversionResult] = []
     workers = choose_worker_count(args.workers)
     ffmpeg_threads = args.ffmpeg_threads if args.ffmpeg_threads >= 0 else None
+    post_process = _build_transcription_hook(args)
 
     resolved_candidates = frozenset(Path(item[0]).resolve() for item in candidates)
     protected_sources = [c[0] for c in candidates]
@@ -1341,6 +1704,7 @@ def _execute_conversions(
                 download_icloud=args.download_icloud,
                 brctl_path=args.brctl,
                 prefer_flac=args.flac_all,
+                output_format=args.format,
                 ffmpeg_threads=ffmpeg_threads,
                 overwrite=args.overwrite,
                 max_segment_duration_seconds=args.max_duration_seconds,
@@ -1349,6 +1713,9 @@ def _execute_conversions(
                 protected_sources=protected_sources,
                 resolved_protected_sources=resolved_candidates,
                 original_size=size,
+                normalize=args.normalize,
+                post_process=post_process,
+                allow_video=args.allow_video,
             )
         except Exception as exc:  # noqa: BLE001 - batch processing records per-file failures.
             return [
@@ -1412,6 +1779,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     write_report(results, report_path)
+    converted = [result for result in results if result.status == "converted"]
+    skipped = [result for result in results if result.status == "skipped_existing"]
     failed = [
         result
         for result in results
@@ -1419,7 +1788,8 @@ def main(argv: list[str] | None = None) -> int:
     ]
     print(f"REPORT\t{report_path}")
     print(
-        f"SUMMARY\tconverted={len(results) - len(failed)}\tfailed_or_too_large={len(failed)}"
+        f"SUMMARY\tconverted={len(converted)}\tskipped_existing={len(skipped)}"
+        f"\tfailed_or_too_large={len(failed)}"
     )
     return 1 if failed else 0
 
@@ -1547,6 +1917,18 @@ def _with_ffmpeg_threads(args: list[str], ffmpeg_threads: int | None) -> list[st
     return [*args[:-1], "-threads", str(ffmpeg_threads), args[-1]]
 
 
+def _with_loudnorm(args: list[str], normalize: bool) -> list[str]:
+    """Insert the EBU R128 loudnorm audio filter before the output path when requested.
+
+    When normalize is False the argument list is returned unchanged so default
+    conversions remain byte-identical to prior behavior.
+    """
+
+    if not normalize:
+        return args
+    return [*args[:-1], "-af", LOUDNORM_FILTER, args[-1]]
+
+
 def _parse_probe_payload(
     payload: dict[str, Any],
     source_path: Path,
@@ -1570,9 +1952,11 @@ def _parse_probe_payload(
         raise MediaShrinkerError(f"{source_path} has no audio stream")
 
     format_section = payload.get("format", {})
-    duration = _first_float(
-        audio_stream.get("duration"), format_section.get("duration")
-    )
+    # Prefer the stream duration, but a stream-level "0"/"0.000000" (reported by
+    # some containers) is unusable and must fall back to the format duration.
+    duration = _first_float(audio_stream.get("duration"))
+    if duration <= 0:
+        duration = _first_float(format_section.get("duration"))
     if duration <= 0:
         raise MediaShrinkerError(f"{source_path} has no usable duration")
 
@@ -1601,9 +1985,12 @@ def _first_float(*values: Any) -> float:
         if value is None or value == "N/A":
             continue
         try:
-            return float(value)
+            parsed = float(value)
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(parsed):
+            continue
+        return parsed
     return 0.0
 
 
@@ -1613,9 +2000,12 @@ def _first_int(*values: Any) -> int | None:
         if value is None or value == "N/A":
             continue
         try:
-            return int(float(value))
+            parsed = float(value)
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(parsed):
+            continue
+        return int(parsed)
     return None
 
 
@@ -1651,12 +2041,12 @@ def _execute_plan(
             output_path=temp_output,
             overwrite=True,
         )
-        try:
-            completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, shell=False
-            )
-        except FileNotFoundError as exc:
-            raise MediaShrinkerError(f"ffmpeg not found: {ffmpeg_path}") from exc
+        completed = _run_media_tool(
+            command,
+            tool="ffmpeg",
+            timeout=3600,
+            timeout_message=f"ffmpeg timed out for {source}",
+        )
 
         if completed.returncode != 0:
             raise MediaShrinkerError(
@@ -1693,6 +2083,19 @@ def _resolve_collision(path: Path, *, overwrite: bool) -> Path:
     raise FileExistsError(f"Could not find free output path for {path}")
 
 
+def _restore_timestamps(source_stat: os.stat_result, dest: Path) -> None:
+    """Best-effort copy of nanosecond atime/mtime from source_stat onto dest.
+
+    A read-only destination or a filesystem lacking timestamp support can make
+    os.utime raise OSError; that is non-critical metadata, so the failure is
+    swallowed to keep attribute preservation best-effort.
+    """
+    try:
+        os.utime(dest, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+    except OSError:
+        pass
+
+
 def _copy_extended_attributes(source: Path, dest: Path) -> None:
     """Copy extended attributes from source to dest if supported by OS."""
     if not all(hasattr(os, attr) for attr in ("listxattr", "getxattr", "setxattr")):
@@ -1721,13 +2124,17 @@ def _copy_macos_creation_time(
     creation_date = datetime.fromtimestamp(float(birthtime)).strftime(
         "%m/%d/%Y %H:%M:%S"
     )
-    subprocess.run(
-        [setfile_path, "-d", creation_date, str(dest.resolve())],
-        check=False,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+    try:
+        subprocess.run(
+            [setfile_path, "-d", creation_date, str(dest.resolve())],
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # Metadata restoration failure is non-fatal
 
 
 def _format_result(root: Path, result: ConversionResult) -> str:

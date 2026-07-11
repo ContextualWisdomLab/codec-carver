@@ -232,6 +232,18 @@ class ParseArgsConfigIntegrationTests(unittest.TestCase):
         self.assertEqual(args.target_bytes, media_shrinker.DEFAULT_TARGET_BYTES)
         self.assertTrue(args.include_under_limit)
 
+    def test_config_overrides_preset_but_not_explicit_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_config(root, {"flac_all": False, "silence_noise": "-42dB"})
+            args = media_shrinker.parse_args(
+                [str(root), "--preset", "music", "--silence-noise", "-44dB"]
+            )
+
+        self.assertFalse(args.flac_all)
+        self.assertEqual(args.silence_noise, "-44dB")
+        self.assertEqual(args.silence_min_duration_seconds, 3.0)
+
     def test_absent_config_keeps_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
