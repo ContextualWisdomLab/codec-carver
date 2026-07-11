@@ -760,6 +760,68 @@ class PlanningTests(unittest.TestCase):
             self.assertIsNone(result.output_path)
             self.assertFalse((output_dir / "source.wav.flac").exists())
 
+    def test_convert_segment_discards_output_that_has_no_probeable_duration(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.wav"
+            output_dir = root / "out"
+            fake_ffmpeg = root / "fake_ffmpeg.py"
+            source.write_bytes(b"source")
+            fake_ffmpeg.write_text(
+                "#!/usr/bin/env python3\n"
+                "import pathlib, sys\n"
+                "pathlib.Path(sys.argv[-1]).write_bytes(b'junk')\n",
+                encoding="utf-8",
+            )
+            fake_ffmpeg.chmod(0o755)
+            source_probe = MediaProbe(60.0, 1_000, "pcm_s16le", 1_411_200, False, "wav")
+            original_probe_media = media_shrinker.probe_media
+
+            def fake_probe_media(
+                path: Path,
+                *,
+                ffprobe_path: str = "ffprobe",
+                source_size: int | None = None,
+            ) -> MediaProbe:
+                # The source probes fine, but the generated output cannot be
+                # probed for a usable duration (e.g. a truncated/empty file that
+                # ffmpeg still exits 0 for). Real probe_media raises here.
+                if path.suffix == ".wav":
+                    return source_probe
+                raise MediaShrinkerError(f"{path} has no usable duration")
+
+            try:
+                media_shrinker.probe_media = fake_probe_media
+                result = media_shrinker._convert_segment(
+                    source,
+                    rel_source=Path("source.wav"),
+                    probe=source_probe,
+                    segment=MediaSegment(
+                        index=1,
+                        start_seconds=0.0,
+                        duration_seconds=60.0,
+                        total_segments=1,
+                    ),
+                    output_dir=output_dir,
+                    target_bytes=1_900_000_000,
+                    original_size=source.stat().st_size,
+                    ffmpeg_path=str(fake_ffmpeg),
+                    ffprobe_path="fake_ffprobe",
+                    prefer_flac=True,
+                    ffmpeg_threads=None,
+                    overwrite=False,
+                    max_segment_duration_seconds=14_400.0,
+                )
+            finally:
+                media_shrinker.probe_media = original_probe_media
+
+            self.assertEqual(result.status, "duration_mismatch")
+            self.assertIsNone(result.output_path)
+            self.assertIsNone(result.duration_seconds)
+            self.assertFalse((output_dir / "source.wav.flac").exists())
+
     def test_existing_output_with_wrong_duration_is_replaced_not_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
