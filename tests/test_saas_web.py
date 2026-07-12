@@ -590,6 +590,10 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertIn('id="batch_files"', html)
         self.assertIn('multiple', html)
         self.assertIn('accept="audio/*,video/*"', html)
+        self.assertIn('aria-describedby="batch_files_help batch_files_preview"', html)
+        self.assertIn('onchange="updateBatchFilePreview(this)"', html)
+        self.assertIn('id="batch_files_preview"', html)
+        self.assertIn('function updateBatchFilePreview(input)', html)
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
