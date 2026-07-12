@@ -53,9 +53,14 @@
 ## 2024-06-30 - Quick Preset Buttons for Raw Inputs
 **Learning:** Large raw byte inputs create high cognitive load and increase magnitude errors. Providing accessible quick preset buttons allows users to quickly select common values with confidence, reducing errors and reliance on manual typing.
 **Action:** Add quick preset buttons for common values near raw inputs (especially bytes), ensuring they are accessible via keyboard and properly associated with `aria-describedby`.
+## 2024-07-08 - Accessible Toggle Button Groups and Event Delegation
+**Learning:** Using `aria-describedby` to associate a container of quick preset buttons with an input causes excessive screen reader verbosity. Grouping buttons semantically with `role="group"` and `aria-label` is better. Also, relying on visual cues alone for active state in preset buttons is inaccessible; they must use `aria-pressed` to convey toggle state. Finally, event delegation and dataset attributes reduce DOM clutter and inline JavaScript, improving maintainability and removing duplicate data.
+**Action:** When implementing grouped option buttons, use `role="group"` with an `aria-label` on the container, implement `aria-pressed` for toggle states, and use event delegation combined with `data-*` attributes instead of inline `onclick` handlers.
+
 ## 2024-07-10 - Preset buttons active state with `aria-pressed`
 **Learning:** When implementing preset or toggle buttons in UI forms, using `aria-pressed` attributes dynamically managed by JavaScript is essential to track active states. This should always be paired with a corresponding CSS rule (e.g., `[aria-pressed="true"]`) to provide clear visual feedback, and the active state should be cleared when the user manually modifies the associated input field (distinguishable via `e.isTrusted` on the event).
 **Action:** Always implement `aria-pressed` with paired CSS for preset toggle buttons, and use `e.isTrusted` to properly reset states on manual user input.
+
 ## 2024-05-24 - Visual Feedback for aria-invalid
 **Learning:** Screen readers announce `aria-invalid="true"`, but sighted users need visual cues when form validation fails dynamically on the client side.
 **Action:** When setting `aria-invalid="true"` via JS, always pair it with a CSS rule like `input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }` for reliable visual feedback.

@@ -323,11 +323,17 @@ class TestSaasWeb(unittest.TestCase):
         html = response.text
 
         self.assertIn('class="preset-container"', html)
-        self.assertIn('onclick="setTargetBytes(26214400)" aria-pressed="false" data-bytes="26214400"', html)
-        self.assertIn('onclick="setTargetBytes(104857600)" aria-pressed="false" data-bytes="104857600"', html)
-        self.assertIn('onclick="setTargetBytes(524288000)" aria-pressed="false" data-bytes="524288000"', html)
-        self.assertIn('onclick="setTargetBytes(1073741824)" aria-pressed="false" data-bytes="1073741824"', html)
-        self.assertIn('function setTargetBytes(bytes)', html)
+        self.assertIn('data-bytes="26214400"', html)
+        self.assertIn('data-bytes="104857600"', html)
+        self.assertIn('data-bytes="524288000"', html)
+        self.assertIn('data-bytes="1073741824"', html)
+        self.assertIn("document.getElementById('preset_buttons_container').addEventListener('click'", html)
+        self.assertIn('aria-pressed="false"', html)
+        self.assertIn('role="group" aria-label="Preset target sizes"', html)
+        self.assertNotIn('onclick="setTargetBytes(', html)
+        self.assertIn("const presetValue = Number.parseInt(btn.dataset.bytes, 10);", html)
+        self.assertIn("!e.isTrusted && presetValue === val", html)
+        self.assertNotIn("btn.dataset.bytes === this.value", html)
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
