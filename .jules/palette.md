@@ -64,3 +64,7 @@
 ## 2024-05-24 - Visual Feedback for aria-invalid
 **Learning:** Screen readers announce `aria-invalid="true"`, but sighted users need visual cues when form validation fails dynamically on the client side.
 **Action:** When setting `aria-invalid="true"` via JS, always pair it with a CSS rule like `input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }` for reliable visual feedback.
+
+## 2024-07-12 - Inline validation for batch file inputs
+**Learning:** Selecting too many files in a batch input without immediate feedback causes frustration and forces users to discover errors only upon form submission. Validating the file limit client-side and showing an error message inline improves user experience.
+**Action:** When using `multiple` file inputs, always implement an `onchange` event listener to validate the file count and file size limits on the client side, using `setCustomValidity` and `aria-invalid` to provide immediate inline feedback before submission.
