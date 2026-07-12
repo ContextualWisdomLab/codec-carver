@@ -59,3 +59,6 @@
 ## 2024-05-24 - Visual Feedback for aria-invalid
 **Learning:** Screen readers announce `aria-invalid="true"`, but sighted users need visual cues when form validation fails dynamically on the client side.
 **Action:** When setting `aria-invalid="true"` via JS, always pair it with a CSS rule like `input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }` for reliable visual feedback.
+## 2024-05-19 - Support Drag-and-Drop for Multiple Files Upload
+**Learning:** Missing drop zone support for secondary forms in an application restricts usability, as users naturally expect the same affordances everywhere.
+**Action:** Expanded the drag-and-drop container zone logic to reuse event handlers across both single-file and multi-file input zones.
