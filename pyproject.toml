@@ -1,6 +1,83 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codec-carver"
+version = "0.1.0"
+description = "Carve long recordings into metadata-preserved, size-capped FLAC/Opus files."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Seongho Bae" }]
+keywords = ["audio", "flac", "opus", "ffmpeg", "compression", "archival", "transcription"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Conversion",
+    "Topic :: System :: Archiving :: Compression",
+    "Environment :: Console",
+]
+# The coverage workflow imports the web and MCP entry points through the test
+# suite, so the package metadata must expose those runtime dependencies without
+# relying on requirements.txt side effects.
+dependencies = [
+    "aiofiles==25.1.0",
+    "fastapi==0.139.0",
+    "httpx==0.28.1",
+    "mcp==1.28.1",
+    "python-multipart==0.0.32",
+    "uvicorn==0.51.0",
+]
+
+[project.optional-dependencies]
+web = ["fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1"]
+mcp = ["mcp==1.28.1"]
+transcribe = ["faster-whisper==1.2.1"]
+dev = [
+    "interrogate==1.7.0",
+    "fastapi==0.139.0",
+    "uvicorn==0.51.0",
+    "python-multipart==0.0.32",
+    "aiofiles==25.1.0",
+    "httpx==0.28.1",
+    "httpx2==2.5.0",
+    "mcp==1.28.1",
+]
+all = [
+    "fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1",
+    "mcp==1.28.1",
+    "faster-whisper==1.2.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/Seongho-Bae/codec-carver"
+Repository = "https://github.com/Seongho-Bae/codec-carver"
+
+[project.scripts]
+codec-carver = "media_shrinker:main"
+
+[tool.setuptools]
+py-modules = [
+    "chapters",
+    "config_file",
+    "diarize",
+    "job_store",
+    "mcp_driver",
+    "media_shrinker",
+    "presets",
+    "remote_input",
+    "saas_web",
+    "subtitles",
+    "summarize",
+    "transcribe",
+    "transcript_search",
+    "usage_metering",
+]
+
 [tool.interrogate]
 fail-under = 100
 exclude = [
     "scripts",
     "tests",
+    "fuzz",
 ]

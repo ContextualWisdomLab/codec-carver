@@ -4,6 +4,29 @@ Python CLI for carving long recordings into metadata-preserved FLAC/Opus files.
 
 Convert supported audio recordings to FLAC or, only when needed to fit each output under a target size, high-bitrate Opus. The tool preserves originals and writes generated files to a separate output directory. Each generated output is kept below the configured size target and below four hours; longer sources are split at long silence intervals when possible.
 
+## Install
+
+Requires Python 3.10+ and `ffmpeg`/`ffprobe` on `PATH`.
+
+```bash
+pip install -e .            # CLI core (stdlib only)
+pip install -e ".[web]"     # + FastAPI upload service
+pip install -e ".[mcp]"     # + MCP server
+```
+
+This installs the `codec-carver` console command:
+
+```bash
+codec-carver /path/to/recordings --execute --output-dir under_2gb
+```
+
+## Web service (Docker)
+
+```bash
+docker build -t codec-carver .
+docker run -p 8000:8000 codec-carver   # upload UI at http://localhost:8000
+```
+
 ## Verified command for this folder
 
 Run from `media_shrink_tool/`:
@@ -24,6 +47,28 @@ python3 media_shrinker.py .. \
 
 Outputs are written under `../under_2gb/`. Existing generated output directories and `split_over*` directories should be excluded from scans to avoid reconverting generated media. Files under 2GB are included by default; use `--over-limit-only` only when intentionally processing oversized sources exclusively.
 
+## Config file for repeat workflows
+
+Instead of re-typing long flag sets, store them once in a `.codec-carver.json` file in the scan root (checked first) or the current working directory:
+
+```json
+{
+    "flac_all": true,
+    "exclude_dir_prefix": ["split_over"],
+    "max_duration_seconds": 14400,
+    "workers": 2,
+    "output_dir": "under_2gb"
+}
+```
+
+Then repeat runs collapse to `python3 media_shrinker.py .. --execute --download-icloud`.
+
+- Keys map 1:1 to CLI options with dashes replaced by underscores (`--target-bytes` becomes `target_bytes`).
+- Explicit CLI flags always override config values; without a config file, behavior is identical to a plain invocation.
+- `root` and `--execute` are intentionally not configurable: the config file is discovered via the scan root, and a config file must never silently turn a dry run into a real conversion.
+- Unknown keys, wrong value types, and malformed JSON abort with a clear error listing the valid keys.
+- JSON is used instead of TOML because the stdlib TOML parser requires Python 3.11+, while this project also supports Python 3.10.
+
 ## Duration splitting
 
 - `--max-duration-seconds 14400` keeps every generated file below four hours.
@@ -32,13 +77,54 @@ Outputs are written under `../under_2gb/`. Existing generated output directories
 - Split outputs are named with part suffixes, for example `meeting.wav.part0001.flac`, `meeting.wav.part0002.flac`.
 - Tune silence detection with `--silence-noise` and `--silence-min-duration-seconds` when recordings need stricter or looser silence boundaries.
 
+## Metadata tagging
+
+- `--set-title`, `--set-artist`, `--set-album`, and `--set-comment` stamp the corresponding tags on every generated output, so archived files stay searchable in players and music libraries.
+- Generated commands already copy source metadata with `-map_metadata 0`; the `--set-*` values are injected after it, so each provided key overrides that specific source tag while all other source metadata is preserved (standard ffmpeg semantics).
+- When none of the `--set-*` options are passed, generated ffmpeg commands are byte-identical to the untagged behavior.
+- Values are passed to ffmpeg as single argv items without a shell, so spaces, quotes, and other special characters are safe as given.
+
+```bash
+python3 media_shrinker.py .. --execute \
+  --set-album "Board Meetings 2026" \
+  --set-comment "archived by codec-carver"
+```
+
+## Output format
+
+- `--format auto` (default) keeps the original behaviour: FLAC for lossless (or `--flac-all`) input, high-bitrate Opus otherwise.
+- `--format flac` / `--format opus` force that codec.
+- `--format aac` (`.m4a`) and `--format mp3` produce broadly-compatible lossy output fitted to the target size — useful for players/devices that don't handle FLAC or Opus.
+
+## Transcription (optional)
+
+Turn each shrunk recording into searchable text. With `--transcribe`, a text and
+JSON transcript sidecar is written next to every generated audio file
+(`recording.wav.flac` → `recording.wav.flac.txt` / `.json`):
+
+```bash
+python3 media_shrinker.py .. --execute --output-dir under_2gb --transcribe
+```
+
+Transcription is opt-in and uses [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper),
+imported lazily. Install it to enable the feature:
+
+```bash
+pip install faster-whisper        # then pass --transcribe
+```
+
+If it is not installed, conversion runs normally and transcription is skipped
+with a `TRANSCRIBE_SKIP` notice. A failing transcript never aborts a conversion.
+Choose a model with `--transcribe-model` (default `base`).
+
 ## Safety notes
 
 - Source files selected by the scan are protected from deletion or overwrite; keep `--output-dir` as a generated-only directory so excluded originals are never mistaken for stale generated outputs.
 - Generated output names include the original filename and suffix, for example `clip.wav.flac` and `clip.m4a.flac`, so same-stem inputs cannot collide during parallel conversion.
 - For lossy sources, `--flac-all` first creates FLAC to avoid additional loss; if that output exceeds the target size, the generated FLAC is removed and a high-bitrate Opus output is created instead.
 - Filesystem metadata preservation is best effort: permissions, nanosecond access/modified times, extended attributes, and macOS creation date are copied when the operating system allows it.
-- Video-containing files with supported container extensions are rejected; this tool preserves audio recordings only.
+- Video-containing files with supported container extensions are rejected unless
+  `--allow-video` is set to extract their audio track.
 - For real media runs, keep `--output-dir` as a generated-only directory such as `under_2gb` and avoid `--overwrite` unless that directory contains no original source files.
 
 ## Verification
