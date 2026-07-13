@@ -210,6 +210,14 @@ HTML_TEMPLATE = """
                 }
             });
 
+            document.getElementById('batch_preset_buttons_container').addEventListener('click', function(e) {
+                if (e.target.classList.contains('preset-btn')) {
+                    const input = document.getElementById('batch_target_bytes');
+                    input.value = e.target.dataset.bytes;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            });
+
             function updateFileSizePreview(input) {
                 const file = input.files[0];
                 const preview = document.getElementById('file_size_preview');
@@ -258,6 +266,32 @@ HTML_TEMPLATE = """
 
             });
 
+            document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
+                const val = parseInt(this.value, 10);
+                const preview = document.getElementById('batch_target_bytes_preview');
+                this.setCustomValidity('');
+                this.removeAttribute('aria-invalid');
+                preview.style.color = '#1e7e34';
+
+                const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
+                buttons.forEach(btn => {
+                    const presetValue = Number.parseInt(btn.dataset.bytes, 10);
+                    btn.setAttribute(
+                        'aria-pressed',
+                        !e.isTrusted && presetValue === val ? 'true' : 'false'
+                    );
+                });
+
+                if (isNaN(val) || val <= 0) {
+                    preview.innerText = 'Must be greater than 0.';
+                    preview.style.color = '#dc3545';
+                    this.setCustomValidity('Must be greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
+                } else {
+                    preview.innerText = formatBinaryBytes(val);
+                }
+            });
+
             document.getElementById('shrink-form').addEventListener('submit', function() {
                 const btn = document.getElementById('submit-btn');
                 setTimeout(() => {
@@ -279,14 +313,19 @@ HTML_TEMPLATE = """
                     return;
                 }
 
+                let totalSize = 0;
+                for (let i = 0; i < files.length; i++) {
+                    totalSize += files[i].size;
+                }
+
                 if (files.length > 20) {
                     input.setCustomValidity('Maximum is 20 files per batch.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected ' + files.length + ' files (exceeds 20 files limit)';
+                    preview.innerText = 'Selected ' + files.length + ' files (' + formatBinaryBytes(totalSize) + ', exceeds 20 files limit)';
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected ' + files.length + ' file(s)';
+                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
             }
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
@@ -353,8 +392,15 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="batch_target_bytes">Target Bytes (per file): <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="batch_target_bytes_help" required>
+                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="batch_target_bytes_help batch_target_bytes_preview" required>
                 <br><span id="batch_target_bytes_help" class="help-text">Maximum allowed size in bytes for each output file</span>
+                <br><span id="batch_target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
+                <div id="batch_preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes for batch">
+                    <button type="button" class="preset-btn" data-bytes="26214400" aria-pressed="false">25 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="104857600" aria-pressed="false">100 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="524288000" aria-pressed="false">500 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="1073741824" aria-pressed="false">1 GiB</button>
+                </div>
             </p>
             <button type="submit" id="batch-submit-btn">Upload and Shrink Batch</button>
         </form>
