@@ -461,9 +461,9 @@ class PlanningTests(unittest.TestCase):
 
         self.assertEqual(
             command[command.index("-i") + 1],
-            str(Path("-input.wav").resolve()),
+            f"{Path('-input.wav').resolve()}",
         )
-        self.assertEqual(command[-1], str(Path("-output.flac").resolve()))
+        self.assertEqual(command[-1], f"{Path('-output.flac').resolve()}")
 
     def test_lossy_audio_uses_highest_opus_bitrate_that_fits_target_with_safety_margin(
         self,
@@ -1610,7 +1610,7 @@ class ICloudDownloadTests(unittest.TestCase):
 
         self.assertEqual(
             command,
-            ["brctl", "download", str(Path("folder/file with spaces.m4a").resolve())],
+            ["brctl", "download", f"{Path('folder/file with spaces.m4a').resolve()}"],
         )
 
 
