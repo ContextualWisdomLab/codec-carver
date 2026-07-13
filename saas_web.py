@@ -267,6 +267,28 @@ HTML_TEMPLATE = """
                 }, 10);
             });
 
+            function updateBatchFilePreview(input) {
+                const preview = document.getElementById('batch_files_preview');
+                input.setCustomValidity('');
+                input.removeAttribute('aria-invalid');
+                preview.style.color = '#0f6674';
+
+                const files = input.files;
+                if (!files || files.length === 0) {
+                    preview.innerText = '';
+                    return;
+                }
+
+                if (files.length > 20) {
+                    input.setCustomValidity('Maximum is 20 files per batch.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' files (exceeds 20 files limit)';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+                preview.innerText = 'Selected ' + files.length + ' file(s)';
+            }
+
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
                 const btn = document.getElementById('batch-submit-btn');
                 setTimeout(() => {
@@ -314,6 +336,7 @@ HTML_TEMPLATE = """
                 let files = dt.files;
                 if (files.length) {
                     batchFileInput.files = files;
+                    updateBatchFilePreview(batchFileInput);
                 }
             }, false);
         }
@@ -324,8 +347,9 @@ HTML_TEMPLATE = """
         <form action="/shrink-batch" method="post" enctype="multipart/form-data" id="shrink-batch-form">
             <p>
                 <label for="batch_files">Media Files (up to 20): <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="file" id="batch_files" name="files" accept="audio/*,video/*" multiple aria-describedby="batch_files_help" required>
+                <input type="file" id="batch_files" name="files" accept="audio/*,video/*" multiple aria-describedby="batch_files_help batch_files_preview" required onchange="updateBatchFilePreview(this)">
                 <br><span id="batch_files_help" class="help-text">Select several audio or video files, or drag and drop them here. You get back one zip with every output plus a results.json manifest.</span>
+                <br><span id="batch_files_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>
             <p>
                 <label for="batch_target_bytes">Target Bytes (per file): <span class="required-star" aria-hidden="true">*</span></label><br>

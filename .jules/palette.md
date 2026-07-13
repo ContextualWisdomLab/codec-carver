@@ -67,3 +67,7 @@
 ## 2024-05-19 - Support Drag-and-Drop for Multiple Files Upload
 **Learning:** Missing drop zone support for secondary forms in an application restricts usability, as users naturally expect the same affordances everywhere.
 **Action:** Expanded the drag-and-drop container zone logic to reuse event handlers across both single-file and multi-file input zones.
+
+## 2024-07-12 - Inline validation for batch file inputs
+**Learning:** Selecting too many files in a batch input without immediate feedback causes frustration and forces users to discover errors only upon form submission. Validating the file limit client-side and showing an error message inline improves user experience.
+**Action:** When using `multiple` file inputs, always implement an `onchange` event listener to validate the file count and file size limits on the client side, using `setCustomValidity` and `aria-invalid` to provide immediate inline feedback before submission.
