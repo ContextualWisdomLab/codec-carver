@@ -60,3 +60,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2025-02-27 - [Uncontrolled Resource Consumption in Upload Endpoints]
+**Vulnerability:** File upload interfaces allocated temp directories before running input validation and filename sanitization.
+**Learning:** Allocating system resources (like temp folders on disk) prior to executing input validation exposes the application to resource exhaustion or denial of service (DoS) vulnerabilities if an attacker sends numerous malicious or invalid requests.
+**Prevention:** To prevent Uncontrolled Resource Consumption vulnerabilities, always perform input validation and data sanitization *before* allocating resources (e.g., `tempfile.mkdtemp()`). This fail-fast approach avoids leaking temporary directories on invalid requests.

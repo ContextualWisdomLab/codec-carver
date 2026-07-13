@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 from job_store import JobStore
 import media_shrinker
 
@@ -401,7 +402,7 @@ def _download_path_for_outputs(
     return _zip_outputs(outputs, dest_dir, archive_name)
 
 
-def _persist_upload(file: UploadFile) -> tuple[Path, Path, Path, Path]:
+def _persist_upload(file: UploadFile, safe_filename: str) -> tuple[Path, Path, Path, Path]:
     """Save an uploaded file into a fresh temp workspace.
 
     Returns ``(temp_dir_path, input_dir, output_dir, source_path)``. Any
@@ -415,10 +416,6 @@ def _persist_upload(file: UploadFile) -> tuple[Path, Path, Path, Path]:
         output_dir = temp_dir_path / "output"
         input_dir.mkdir()
         output_dir.mkdir()
-
-        safe_filename = Path(file.filename).name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename
         bytes_written = 0
@@ -468,8 +465,12 @@ def shrink_media(
     if error is not None:
         return {"error": error}
 
+    safe_filename = Path(file.filename or "").name
+    if not safe_filename or safe_filename in (".", ".."):
+        safe_filename = "upload.tmp"
+
     try:
-        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file)
+        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file, safe_filename)
     except Exception:
         logger.exception("Failed to prepare uploaded media")
         return {"error": "Upload processing failed"}
@@ -537,6 +538,46 @@ def shrink_media_batch(
             content={"error": f"Too many files. Maximum is {MAX_BATCH_FILES} files per batch."},
         )
 
+    preprocessed_files = []
+    manifest = []
+    for index, upload in enumerate(files):
+        safe_filename = Path(upload.filename or "").name
+        if not safe_filename or safe_filename in (".", ".."):
+            safe_filename = "upload.tmp"
+
+        entry = {
+            "index": index,
+            "filename": safe_filename,
+            "status": "error",
+            "output_name": None,
+            "output_bytes": None,
+            "error": None,
+        }
+
+        error = _validate_request(upload, target_bytes)
+        if error is not None:
+            entry["error"] = error
+            manifest.append(entry)
+            continue
+
+        manifest.append(entry)
+        preprocessed_files.append((index, upload, safe_filename, entry))
+
+    if not preprocessed_files:
+        try:
+            temp_dir_path = Path(tempfile.mkdtemp(prefix="codec_carver_batch_"))
+            zip_path = temp_dir_path / "codec_carver_batch.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
+                archive.writestr("results.json", json.dumps(manifest, indent=2))
+            return FileResponse(
+                path=zip_path,
+                filename=zip_path.name,
+                media_type="application/zip",
+                background=BackgroundTask(cleanup_temp_dir, temp_dir_path)
+            )
+        except Exception:
+            return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
+
     try:
         temp_dir_path = Path(tempfile.mkdtemp(prefix="codec_carver_batch_"))
     except Exception:
@@ -544,29 +585,10 @@ def shrink_media_batch(
         return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
 
     workspace_root = temp_dir_path.resolve()
-    manifest = []
     zip_path = temp_dir_path / "codec_carver_batch.zip"
     try:
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
-            for index, upload in enumerate(files):
-                safe_filename = Path(upload.filename or "").name
-                if not safe_filename or safe_filename in (".", ".."):
-                    safe_filename = "upload.tmp"
-                entry = {
-                    "index": index,
-                    "filename": safe_filename,
-                    "status": "error",
-                    "output_name": None,
-                    "output_bytes": None,
-                    "error": None,
-                }
-                manifest.append(entry)
-
-                error = _validate_request(upload, target_bytes)
-                if error is not None:
-                    entry["error"] = error
-                    continue
-
+            for index, upload, safe_filename, entry in preprocessed_files:
                 input_dir = temp_dir_path / f"input_{index}"
                 output_dir = temp_dir_path / f"output_{index}"
                 try:
@@ -738,8 +760,12 @@ def submit_job(
     if error is not None:
         return JSONResponse(status_code=400, content={"error": error})
 
+    safe_filename = Path(file.filename or "").name
+    if not safe_filename or safe_filename in (".", ".."):
+        safe_filename = "upload.tmp"
+
     try:
-        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file)
+        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file, safe_filename)
     except Exception:
         logger.exception("Failed to prepare uploaded media")
         return JSONResponse(
