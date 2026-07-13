@@ -299,21 +299,29 @@ HTML_TEMPLATE = """
             });
 
         const dropZone = document.getElementById('drop-zone');
+        const batchDropZone = document.getElementById('batch-drop-zone');
         const fileInput = document.getElementById('file');
+        const batchFileInput = document.getElementById('batch_files');
+
+        [dropZone, batchDropZone].forEach(zone => {
+            if (!zone) return;
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                zone.addEventListener(eventName, preventDefaults, false);
+            });
+            ['dragenter', 'dragover'].forEach(eventName => {
+                zone.addEventListener(eventName, () => zone.classList.add('dragover'), false);
+            });
+            ['dragleave', 'drop'].forEach(eventName => {
+                zone.addEventListener(eventName, () => zone.classList.remove('dragover'), false);
+            });
+        });
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            dropZone.addEventListener(eventName, preventDefaults, false);
             document.body.addEventListener(eventName, preventDefaults, false);
         });
         function preventDefaults (e) {
             e.preventDefault();
             e.stopPropagation();
         }
-        ['dragenter', 'dragover'].forEach(eventName => {
-            dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
-        });
-        ['dragleave', 'drop'].forEach(eventName => {
-            dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false);
-        });
         dropZone.addEventListener('drop', (e) => {
             let dt = e.dataTransfer;
             let files = dt.files;
@@ -322,15 +330,25 @@ HTML_TEMPLATE = """
                 updateFileSizePreview(fileInput);
             }
         }, false);
+        if (batchDropZone) {
+            batchDropZone.addEventListener('drop', (e) => {
+                let dt = e.dataTransfer;
+                let files = dt.files;
+                if (files.length) {
+                    batchFileInput.files = files;
+                    updateBatchFilePreview(batchFileInput);
+                }
+            }, false);
+        }
         </script>
     </div>
-    <div class="box" style="margin-top: 20px;">
+    <div class="box" id="batch-drop-zone" style="margin-top: 20px;">
         <h2>Shrink Multiple Files</h2>
         <form action="/shrink-batch" method="post" enctype="multipart/form-data" id="shrink-batch-form">
             <p>
                 <label for="batch_files">Media Files (up to 20): <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="batch_files" name="files" accept="audio/*,video/*" multiple aria-describedby="batch_files_help batch_files_preview" required onchange="updateBatchFilePreview(this)">
-                <br><span id="batch_files_help" class="help-text">Select several audio or video files. You get back one zip with every output plus a results.json manifest.</span>
+                <br><span id="batch_files_help" class="help-text">Select several audio or video files, or drag and drop them here. You get back one zip with every output plus a results.json manifest.</span>
                 <br><span id="batch_files_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>
             <p>
