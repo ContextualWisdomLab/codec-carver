@@ -331,8 +331,8 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('aria-pressed="false"', html)
         self.assertIn('role="group" aria-label="Preset target sizes"', html)
         self.assertNotIn('onclick="setTargetBytes(', html)
-        self.assertIn("const presetValue = Number.parseInt(btn.dataset.bytes, 10);", html)
-        self.assertIn("!e.isTrusted && presetValue === val", html)
+        self.assertIn("val: Number.parseInt(btn.dataset.bytes, 10)", html)
+        self.assertIn("!e.isTrusted && btn.val === val", html)
         self.assertNotIn("btn.dataset.bytes === this.value", html)
 
 
