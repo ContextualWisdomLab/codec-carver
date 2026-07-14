@@ -255,7 +255,9 @@ HTML_TEMPLATE = """
                     );
                 });
 
-                if (isNaN(val) || val <= 0) {
+                if (this.value === '') {
+                    preview.innerText = '';
+                } else if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
@@ -282,7 +284,9 @@ HTML_TEMPLATE = """
                     );
                 });
 
-                if (isNaN(val) || val <= 0) {
+                if (this.value === '') {
+                    preview.innerText = '';
+                } else if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
