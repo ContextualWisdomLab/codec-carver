@@ -239,19 +239,23 @@ HTML_TEMPLATE = """
                 preview.innerText = 'Selected file size: ' + text;
             }
 
+            const targetBytesPreview = document.getElementById('target_bytes_preview');
+            const targetBytesButtons = Array.from(document.querySelectorAll('#preset_buttons_container .preset-btn')).map(btn => ({
+                el: btn,
+                val: Number.parseInt(btn.dataset.bytes, 10)
+            }));
+
             document.getElementById('target_bytes').addEventListener('input', function(e) {
                 const val = parseInt(this.value, 10);
-                const preview = document.getElementById('target_bytes_preview');
+                const preview = targetBytesPreview;
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
 
-                const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
-                buttons.forEach(btn => {
-                    const presetValue = Number.parseInt(btn.dataset.bytes, 10);
-                    btn.setAttribute(
+                targetBytesButtons.forEach(btn => {
+                    btn.el.setAttribute(
                         'aria-pressed',
-                        !e.isTrusted && presetValue === val ? 'true' : 'false'
+                        !e.isTrusted && btn.val === val ? 'true' : 'false'
                     );
                 });
 
@@ -266,19 +270,23 @@ HTML_TEMPLATE = """
 
             });
 
+            const batchTargetBytesPreview = document.getElementById('batch_target_bytes_preview');
+            const batchTargetBytesButtons = Array.from(document.querySelectorAll('#batch_preset_buttons_container .preset-btn')).map(btn => ({
+                el: btn,
+                val: Number.parseInt(btn.dataset.bytes, 10)
+            }));
+
             document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
                 const val = parseInt(this.value, 10);
-                const preview = document.getElementById('batch_target_bytes_preview');
+                const preview = batchTargetBytesPreview;
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
 
-                const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
-                buttons.forEach(btn => {
-                    const presetValue = Number.parseInt(btn.dataset.bytes, 10);
-                    btn.setAttribute(
+                batchTargetBytesButtons.forEach(btn => {
+                    btn.el.setAttribute(
                         'aria-pressed',
-                        !e.isTrusted && presetValue === val ? 'true' : 'false'
+                        !e.isTrusted && btn.val === val ? 'true' : 'false'
                     );
                 });
 
