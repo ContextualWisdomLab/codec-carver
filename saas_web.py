@@ -239,6 +239,8 @@ HTML_TEMPLATE = """
                 preview.innerText = 'Selected file size: ' + text;
             }
 
+            // Optimize: Cache DOM references and precompute button values outside the input event listener.
+            // This prevents repeating O(N) DOM traversal and string parsing on every keystroke.
             const targetBytesPreview = document.getElementById('target_bytes_preview');
             const targetBytesButtons = Array.from(document.querySelectorAll('#preset_buttons_container .preset-btn')).map(btn => ({
                 el: btn,
@@ -270,6 +272,8 @@ HTML_TEMPLATE = """
 
             });
 
+            // Optimize: Cache DOM references and precompute button values outside the input event listener.
+            // This prevents repeating O(N) DOM traversal and string parsing on every keystroke.
             const batchTargetBytesPreview = document.getElementById('batch_target_bytes_preview');
             const batchTargetBytesButtons = Array.from(document.querySelectorAll('#batch_preset_buttons_container .preset-btn')).map(btn => ({
                 el: btn,
