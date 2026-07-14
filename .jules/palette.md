@@ -74,3 +74,6 @@
 ## 2024-07-13 - 일괄 업로드 폼에 프리셋 버튼 및 파일 크기 미리보기 추가
 **Learning:** 일괄 파일 업로드 폼에서 대상 바이트(target_bytes) 입력 필드만 제공하면 사용자가 원하는 용량을 바이트 단위로 정확히 계산하기 어려워 사용성이 떨어집니다. 사용자가 여러 파일을 업로드할 때 총 파일 크기를 파악하지 못해 업로드 제한을 초과하거나 잘못된 대상 바이트를 설정할 위험이 큽니다.
 **Action:** 일괄 파일 업로드 폼에도 단일 파일 업로드 폼과 동일하게 대상 바이트를 쉽게 선택할 수 있는 빠른 프리셋 버튼을 추가하고, `onchange` 이벤트 발생 시 선택된 모든 파일의 크기를 합산하여 사람이 읽기 쉬운 단위(MiB, GiB 등)로 미리보기를 제공하도록 JavaScript 로직을 개선했습니다.
+## 2024-07-15 - Handle Empty Input State in Numeric Validation
+**Learning:** When using JavaScript to validate numeric inputs (e.g., parsing with `parseInt`), an empty input field is parsed as `NaN`. If `isNaN` checks are not explicitly guarded against an empty string, clearing the input field will prematurely trigger a validation error (e.g., "Must be greater than 0"), rather than letting HTML5's native `required` attribute handle the empty state smoothly.
+**Action:** When implementing JavaScript inline validation for numeric inputs, explicitly handle the empty string state (e.g., `if (this.value === '')`) to clear custom errors and `innerText` before applying `isNaN` checks.
