@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Display;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -166,22 +167,19 @@ pub fn inventory(root: &Path, threads: Option<usize>) -> Result<InventoryManifes
         .into_iter()
         .filter_entry(|entry| !is_excluded_entry(entry, &canonical_root))
     {
-        let entry = match entry {
-            Ok(value) => value,
-            Err(error) => {
-                errors.push(error.to_string());
+        if let Some(entry) = record_error(entry, &mut errors) {
+            if !entry.file_type().is_file() {
                 continue;
             }
-        };
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let Some((kind, extension)) = classify(entry.path()) else {
-            continue;
-        };
-        match pending_file(&canonical_root, entry.path(), kind, extension) {
-            Ok(value) => pending.push(value),
-            Err(error) => errors.push(error.to_string()),
+            let Some((kind, extension)) = classify(entry.path()) else {
+                continue;
+            };
+            if let Some(value) = record_error(
+                pending_file(&canonical_root, entry.path(), kind, extension),
+                &mut errors,
+            ) {
+                pending.push(value);
+            }
         }
     }
 
@@ -242,7 +240,7 @@ pub fn inventory_to_json(
     threads: Option<usize>,
 ) -> Result<String> {
     let manifest = inventory(root, threads)?;
-    let payload = serde_json::to_string_pretty(&manifest)?;
+    let payload = pretty_json(&manifest);
     if let Some(path) = output {
         atomic_write(path, payload.as_bytes())?;
     }
@@ -270,10 +268,7 @@ pub fn inspect_relative(root: &Path, relative_path: &Path) -> Result<FileRecord>
 
 /// Inspect one file and serialize its stable record schema.
 pub fn inspect_relative_to_json(root: &Path, relative_path: &Path) -> Result<String> {
-    Ok(serde_json::to_string_pretty(&inspect_relative(
-        root,
-        relative_path,
-    )?)?)
+    Ok(pretty_json(&inspect_relative(root, relative_path)?))
 }
 
 /// Stream one file into local scratch storage while computing its SHA-256 once.
@@ -297,11 +292,7 @@ pub fn stage_relative(
         .ok_or_else(|| anyhow!("unsupported audio/TMK file: {}", canonical_path.display()))?;
     let pending = pending_file(&canonical_root, &canonical_path, kind, extension.clone())?;
 
-    fs::create_dir_all(staging_dir)
-        .with_context(|| format!("cannot create staging directory {}", staging_dir.display()))?;
-    let canonical_staging = staging_dir
-        .canonicalize()
-        .with_context(|| format!("cannot resolve staging directory {}", staging_dir.display()))?;
+    let canonical_staging = prepare_staging_directory(staging_dir)?;
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -360,11 +351,29 @@ pub fn stage_relative_to_json(
     relative_path: &Path,
     staging_dir: &Path,
 ) -> Result<String> {
-    Ok(serde_json::to_string_pretty(&stage_relative(
-        root,
-        relative_path,
-        staging_dir,
-    )?)?)
+    stage_relative(root, relative_path, staging_dir).map(|result| pretty_json(&result))
+}
+
+fn record_error<T, E: Display>(
+    result: std::result::Result<T, E>,
+    errors: &mut Vec<String>,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            errors.push(error.to_string());
+            None
+        }
+    }
+}
+
+fn prepare_staging_directory(staging_dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(staging_dir)
+        .with_context(|| format!("cannot create staging directory {}", staging_dir.display()))?;
+    staging_dir.canonicalize().context(format!(
+        "cannot resolve staging directory {}",
+        staging_dir.display()
+    ))
 }
 
 fn is_excluded_entry(entry: &DirEntry, root: &Path) -> bool {
@@ -617,19 +626,16 @@ fn infer_recorded_at(
             return (Some(value.to_rfc3339()), Some(TimeSource::CompactFilename));
         }
     }
-    if let Ok(created) = metadata.created() {
-        return (
-            Some(system_time_to_rfc3339(created)),
-            Some(TimeSource::FilesystemCreated),
-        );
-    }
-    if let Ok(modified) = metadata.modified() {
-        return (
-            Some(system_time_to_rfc3339(modified)),
-            Some(TimeSource::FilesystemModified),
-        );
-    }
-    (None, None)
+    let modified = metadata
+        .modified()
+        .map(|time| (time, TimeSource::FilesystemModified));
+    metadata
+        .created()
+        .map(|time| (time, TimeSource::FilesystemCreated))
+        .or(modified)
+        .map_or((None, None), |(time, source)| {
+            (Some(system_time_to_rfc3339(time)), Some(source))
+        })
 }
 
 fn system_time_to_rfc3339(time: SystemTime) -> String {
@@ -770,9 +776,10 @@ pub fn apply_plan(plan: &MutationPlan, execute: bool) -> Result<ApplyJournal> {
         for operation in &plan.operations {
             let source = root.join(&operation.source);
             let destination = root.join(&operation.destination);
-            if let Some(parent) = destination.parent() {
-                fs::create_dir_all(parent)?;
-            }
+            let parent = destination
+                .parent()
+                .expect("a path joined to a canonical root always has a parent");
+            fs::create_dir_all(parent)?;
             if let Err(error) = fs::rename(&source, &destination) {
                 for rollback in completed.iter().rev() {
                     let rollback: &MutationOperation = rollback;
@@ -813,7 +820,7 @@ pub fn apply_plan_file(
     )
     .with_context(|| format!("invalid plan JSON {}", plan_path.display()))?;
     let journal = apply_plan(&plan, execute)?;
-    let payload = serde_json::to_string_pretty(&journal)?;
+    let payload = pretty_json(&journal);
     if let Some(path) = journal_path {
         atomic_write(path, payload.as_bytes())?;
     }
@@ -821,7 +828,10 @@ pub fn apply_plan_file(
 }
 
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     let file_name = path
         .file_name()
@@ -837,9 +847,56 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn pretty_json<T: Serialize>(value: &T) -> String {
+    serde_json::to_string_pretty(value)
+        .expect("serializing the fixed Codec Carver schema cannot fail")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn temporary_directory(label: &str) -> PathBuf {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "codec-carver-core-{label}-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn record(
+        path: &str,
+        kind: FileKind,
+        sha256: Option<&str>,
+        recorded_at: Option<&str>,
+    ) -> FileRecord {
+        FileRecord {
+            path: path.to_string(),
+            kind,
+            extension: match kind {
+                FileKind::Audio => "wav",
+                FileKind::Tmk => "tmk",
+            }
+            .to_string(),
+            size_bytes: 5,
+            materialized: true,
+            sha256: sha256.map(ToOwned::to_owned),
+            recorded_at: recorded_at.map(ToOwned::to_owned),
+            time_source: Some(TimeSource::CompactFilename),
+            location: None,
+            tmk_path: None,
+            tmk_marker_count: None,
+            tmk_last_marker_seconds: None,
+            error: None,
+        }
+    }
 
     #[test]
     fn parses_sony_tmk_markers_as_minute_offsets() {
@@ -868,6 +925,7 @@ mod tests {
             sidecar_key(Path::new("FOLDER01/231018_1018(1).wav"), true),
             "FOLDER01\u{0}231018_1018"
         );
+        assert_eq!(sidecar_key(Path::new(""), false), "\0");
     }
 
     #[test]
@@ -903,11 +961,9 @@ mod tests {
 
     #[test]
     fn stages_and_hashes_one_file_in_a_single_stream() {
-        let base =
-            std::env::temp_dir().join(format!("codec-carver-core-stage-{}", std::process::id()));
+        let base = temporary_directory("stage");
         let root = base.join("library");
         let staging = base.join("staging");
-        let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("240102_0304.wav"), b"audio").unwrap();
         let result = stage_relative(&root, Path::new("240102_0304.wav"), &staging).unwrap();
@@ -918,6 +974,452 @@ mod tests {
         assert_eq!(fs::read(&result.staged_path).unwrap(), b"audio");
         let repeated = stage_relative(&root, Path::new("240102_0304.wav"), &staging).unwrap();
         assert_eq!(repeated.staged_path, result.staged_path);
+
+        fs::write(&result.staged_path, b"corrupt").unwrap();
+        let repaired = stage_relative(&root, Path::new("240102_0304.wav"), &staging).unwrap();
+        assert_eq!(fs::read(&repaired.staged_path).unwrap(), b"audio");
+
+        fs::write(
+            root.join("240102_0304.tmk"),
+            b"[00000:01.25]\r\n[00001:02.50]\r\n",
+        )
+        .unwrap();
+        let tmk = stage_relative_to_json(&root, Path::new("240102_0304.tmk"), &staging).unwrap();
+        let tmk: StageResult = serde_json::from_str(&tmk).unwrap();
+        assert_eq!(tmk.record.tmk_marker_count, Some(2));
+        assert_eq!(tmk.record.tmk_last_marker_seconds, Some(62.5));
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn inventories_hashes_correlates_and_serializes_a_library() {
+        let root = temporary_directory("inventory");
+        let folder = root.join("FOLDER01");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("240102_0304.wav"), b"audio").unwrap();
+        fs::write(folder.join("240102_0304(1).wav"), b"audio").unwrap();
+        fs::write(
+            folder.join("240102_0304.tmk"),
+            b"[00000:01.25]\r\n[00001:02.50]\r\n",
+        )
+        .unwrap();
+        fs::write(
+            folder.join("2024-01-03T04:05:06+09:00 양평동4가 8.m4a"),
+            b"other audio",
+        )
+        .unwrap();
+        fs::write(folder.join("readme.txt"), b"ignored").unwrap();
+        for excluded in [".git", ".codec-carver", "target", ".venv"] {
+            let directory = root.join(excluded);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("240101_0000.wav"), b"ignored").unwrap();
+        }
+
+        let manifest = inventory(&root, Some(2)).unwrap();
+        assert_eq!(manifest.audio_file_count, 3);
+        assert_eq!(manifest.tmk_file_count, 1);
+        assert_eq!(manifest.total_audio_bytes, 5 + 5 + 11);
+        assert_eq!(manifest.duplicate_groups.len(), 1);
+        assert_eq!(
+            manifest.duplicate_groups[0].canonical_path,
+            "FOLDER01/240102_0304.wav"
+        );
+        assert_eq!(
+            manifest.duplicate_groups[0].duplicate_paths,
+            ["FOLDER01/240102_0304(1).wav"]
+        );
+        assert!(manifest.earliest_recording_at.is_some());
+        assert!(
+            manifest
+                .files
+                .iter()
+                .filter(|record| record.kind == FileKind::Audio)
+                .all(
+                    |record| record.tmk_path.as_deref() == Some("FOLDER01/240102_0304.tmk")
+                        || record.path.contains("2024-01-03")
+                )
+        );
+        assert_eq!(manifest.dataless_file_count, 0);
+        assert!(manifest.errors.is_empty());
+
+        let output = root.join("result/inventory.json");
+        let payload = inventory_to_json(&root, Some(&output), None).unwrap();
+        assert_eq!(
+            serde_json::from_str::<InventoryManifest>(&payload)
+                .unwrap()
+                .audio_file_count,
+            3
+        );
+        assert!(output.is_file());
+        assert!(
+            inventory_to_json(&root, None, Some(1))
+                .unwrap()
+                .contains("audio_file_count")
+        );
+        let inspected =
+            inspect_relative_to_json(&root, Path::new("FOLDER01/240102_0304.tmk")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<FileRecord>(&inspected)
+                .unwrap()
+                .tmk_marker_count,
+            Some(2)
+        );
+        assert!(default_hash_threads() >= 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inventory_and_inspection_errors_are_explicit() {
+        let root = temporary_directory("errors");
+        let mut errors = Vec::new();
+        assert_eq!(
+            record_error::<u8, _>(Err(io::Error::other("synthetic error")), &mut errors),
+            None
+        );
+        assert_eq!(errors, ["synthetic error"]);
+        assert_eq!(
+            record_error::<u8, _>(Err(anyhow!("synthetic anyhow error")), &mut errors),
+            None
+        );
+        let missing_walk_root = root.join("missing-walk-root");
+        let walk_error = WalkDir::new(&missing_walk_root)
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap_err();
+        assert!(record_error::<DirEntry, _>(Err(walk_error), &mut errors).is_none());
+        let regular_file = root.join("not-a-directory");
+        fs::write(&regular_file, b"file").unwrap();
+        assert!(inventory(&regular_file, Some(1)).is_err());
+        assert!(inventory(&root.join("missing"), Some(1)).is_err());
+
+        fs::write(root.join("unsupported.txt"), b"text").unwrap();
+        assert!(inspect_relative(&root.join("missing-root"), Path::new("a.wav")).is_err());
+        assert!(inspect_relative(&root, Path::new("unsupported.txt")).is_err());
+        assert!(inspect_relative(&root, Path::new("missing.wav")).is_err());
+        assert!(inspect_relative(&root, Path::new("../escape.wav")).is_err());
+        assert!(
+            stage_relative(
+                &root.join("missing-root"),
+                Path::new("a.wav"),
+                &root.join("stage")
+            )
+            .is_err()
+        );
+        assert!(stage_relative(&root, Path::new("missing.wav"), &root.join("stage")).is_err());
+        assert!(stage_relative(&root, Path::new("unsupported.txt"), &root.join("stage")).is_err());
+        assert!(stage_relative(&root, Path::new("/absolute.wav"), &root.join("stage")).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt, symlink};
+
+            let outside = temporary_directory("outside");
+            fs::write(outside.join("240102_0304.wav"), b"outside").unwrap();
+            symlink(outside.join("240102_0304.wav"), root.join("escape.wav")).unwrap();
+            assert!(inspect_relative(&root, Path::new("escape.wav")).is_err());
+            assert!(stage_relative(&root, Path::new("escape.wav"), &root.join("stage")).is_err());
+
+            let unreadable = root.join("240102_0304.wav");
+            fs::write(&unreadable, b"audio").unwrap();
+            let original_permissions = fs::metadata(&unreadable).unwrap().permissions();
+            fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+            let pending =
+                pending_file(&root, &unreadable, FileKind::Audio, "wav".to_string()).unwrap();
+            assert!(process_file(&pending).error.is_some());
+            assert!(
+                stage_relative(&root, Path::new("240102_0304.wav"), &root.join("stage")).is_err()
+            );
+
+            let blocked = root.join("blocked");
+            fs::create_dir_all(&blocked).unwrap();
+            fs::write(blocked.join("240102_0304.wav"), b"blocked").unwrap();
+            let blocked_permissions = fs::metadata(&blocked).unwrap().permissions();
+            fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
+            let blocked_manifest = inventory(&root, Some(1)).unwrap();
+            fs::set_permissions(&blocked, blocked_permissions).unwrap();
+            assert!(!blocked_manifest.errors.is_empty());
+            fs::set_permissions(&unreadable, original_permissions).unwrap();
+
+            let staging_file = root.join("staging-file");
+            fs::write(&staging_file, b"not a directory").unwrap();
+            assert!(stage_relative(&root, Path::new("240102_0304.wav"), &staging_file).is_err());
+            fs::remove_dir_all(outside).unwrap();
+        }
+
+        assert!(
+            pending_file(
+                &root,
+                &root.join("missing.wav"),
+                FileKind::Audio,
+                "wav".to_string()
+            )
+            .is_err()
+        );
+
+        let synthetic_dataless = PendingFile {
+            absolute_path: root.join("dataless.wav"),
+            relative_path: "dataless.wav".to_string(),
+            kind: FileKind::Audio,
+            extension: "wav".to_string(),
+            size_bytes: 10,
+            materialized: false,
+            recorded_at: None,
+            time_source: None,
+            location: None,
+        };
+        let record = process_file(&synthetic_dataless);
+        assert!(record.error.unwrap().contains("dataless placeholder"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hashes_captures_and_time_inference_cover_fallbacks() {
+        let root = temporary_directory("helpers");
+        let audio = root.join("plain.wav");
+        fs::write(&audio, b"audio").unwrap();
+        let mut captured = Vec::new();
+        assert_eq!(
+            hash_file(&audio, Some(&mut captured)).unwrap(),
+            "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b"
+        );
+        assert_eq!(captured, b"audio");
+        assert!(hash_file(&root.join("missing.wav"), None).is_err());
+
+        let copied = root.join("copied.wav");
+        let mut copied_bytes = Vec::new();
+        copy_and_hash_file(&audio, &copied, Some(&mut copied_bytes)).unwrap();
+        assert_eq!(copied_bytes, b"audio");
+        assert!(copy_and_hash_file(&root.join("missing"), &copied, None).is_err());
+        assert!(copy_and_hash_file(&audio, &root, None).is_err());
+
+        let metadata = fs::metadata(&audio).unwrap();
+        assert_eq!(
+            infer_recorded_at("2024-01-02T03:04:05+09:00.wav", &metadata).1,
+            Some(TimeSource::IsoFilename)
+        );
+        assert_eq!(
+            infer_recorded_at("240102_0304.wav", &metadata).1,
+            Some(TimeSource::CompactFilename)
+        );
+        assert!(infer_recorded_at("991332_9999.wav", &metadata).0.is_some());
+        assert!(infer_recorded_at("plain.wav", &metadata).0.is_some());
+        assert!(!system_time_to_rfc3339(SystemTime::now()).is_empty());
+        assert_eq!(infer_location(""), None);
+        assert_eq!(
+            infer_location("강남로 12 (1).wav"),
+            Some("강남로 12".to_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn duplicate_selection_uses_time_metadata_depth_and_path() {
+        let hash = "a".repeat(64);
+        let mut files = vec![
+            record(
+                "deep/path/240101_0000(1).wav",
+                FileKind::Audio,
+                Some(&hash),
+                Some("2024-01-01T00:00:00+09:00"),
+            ),
+            record(
+                "240101_0000.wav",
+                FileKind::Audio,
+                Some(&hash),
+                Some("2024-01-01T00:00:00+09:00"),
+            ),
+            record(
+                "later.wav",
+                FileKind::Audio,
+                Some(&hash),
+                Some("2024-02-01T00:00:00+09:00"),
+            ),
+            record("sidecar.tmk", FileKind::Tmk, Some(&hash), None),
+            record("unhashed.wav", FileKind::Audio, None, None),
+        ];
+        files[0].tmk_path = Some("deep/path/240101_0000.tmk".to_string());
+        files[0].location = Some("강남로 12".to_string());
+        let groups = find_duplicate_groups(&files);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].canonical_path, "240101_0000.wav");
+        assert_eq!(groups[0].duplicate_paths.len(), 2);
+        assert_eq!(
+            groups[0].earliest_recorded_at.as_deref(),
+            Some("2024-01-01T00:00:00+09:00")
+        );
+        assert_ne!(canonical_cmp(&files[0], &files[1]), Ordering::Equal);
+    }
+
+    #[test]
+    fn mutation_plans_validate_execute_serialize_and_rollback() {
+        let root = temporary_directory("mutations");
+        fs::write(root.join("a.wav"), b"a").unwrap();
+        fs::write(root.join("b.wav"), b"b").unwrap();
+        let plan = MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![
+                MutationOperation {
+                    action: MutationAction::Rename,
+                    source: "a.wav".to_string(),
+                    destination: "renamed/a.wav".to_string(),
+                    sha256: None,
+                },
+                MutationOperation {
+                    action: MutationAction::Quarantine,
+                    source: "b.wav".to_string(),
+                    destination: "quarantine/b.wav".to_string(),
+                    sha256: None,
+                },
+            ],
+        };
+        let dry_run = apply_plan(&plan, false).unwrap();
+        assert!(!dry_run.executed);
+        assert!(dry_run.completed.is_empty());
+        let executed = apply_plan(&plan, true).unwrap();
+        assert!(executed.executed);
+        assert_eq!(executed.completed.len(), 2);
+        assert!(root.join("renamed/a.wav").is_file());
+        assert!(root.join("quarantine/b.wav").is_file());
+
+        fs::write(root.join("c.wav"), b"c").unwrap();
+        let file_plan = MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![MutationOperation {
+                action: MutationAction::Rename,
+                source: "c.wav".to_string(),
+                destination: "d.wav".to_string(),
+                sha256: None,
+            }],
+        };
+        let plan_path = root.join("plan.json");
+        fs::write(&plan_path, serde_json::to_vec(&file_plan).unwrap()).unwrap();
+        let journal_path = root.join("journals/journal.json");
+        let payload = apply_plan_file(&plan_path, Some(&journal_path), false).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ApplyJournal>(&payload)
+                .unwrap()
+                .operation_count,
+            1
+        );
+        assert!(journal_path.is_file());
+        assert!(
+            apply_plan_file(&plan_path, None, false)
+                .unwrap()
+                .contains("operation_count")
+        );
+        assert!(apply_plan_file(&root.join("missing.json"), None, false).is_err());
+        fs::write(root.join("invalid.json"), b"not json").unwrap();
+        assert!(apply_plan_file(&root.join("invalid.json"), None, false).is_err());
+
+        fs::write(root.join("rollback.wav"), b"rollback").unwrap();
+        let rollback = MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![
+                MutationOperation {
+                    action: MutationAction::Rename,
+                    source: "rollback.wav".to_string(),
+                    destination: "first.wav".to_string(),
+                    sha256: None,
+                },
+                MutationOperation {
+                    action: MutationAction::Rename,
+                    source: "rollback.wav".to_string(),
+                    destination: "second.wav".to_string(),
+                    sha256: None,
+                },
+            ],
+        };
+        let error = apply_plan(&rollback, true).unwrap_err().to_string();
+        assert!(error.contains("rolled back"));
+        assert!(root.join("rollback.wav").is_file());
+        assert!(!root.join("first.wav").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mutation_plan_rejections_are_complete() {
+        let root = temporary_directory("plan-errors");
+        fs::write(root.join("source.wav"), b"source").unwrap();
+        fs::write(root.join("occupied.wav"), b"occupied").unwrap();
+        let make_plan = |schema_version, operations| MutationPlan {
+            schema_version,
+            root: root.to_string_lossy().to_string(),
+            operations,
+        };
+        let operation = |source: &str, destination: &str| MutationOperation {
+            action: MutationAction::Rename,
+            source: source.to_string(),
+            destination: destination.to_string(),
+            sha256: None,
+        };
+
+        assert!(apply_plan(&make_plan(2, vec![]), false).is_err());
+        assert!(
+            apply_plan(
+                &MutationPlan {
+                    schema_version: 1,
+                    root: root.join("missing").to_string_lossy().to_string(),
+                    operations: vec![]
+                },
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("source.wav", "source.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("../source.wav", "safe.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("source.wav", "../unsafe.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("missing.wav", "new.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("source.wav", "occupied.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(
+                    1,
+                    vec![
+                        operation("source.wav", "same.wav"),
+                        operation("source.wav", "same.wav")
+                    ]
+                ),
+                false
+            )
+            .is_err()
+        );
+        let parent_is_file = make_plan(1, vec![operation("source.wav", "occupied.wav/child.wav")]);
+        assert!(apply_plan(&parent_is_file, true).is_err());
+        assert!(atomic_write(Path::new("/"), b"payload").is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }

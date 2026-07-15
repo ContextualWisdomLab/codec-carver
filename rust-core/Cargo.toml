@@ -5,6 +5,11 @@ edition = "2024"
 description = "High-throughput filesystem backend for Codec Carver audio libraries"
 license = "MIT"
 
+[[bin]]
+name = "codec-carver-core"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["clock", "serde"] }
