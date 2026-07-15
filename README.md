@@ -154,10 +154,18 @@ can delay every placeholder; rerunning resumes only unresolved sidecars.
 `stream-transcribe` never blocks an audio recording on an unresolved TMK: it uses
 hydrated markers when present and records `tmk_error` evidence otherwise.
 On macOS, Rust requests every dataless item through Foundation's supported
-`FileManager.startDownloadingUbiquitousItem` API before it starts the monitored
-copy-and-hash stage; it does not depend on the undocumented `brctl download`
-command. If Finder and the native request both remain at zero bytes, inspect
-File Provider with `fileproviderctl check` before an operator-approved repair.
+`FileManager.startDownloadingUbiquitousItem` API, then coordinates the read with
+`NSFileCoordinator` and performs the single-pass copy-and-hash inside the
+coordinated accessor. The coordinator is required by current File Provider
+domains to keep `isDownloadRequested`/`isDownloading` active; already-local
+files keep the direct fast path. The implementation does not depend on the
+undocumented `brctl download` command. If Finder and the coordinated native
+request both remain at zero bytes, inspect File Provider with
+`fileproviderctl check` before an operator-approved repair.
+After a durable transcript checkpoint, Rust also releases the local source
+blocks through `FileManager.evictUbiquitousItem`; no `brctl evict` subprocess is
+used. Eviction is optional cleanup, so a native eviction error is recorded in
+`eviction_failures` without converting a completed transcription into a failure.
 At startup it samples the live macOS dataless flag and drains currently local
 audio before remote placeholders, keeping the GPU fed while iCloud catches up.
 Rust stage monitoring resets its deadline whenever the partial grows; the

@@ -37,6 +37,13 @@ enum Command {
         #[arg(long)]
         staging_dir: PathBuf,
     },
+    /// Release a streamed iCloud file's local blocks through native FileManager.
+    Evict {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        path: PathBuf,
+    },
     /// Validate or execute a rename/quarantine plan.
     Apply {
         #[arg(long)]
@@ -64,6 +71,7 @@ fn main() -> Result<()> {
             path,
             staging_dir,
         } => codec_carver_core::stage_relative_to_json(&root, &path, &staging_dir)?,
+        Command::Evict { root, path } => codec_carver_core::evict_relative_to_json(&root, &path)?,
         Command::Apply {
             plan,
             journal,

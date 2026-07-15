@@ -111,6 +111,12 @@ pub struct StageResult {
     pub staged_path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvictResult {
+    pub path: String,
+    pub evicted: bool,
+}
+
 #[derive(Debug, Clone)]
 struct PendingFile {
     absolute_path: PathBuf,
@@ -313,7 +319,12 @@ pub fn stage_relative(
     ));
     let mut tmk_bytes = (kind == FileKind::Tmk)
         .then(|| Vec::with_capacity(pending.size_bytes.min(1024 * 1024) as usize));
-    let sha256 = match copy_and_hash_file(&canonical_path, &partial, tmk_bytes.as_mut()) {
+    let sha256 = match copy_and_hash_staged_source(
+        &canonical_path,
+        &partial,
+        tmk_bytes.as_mut(),
+        pending.materialized,
+    ) {
         Ok(hash) => hash,
         Err(error) => {
             let _ = fs::remove_file(&partial);
@@ -363,6 +374,61 @@ pub fn stage_relative_to_json(
     staging_dir: &Path,
 ) -> Result<String> {
     stage_relative(root, relative_path, staging_dir).map(|result| pretty_json(&result))
+}
+
+/// Release one iCloud file's local blocks through the native macOS FileManager API.
+pub fn evict_relative(root: &Path, relative_path: &Path) -> Result<EvictResult> {
+    #[cfg(target_os = "macos")]
+    return evict_relative_with(root, relative_path, evict_icloud_file);
+
+    #[cfg(not(target_os = "macos"))]
+    evict_relative_with(root, relative_path, |_path| {
+        bail!("iCloud eviction is only supported on macOS")
+    })
+}
+
+fn evict_relative_with<F>(root: &Path, relative_path: &Path, evict: F) -> Result<EvictResult>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library root {}", root.display()))?;
+    validate_relative_path(&relative_path.to_string_lossy())?;
+    let requested = canonical_root.join(relative_path);
+    let canonical_path = requested
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library file {}", requested.display()))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        bail!("library file escaped root: {}", canonical_path.display());
+    }
+    classify(&canonical_path)
+        .ok_or_else(|| anyhow!("unsupported audio/TMK file: {}", canonical_path.display()))?;
+    evict(&canonical_path)?;
+    Ok(EvictResult {
+        path: relative_path.to_string_lossy().nfc().collect(),
+        evicted: true,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn evict_icloud_file(path: &Path) -> Result<()> {
+    use objc2_foundation::{NSFileManager, NSURL};
+
+    let url = NSURL::from_file_path(path)
+        .expect("a canonical absolute filesystem path always has a file URL");
+    NSFileManager::defaultManager()
+        .evictUbiquitousItemAtURL_error(&url)
+        .map_err(|error| anyhow!("cannot evict iCloud file {}: {error}", path.display()))
+}
+
+/// Evict one file and serialize the stable result schema.
+pub fn evict_relative_to_json(root: &Path, relative_path: &Path) -> Result<String> {
+    evict_result_to_json(evict_relative(root, relative_path))
+}
+
+fn evict_result_to_json(result: Result<EvictResult>) -> Result<String> {
+    Ok(pretty_json(&result?))
 }
 
 fn record_error<T, E: Display>(
@@ -565,6 +631,77 @@ fn copy_and_hash_file(
     writer.flush()?;
     writer.get_ref().sync_all()?;
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn copy_and_hash_staged_source(
+    source: &Path,
+    destination: &Path,
+    capture: Option<&mut Vec<u8>>,
+    materialized: bool,
+) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    if !materialized {
+        return coordinated_copy_and_hash_file(source, destination, capture);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = materialized;
+    copy_and_hash_file(source, destination, capture)
+}
+
+#[cfg(target_os = "macos")]
+fn coordinated_copy_and_hash_file(
+    source: &Path,
+    destination: &Path,
+    capture: Option<&mut Vec<u8>>,
+) -> Result<String> {
+    use block2::StackBlock;
+    use objc2_foundation::{NSFileCoordinator, NSFileCoordinatorReadingOptions, NSURL};
+    use std::cell::RefCell;
+
+    let url = NSURL::from_file_path(source).ok_or_else(|| {
+        anyhow!(
+            "cannot create a coordinated file URL for {}",
+            source.display()
+        )
+    })?;
+    let coordinator = NSFileCoordinator::new();
+    let result = RefCell::new(None);
+    let capture = RefCell::new(capture);
+    let reader = StackBlock::new(|_coordinated_url| {
+        let capture = capture.borrow_mut().take();
+        result.replace(Some(copy_and_hash_file(source, destination, capture)));
+    });
+    let mut coordination_error = None;
+    coordinator.coordinateReadingItemAtURL_options_error_byAccessor(
+        &url,
+        NSFileCoordinatorReadingOptions::empty(),
+        Some(&mut coordination_error),
+        &reader,
+    );
+    let coordination_error = coordination_error.as_deref().map(ToString::to_string);
+    finish_coordinated_copy(source, coordination_error, result.into_inner())
+}
+
+#[cfg(target_os = "macos")]
+fn finish_coordinated_copy(
+    source: &Path,
+    coordination_error: Option<String>,
+    result: Option<Result<String>>,
+) -> Result<String> {
+    if let Some(error) = coordination_error {
+        bail!(
+            "cannot coordinate iCloud materialization for {}: {error}",
+            source.display()
+        );
+    }
+    match result {
+        Some(result) => result,
+        None => bail!(
+            "iCloud coordinator returned without reading {}",
+            source.display()
+        ),
+    }
 }
 
 fn ensure_complete_stage(source: &Path, partial: &Path, expected: u64) -> Result<()> {
@@ -990,6 +1127,14 @@ mod tests {
         }
     }
 
+    fn noop_evict(_path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn synthetic_evict(_path: &Path) -> Result<()> {
+        bail!("synthetic eviction")
+    }
+
     #[test]
     fn parses_sony_tmk_markers_as_minute_offsets() {
         let values = parse_tmk_markers(b"\xef\xbb\xbf[00005:00.01]\r\n[00075:02.50]\r\n");
@@ -1049,6 +1194,42 @@ mod tests {
                 .starts_with("2024-01-02T03:04")
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_eviction_validates_paths_and_serializes_results() {
+        let root = temporary_directory("evict");
+        let source = root.join("240102_0304.wav");
+        fs::write(&source, b"audio").unwrap();
+        let result = evict_relative_with(&root, Path::new("240102_0304.wav"), noop_evict).unwrap();
+        assert_eq!(result.path, "240102_0304.wav");
+        assert!(result.evicted);
+        assert!(
+            evict_result_to_json(Ok(result))
+                .unwrap()
+                .contains("\"evicted\": true")
+        );
+        assert!(evict_result_to_json(Err(anyhow!("synthetic eviction"))).is_err());
+        assert!(evict_relative_with(&root, Path::new("240102_0304.wav"), synthetic_evict).is_err());
+        assert!(evict_relative_with(&root, Path::new("../escape.wav"), noop_evict).is_err());
+        assert!(evict_relative_with(&root, Path::new("missing.wav"), noop_evict).is_err());
+        fs::write(root.join("unsupported.txt"), b"text").unwrap();
+        assert!(evict_relative_with(&root, Path::new("unsupported.txt"), noop_evict).is_err());
+        let outside = temporary_directory("evict-outside");
+        fs::write(outside.join("outside.wav"), b"outside").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.join("outside.wav"), root.join("escape.wav"))
+                .unwrap();
+            assert!(evict_relative_with(&root, Path::new("escape.wav"), noop_evict).is_err());
+        }
+        assert!(evict_relative(&root.join("missing-root"), Path::new("240102_0304.wav")).is_err());
+        assert!(evict_relative(&root, Path::new("missing.wav")).is_err());
+        assert!(evict_relative(&root, Path::new("unsupported.txt")).is_err());
+        assert!(evict_relative(&root, Path::new("240102_0304.wav")).is_err());
+        assert!(evict_relative_to_json(&root, Path::new("240102_0304.wav")).is_err());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]
@@ -1392,6 +1573,65 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("cannot create a file URL")
+        );
+
+        let coordinated = root.join("coordinated.wav");
+        let mut captured = Vec::new();
+        let hash =
+            copy_and_hash_staged_source(&local_file, &coordinated, Some(&mut captured), false)
+                .unwrap();
+        assert_eq!(
+            hash,
+            "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b"
+        );
+        assert_eq!(captured, b"audio");
+        assert_eq!(fs::read(coordinated).unwrap(), b"audio");
+        assert!(
+            coordinated_copy_and_hash_file(invalid, &root.join("invalid.wav"), None)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot create a coordinated file URL")
+        );
+        let missing_error = coordinated_copy_and_hash_file(
+            &root.join("missing.wav"),
+            &root.join("missing-copy.wav"),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            missing_error.to_string().contains("cannot open"),
+            "{missing_error}"
+        );
+        let coordination_error = finish_coordinated_copy(
+            &local_file,
+            Some("synthetic coordinator error".to_string()),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            coordination_error
+                .to_string()
+                .contains("cannot coordinate iCloud materialization")
+        );
+        let missing_result = finish_coordinated_copy(&local_file, None, None).unwrap_err();
+        assert!(
+            missing_result
+                .to_string()
+                .contains("coordinator returned without reading")
+        );
+        assert_eq!(
+            finish_coordinated_copy(&local_file, None, Some(Ok("hash".to_string()))).unwrap(),
+            "hash"
+        );
+        assert_eq!(
+            finish_coordinated_copy(
+                &local_file,
+                None,
+                Some(Err(anyhow!("synthetic copy error"))),
+            )
+            .unwrap_err()
+            .to_string(),
+            "synthetic copy error"
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -35,12 +35,18 @@ preferred interface for recording curation.
 - Streaming order is based on the live macOS dataless flag rather than stale
   inventory state, so locally resident audio reaches the GPU before iCloud work.
 - Before a dataless stage, Rust calls Foundation's supported
-  `FileManager.startDownloadingUbiquitousItem` API. This creates a persistent
-  File Provider download request without relying on the undocumented and
-  ineffective-on-current-macOS `brctl download` command.
+  `FileManager.startDownloadingUbiquitousItem` API and coordinates the read with
+  `NSFileCoordinator`. The copy-and-hash runs inside the coordinated accessor,
+  which keeps the current File Provider domain's download request active. This
+  does not rely on the undocumented and ineffective-on-current-macOS
+  `brctl download` command; materialized files retain the direct fast path.
 - Python monitors the Rust PID-specific partial file. Its 120-second stage
   deadline resets on every size change, bounding a stuck File Provider without
   terminating a large source that is still copying and hashing normally.
+- After the transcript and inventory checkpoint are durable, the Rust `evict`
+  command calls Foundation's `FileManager.evictUbiquitousItem` directly. The
+  Python API records a native eviction problem separately in `eviction_failures`;
+  optional low-disk cleanup cannot erase or fail completed transcription work.
 - Rust compares the staged byte count with the source logical size before
   publishing a SHA-256. A premature File Provider EOF is reported as
   `STAGE_SOURCE_NOT_READY`; Python retries that condition only while bytes make
@@ -99,10 +105,11 @@ word probability below 0.25 remains in the JSON evidence with a
 macOS dataless detection, filename/creation-time evidence, TMK decoding,
 duplicate grouping, and guarded filesystem changes. A single-file `inspect`
 command supports local single-file inspection. The `stage` command handles an
-iCloud placeholder in one pass: it writes local system scratch and calculates
-SHA-256 concurrently, verifies any existing staged content, and returns the
-scratch path plus the original file record. A changed known hash stops
-transcription.
+iCloud placeholder in one coordinated pass: Foundation materializes it while
+Rust writes local system scratch and calculates SHA-256 concurrently, verifies
+any existing staged content, and returns the scratch path plus the original file
+record. The `evict` command releases local iCloud blocks with Foundation rather
+than a shell utility. A changed known hash stops transcription.
 
 ## Evidence precedence
 

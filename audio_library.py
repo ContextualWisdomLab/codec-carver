@@ -324,6 +324,25 @@ class RustBackend:
                     ) from exc
                 time.sleep(min(1.0, remaining))
 
+    def evict(
+        self, root: Path, relative_path: str, *, timeout_seconds: float = 30
+    ) -> dict[str, Any]:
+        """Release one iCloud file's local blocks through native macOS FileManager."""
+
+        if timeout_seconds <= 0:
+            raise ValueError("eviction timeout must be positive")
+        return self._run_json(
+            [
+                str(self.binary),
+                "evict",
+                "--root",
+                str(root),
+                "--path",
+                relative_path,
+            ],
+            timeout_seconds=timeout_seconds,
+        )
+
     @staticmethod
     def _run_stage_json(
         command: list[str],
@@ -1092,6 +1111,7 @@ class AudioLibrary:
         transcript_dir = self.state_dir / "transcripts"
         completed = cached = failed = 0
         failures = []
+        eviction_failures = []
         for index, record in enumerate(records, start=1):
             audio_path = self.root / record["path"]
             audio_input = audio_path
@@ -1209,8 +1229,25 @@ class AudioLibrary:
                 if staged_audio is not None:
                     remove_staged_file(self.staging_dir, staged_audio)
                 if evict_after and was_dataless and record.get("materialized"):
-                    evict_icloud_file(self.root / record["path"])
-                    record["materialized"] = False
+                    try:
+                        eviction = self.backend.evict(self.root, record["path"])
+                        if not eviction.get("evicted", False):
+                            raise RuntimeError(
+                                "native iCloud eviction returned without confirmation"
+                            )
+                    # Optional cleanup must not lose a durable transcription checkpoint.
+                    except Exception as exc:
+                        record["materialized"] = not is_icloud_dataless(
+                            self.root / record["path"]
+                        )
+                        if record["materialized"]:
+                            record["eviction_error"] = str(exc)
+                            eviction_failures.append(
+                                {"path": record["path"], "error": str(exc)}
+                            )
+                    else:
+                        record["materialized"] = False
+                        record.pop("eviction_error", None)
                 rebuild_manifest_summary(manifest)
                 atomic_json_write(self.state_dir / "inventory.json", manifest)
             if progress:
@@ -1225,6 +1262,8 @@ class AudioLibrary:
             "cached": cached,
             "failed": failed,
             "failures": failures,
+            "eviction_failed": len(eviction_failures),
+            "eviction_failures": eviction_failures,
         }
         atomic_json_write(self.state_dir / "streaming-transcription-run.json", summary)
         return summary
@@ -1445,24 +1484,6 @@ def rebuild_manifest_summary(manifest: dict[str, Any]) -> None:
         for record in manifest["files"]
         if record.get("error")
     ]
-
-
-def evict_icloud_file(path: Path) -> None:
-    """Release a streamed iCloud file's local blocks after its durable checkpoint."""
-
-    if platform.system() != "Darwin":
-        return
-    brctl = shutil.which("brctl")
-    if not brctl:
-        raise FileNotFoundError("brctl is required to evict streamed iCloud files")
-    subprocess.run(
-        [brctl, "evict", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-        shell=False,
-        timeout=300,
-    )
 
 
 def is_icloud_dataless(path: Path) -> bool:

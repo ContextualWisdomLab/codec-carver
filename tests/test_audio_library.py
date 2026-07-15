@@ -351,6 +351,11 @@ class RustBackendTests(unittest.TestCase):
                 self.assertIn("--execute", run.call_args.args[0])
                 backend.inspect(Path(tmp), "a.wav", timeout_seconds=12)
                 self.assertEqual(run.call_args.kwargs["timeout"], 12)
+                backend.evict(Path(tmp), "a.wav", timeout_seconds=8)
+                self.assertEqual(run.call_args.args[0][1], "evict")
+                self.assertEqual(run.call_args.kwargs["timeout"], 8)
+                with self.assertRaisesRegex(ValueError, "must be positive"):
+                    backend.evict(Path(tmp), "a.wav", timeout_seconds=0)
 
     def test_stage_command_decodes_success_and_monitors_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1197,13 +1202,12 @@ class AudioLibraryTests(unittest.TestCase):
             with (
                 patch("audio_library.GpuTranscriber", return_value=fake),
                 patch("audio_library.is_icloud_dataless", return_value=True),
-                patch("audio_library.evict_icloud_file") as evict,
             ):
                 summary = library.stream_transcribe(progress=progress)
             self.assertEqual(summary["completed"], 1)
             backend.stage.assert_called_once()
             backend.inspect.assert_not_called()
-            evict.assert_not_called()
+            backend.evict.assert_not_called()
             progress.assert_called_once()
             checkpoint = json.loads(
                 (state / "inventory.json").read_text(encoding="utf-8")
@@ -1369,11 +1373,11 @@ class AudioLibraryTests(unittest.TestCase):
                     "audio_library.is_icloud_dataless",
                     side_effect=[True, True, False],
                 ),
-                patch("audio_library.evict_icloud_file") as evict,
             ):
+                library.backend.evict.return_value = {"evicted": True}
                 summary = library.stream_transcribe()
             self.assertEqual(summary["completed"], 1)
-            evict.assert_called_once_with(root.resolve() / "remote.wav")
+            library.backend.evict.assert_called_once_with(root.resolve(), "remote.wav")
             self.assertFalse(staged.exists())
 
     def test_rebuild_manifest_summary_finds_exact_duplicates(self) -> None:
@@ -1465,26 +1469,53 @@ class CliTests(unittest.TestCase):
         )
         library.apply.assert_called_once_with(execute=True)
 
-    def test_evict_icloud_file_platform_and_tool_checks(self) -> None:
-        with (
-            patch("audio_library.platform.system", return_value="Linux"),
-            patch("audio_library.subprocess.run") as run,
-        ):
-            audio_library.evict_icloud_file(Path("a.wav"))
-            run.assert_not_called()
-        with (
-            patch("audio_library.platform.system", return_value="Darwin"),
-            patch("audio_library.shutil.which", return_value=None),
-        ):
-            with self.assertRaises(FileNotFoundError):
-                audio_library.evict_icloud_file(Path("a.wav"))
-        with (
-            patch("audio_library.platform.system", return_value="Darwin"),
-            patch("audio_library.shutil.which", return_value="/usr/bin/brctl"),
-            patch("audio_library.subprocess.run") as run,
-        ):
-            audio_library.evict_icloud_file(Path("a.wav"))
-            self.assertEqual(run.call_args.args[0][:2], ["/usr/bin/brctl", "evict"])
+    def test_stream_transcribe_keeps_checkpoint_when_eviction_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            record = _record("remote.wav", HASH_A, materialized=False)
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [record],
+                    "duplicate_groups": [],
+                },
+            )
+            library = AudioLibrary(root, Mock())
+            staged = library.staging_dir / f"{HASH_A}.wav"
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_bytes(b"audio")
+            library.backend.stage.return_value = {
+                "record": {**record, "sha256": HASH_A, "materialized": False},
+                "staged_path": str(staged),
+            }
+            library.backend.evict.side_effect = subprocess.TimeoutExpired(
+                ["codec-carver-core", "evict"], 30
+            )
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "보존된 회의",
+                "segments": [],
+                "language": "ko",
+            }
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=[True, True, False, False],
+                ),
+            ):
+                summary = library.stream_transcribe()
+            self.assertEqual(summary["completed"], 1)
+            self.assertEqual(summary["failed"], 0)
+            self.assertEqual(summary["eviction_failed"], 1)
+            self.assertIn("timed out", summary["eviction_failures"][0]["error"])
+            self.assertTrue((state / "transcripts" / f"{HASH_A}.json").is_file())
+            checkpoint = json.loads((state / "inventory.json").read_text())
+            self.assertTrue(checkpoint["files"][0]["materialized"])
+            self.assertFalse(staged.exists())
 
     def test_icloud_dataless_detection(self) -> None:
         path = Mock()
