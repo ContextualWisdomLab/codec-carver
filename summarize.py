@@ -94,6 +94,14 @@ def _content_words(sentence):
     """
     words = []
     for raw in sentence.split():
+        # Fast path check: if raw is alphanumeric, skip regex overhead.
+        # This significantly improves performance because most tokens
+        # do not contain punctuation and safely bypass the regex substitution.
+        if raw.isalnum():
+            token = raw.lower()
+            if token not in _STOPWORDS:
+                words.append(token)
+            continue
         token = _TOKEN_STRIP_RE.sub("", raw).lower()
         if token and token not in _STOPWORDS:
             words.append(token)
