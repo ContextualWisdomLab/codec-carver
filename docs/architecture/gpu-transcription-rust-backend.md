@@ -50,6 +50,13 @@ preferred interface for recording curation.
   unchanged prior path and byte size.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
+- Long-transcript descriptions use deterministic extractive topic density over
+  all trusted segments, with per-segment term counting, Korean particle
+  normalization, and ubiquitous/repeated phrase suppression. This avoids an
+  opening-segment bias without adding a second inference model.
+- A name already satisfying the timestamp, known-location, extension, and
+  SHA-prefix contract is stable across rescans. Description extractor upgrades
+  therefore affect only previously unstandardized recordings.
 - Mutations are dry-run by default. Execution rejects absolute/parent paths,
   missing sources, existing destinations, and duplicate destinations. A failed
   batch rolls completed moves back in reverse order.

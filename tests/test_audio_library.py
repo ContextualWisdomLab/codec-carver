@@ -214,6 +214,42 @@ class NamingTests(unittest.TestCase):
             "무음-또는-전사불명",
         )
 
+        long_segments = [{"text": f"도입 잡음 문장 {index}"} for index in range(12)] + [
+            {"text": "VOC 경영 프로세스를 검토합니다."},
+            {"text": "VOC 데이터 수집과 경영 과제를 확인합니다."},
+            {"text": "시스템에서 VOC 프로세스를 관리합니다."},
+        ]
+        long_description = transcript_description(
+            {"duration_seconds": 1800, "segments": long_segments}
+        )
+        self.assertIn("VOC", long_description)
+        self.assertIn("프로세스", long_description)
+        self.assertNotIn("도입-잡음", long_description)
+        self.assertEqual(
+            audio_library.description_terms("그래서 VOC를 1234 아아"),
+            [("VOC", "voc")],
+        )
+        repeated_description = audio_library.topical_transcript_description(
+            [
+                "VOC VOC 프로세스 추가",
+                "VOC 프로세스 다른",
+                "반복 구절",
+                "반복 구절",
+                "고유 항목",
+            ],
+            limit=48,
+        )
+        self.assertIn("VOC-프로세스", repeated_description)
+        unique_segments = [{"text": f"개별항목{index}"} for index in range(13)]
+        self.assertIsNone(
+            audio_library.topical_transcript_description(
+                [segment["text"] for segment in unique_segments], limit=48
+            )
+        )
+        self.assertEqual(
+            transcript_description({"segments": unique_segments}), "개별항목0"
+        )
+
     def test_sanitize_and_standard_filename(self) -> None:
         self.assertEqual(sanitize_component(" a / b ::: ", limit=20), "a-b")
         self.assertEqual(sanitize_component("///", limit=20), "미상")
@@ -236,6 +272,48 @@ class NamingTests(unittest.TestCase):
                     "2024-01-02T03:04:05+09:00",
                 )
 
+    def test_existing_standard_filename_validation(self) -> None:
+        recorded_at = "2024-01-02T03:04:05+09:00"
+        transcript = {"segments": [{"text": "프로젝트 일정 검토 회의"}]}
+        record = _record("source.wav", HASH_A)
+        name = standard_filename(record, transcript, recorded_at)
+        standardized = _record(name, HASH_A)
+        self.assertTrue(
+            audio_library.is_existing_standard_filename(standardized, recorded_at)
+        )
+        self.assertFalse(
+            audio_library.is_existing_standard_filename(
+                _record("not-standard.wav", HASH_A), recorded_at
+            )
+        )
+        self.assertFalse(
+            audio_library.is_existing_standard_filename(
+                _record(str(Path(name).with_suffix(".mp3")), HASH_A), recorded_at
+            )
+        )
+        self.assertFalse(
+            audio_library.is_existing_standard_filename(
+                standardized, "2024-01-02T03:04:06+09:00"
+            )
+        )
+        self.assertFalse(
+            audio_library.is_existing_standard_filename(
+                _record(name, HASH_B), recorded_at
+            )
+        )
+        self.assertFalse(
+            audio_library.is_existing_standard_filename(
+                _record(name, HASH_A, location="다른 장소"), recorded_at
+            )
+        )
+        no_location = _record("source.wav", HASH_A, location=None)
+        no_location_name = standard_filename(no_location, transcript, recorded_at)
+        self.assertTrue(
+            audio_library.is_existing_standard_filename(
+                _record(no_location_name, HASH_A, location=None), recorded_at
+            )
+        )
+
     def test_helpers_are_deterministic(self) -> None:
         self.assertEqual(
             quarantine_path(HASH_A, "copies/a.wav"),
@@ -256,6 +334,7 @@ class RustBackendTests(unittest.TestCase):
             completed = subprocess.CompletedProcess(
                 [], 0, stdout='{"ok": true}', stderr=""
             )
+
             with patch("audio_library.subprocess.run", return_value=completed) as run:
                 self.assertEqual(
                     backend.inventory(
@@ -710,7 +789,7 @@ class AudioLibraryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "recording time is unknown"):
                 AudioLibrary(root, Mock()).plan(allow_missing_transcripts=True)
 
-            transcript = {"text": "전사대기", "segments": []}
+            transcript = {"text": "원래 제목", "segments": [{"text": "원래 제목"}]}
             standard = standard_filename(
                 _record("source.wav", HASH_A),
                 transcript,
@@ -735,7 +814,14 @@ class AudioLibraryTests(unittest.TestCase):
                     "duplicate_groups": [],
                 },
             )
-            plan = AudioLibrary(root, Mock()).plan(allow_missing_transcripts=True)
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_A}.json",
+                {
+                    "text": "나중에 개선된 완전히 다른 대표 주제",
+                    "segments": [{"text": "나중에 개선된 완전히 다른 대표 주제"}],
+                },
+            )
+            plan = AudioLibrary(root, Mock()).plan()
             self.assertEqual(plan["operations"], [])
 
     def test_transcribe_writes_sidecars_and_isolates_bad_recording(self) -> None:

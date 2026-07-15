@@ -174,7 +174,13 @@ journals, and transcript sidecars restore its full hash with an explicit
 Transcripts are keyed by the full SHA-256 under
 `.codec-carver/transcripts/`, so exact copies are inferred only once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized
-filenames. Duplicate files move to the recoverable
+filenames. For long meetings, filename descriptions come from a deterministic
+corpus-central phrase rather than only the opening segments: per-segment topic
+frequency, Korean particle normalization, and repetition/stock-phrase filters
+keep the name compact and representative without another model call. Once a
+name has a valid recording timestamp, known location, and matching SHA prefix,
+later extractor improvements preserve it instead of renaming the library again.
+Duplicate files move to the recoverable
 `.codec-carver/quarantine/exact-duplicates/` tree; no irreversible deletion is
 performed by default.
 

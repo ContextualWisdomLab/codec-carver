@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import time
 import wave
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -40,6 +41,148 @@ UNSAFE_NAME_RE = re.compile(r"[^0-9A-Za-z가-힣._-]+")
 STOCK_HALLUCINATION_RE = re.compile(
     r"(?:다음-(?:영상|비디오)에서-만나요|이-시각-세계였습니다|"
     r"시청해-주셔서-감사합니다|이곳은-이곳에서|다음-주에-만나요)"
+)
+DESCRIPTION_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]+")
+DESCRIPTION_PARTICLE_SUFFIXES = (
+    "으로부터",
+    "에서부터",
+    "에게서",
+    "이라고",
+    "이라는",
+    "으로써",
+    "으로서",
+    "까지",
+    "부터",
+    "에게",
+    "한테",
+    "께서",
+    "에서",
+    "으로",
+    "라고",
+    "에는",
+    "이나",
+    "이나마",
+    "처럼",
+    "보다",
+    "하고",
+    "하고는",
+    "과는",
+    "와는",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "에",
+    "의",
+    "도",
+    "와",
+    "과",
+    "로",
+    "만",
+)
+DESCRIPTION_STOPWORDS = frozenset(
+    {
+        "about",
+        "and",
+        "that",
+        "the",
+        "this",
+        "거",
+        "거기",
+        "거는",
+        "거를",
+        "거지",
+        "것",
+        "것도",
+        "것들",
+        "것은",
+        "것을",
+        "게",
+        "걸",
+        "그",
+        "그게",
+        "그거",
+        "그걸",
+        "그냥",
+        "그런",
+        "그렇게",
+        "그런데",
+        "그리고",
+        "그래서",
+        "그러니까",
+        "그러면",
+        "근데",
+        "나는",
+        "나중",
+        "너무",
+        "다시",
+        "다음",
+        "대해서",
+        "대한",
+        "되는",
+        "돼",
+        "뭔가",
+        "뭐",
+        "뭘",
+        "많이",
+        "맞습니다",
+        "먼저",
+        "바로",
+        "보고",
+        "부분",
+        "보면",
+        "보시면",
+        "사실",
+        "수",
+        "수는",
+        "아니고",
+        "아까",
+        "아주",
+        "안",
+        "앞으로",
+        "어떤",
+        "어떻게",
+        "여기",
+        "여기서",
+        "왜",
+        "우리",
+        "우리가",
+        "위해서",
+        "이",
+        "이거",
+        "이거는",
+        "이게",
+        "이런",
+        "이렇게",
+        "이제",
+        "있고",
+        "있는",
+        "있다",
+        "있도록",
+        "있습니다",
+        "있으면",
+        "있어요",
+        "일단",
+        "일단은",
+        "저",
+        "제가",
+        "저는",
+        "저희",
+        "저희가",
+        "제대로",
+        "좀",
+        "지금",
+        "진짜",
+        "하게",
+        "하고",
+        "하는",
+        "하는지",
+        "하지만",
+        "한번",
+        "해서",
+    }
 )
 
 
@@ -455,8 +598,78 @@ def trusted_transcript_text(
     return "" if segments else fallback.strip()
 
 
+def description_terms(value: str) -> list[tuple[str, str]]:
+    """Return display tokens and particle-normalized keys for topic scoring."""
+
+    terms = []
+    for display in DESCRIPTION_TOKEN_RE.findall(value):
+        key = display.casefold()
+        if key.isdecimal() or len(key) < 2 or len(set(key)) == 1:
+            continue
+        while True:
+            stripped = False
+            for suffix in DESCRIPTION_PARTICLE_SUFFIXES:
+                if key.endswith(suffix) and len(key) - len(suffix) >= 2:
+                    key = key[: -len(suffix)]
+                    stripped = True
+                    break
+            if not stripped:
+                break
+        if len(key) < 2 or key in DESCRIPTION_STOPWORDS:
+            continue
+        terms.append((display[: len(key)], key))
+    return terms
+
+
+def topical_transcript_description(values: list[str], *, limit: int) -> str | None:
+    """Select a compact, corpus-central phrase from a long transcript."""
+
+    occurrence_count = Counter(values)
+    term_frequency = Counter(
+        key
+        for value in values
+        for key in {key for _display, key in description_terms(value)}
+    )
+
+    def is_topical(key: str) -> bool:
+        frequency = term_frequency[key]
+        return frequency >= 2 and frequency * 2 <= len(values)
+
+    ranked: list[tuple[tuple[float, int, int, int], list[tuple[str, str]]]] = []
+    for index, value in enumerate(values):
+        if occurrence_count[value] != 1:
+            continue
+        terms = description_terms(value)
+        unique_terms = []
+        seen = set()
+        for display, key in terms:
+            if key not in seen:
+                seen.add(key)
+                unique_terms.append((display, key))
+        topical = [term for term in unique_terms if is_topical(term[1])]
+        if len(topical) < 2:
+            continue
+        topic_score = sum(min(term_frequency[key], 24) for _display, key in topical)
+        score = (
+            topic_score / (len(topical) ** 0.5),
+            topic_score,
+            -abs(len(topical) - 4),
+            -index,
+        )
+        ranked.append((score, unique_terms))
+    if not ranked:
+        return None
+    _score, terms = max(ranked, key=lambda item: item[0])
+    selected = [term for term in terms if is_topical(term[1])]
+    if len(selected) < 3:
+        selected_keys = {key for _display, key in selected}
+        selected.extend(term for term in terms if term[1] not in selected_keys)
+    source = " ".join(display for display, _key in selected[:7])
+    return sanitize_component(source, limit=limit) if source else None
+
+
 def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> str:
-    """Derive a deterministic filename description from early transcript content."""
+    """Derive a deterministic, transcript-central filename description."""
 
     segment_values = [
         str(segment.get("text", "")).strip()
@@ -493,6 +706,15 @@ def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> st
         )
     ):
         return "무음-또는-전사불명"
+    all_cleaned = [
+        SPACE_RE.sub(" ", FILLER_RE.sub("", value)).strip(" .,!?")
+        for value in segment_values
+        if not STOCK_HALLUCINATION_RE.search(sanitize_component(value, limit=256))
+    ]
+    if len(all_cleaned) > 12:
+        topical = topical_transcript_description(all_cleaned, limit=limit)
+        if topical:
+            return topical
     meaningful = [
         value
         for value in cleaned
@@ -532,6 +754,27 @@ def standard_filename(
     if not STANDARD_NAME_RE.match(stem):
         raise ValueError(f"generated filename does not satisfy standard: {stem}")
     return f"{stem}.{str(record['extension']).lower()}"
+
+
+def is_existing_standard_filename(record: dict[str, Any], recorded_at: str) -> bool:
+    """Recognize a valid SHA-bound standard name without recomputing its description."""
+
+    path = Path(record["path"])
+    if not STANDARD_NAME_RE.fullmatch(path.stem):
+        return False
+    if path.suffix.casefold() != f".{str(record['extension']).casefold()}":
+        return False
+    components = path.stem.split("__")
+    timestamp = datetime.fromisoformat(recorded_at).strftime("%Y-%m-%d_%H-%M-%S")
+    if len(components) < 3 or components[0] != timestamp:
+        return False
+    if components[-1] != f"sha256-{record['sha256'][:12]}":
+        return False
+    if record.get("location"):
+        location = sanitize_component(str(record["location"]), limit=32)
+        if len(components) < 4 or components[1] != location:
+            return False
+    return True
 
 
 def atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
@@ -1026,11 +1269,14 @@ class AudioLibrary:
             recorded_at = earliest_by_hash.get(sha256) or record.get("recorded_at")
             if not recorded_at:
                 raise ValueError(f"recording time is unknown: {record['path']}")
-            destination = str(
-                Path(record["path"]).with_name(
-                    standard_filename(record, transcript, recorded_at)
+            if is_existing_standard_filename(record, recorded_at):
+                destination = record["path"]
+            else:
+                destination = str(
+                    Path(record["path"]).with_name(
+                        standard_filename(record, transcript, recorded_at)
+                    )
                 )
-            )
             if destination != record["path"]:
                 operations.append(
                     mutation("rename", record["path"], destination, sha256)
