@@ -174,6 +174,8 @@ not large files that are actively copying and hashing. File Provider can expose
 the logical source size before any bytes are readable; Rust rejects such a
 premature short/empty EOF, and Python retries it only until the same bounded
 zero-progress deadline instead of accepting the empty-file SHA-256.
+Batch commands still print their complete JSON checkpoint summary, but return a
+non-zero process status when any selected file is recorded in `failures`.
 Planning rejects recordings without SHA-256 or transcript evidence by default.
 `--defer-unready` keeps those paths unchanged and lists them in
 `deferred_paths`, allowing verified subsets to proceed without inventing a

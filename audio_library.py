@@ -1715,7 +1715,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     else:
         result = library.apply(execute=args.execute)
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0
+    return 1 if result.get("failed", 0) else 0
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised through the installed CLI

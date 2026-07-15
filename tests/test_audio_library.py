@@ -1469,6 +1469,20 @@ class CliTests(unittest.TestCase):
         )
         library.apply.assert_called_once_with(execute=True)
 
+    def test_main_returns_failure_when_batch_contains_failed_files(self) -> None:
+        library = Mock()
+        library.stream_transcribe.return_value = {
+            "completed": 0,
+            "failed": 1,
+            "failures": [{"path": "remote.wav", "error": "download timed out"}],
+        }
+        with (
+            patch("audio_library.RustBackend"),
+            patch("audio_library.AudioLibrary", return_value=library),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(audio_library.main([".", "stream-transcribe"]), 1)
+
     def test_stream_transcribe_keeps_checkpoint_when_eviction_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
