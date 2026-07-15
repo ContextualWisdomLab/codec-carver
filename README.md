@@ -162,7 +162,10 @@ At startup it samples the live macOS dataless flag and drains currently local
 audio before remote placeholders, keeping the GPU fed while iCloud catches up.
 Rust stage monitoring resets its deadline whenever the partial grows; the
 default 120-second stall limit skips only placeholders making no byte progress,
-not large files that are actively copying and hashing.
+not large files that are actively copying and hashing. File Provider can expose
+the logical source size before any bytes are readable; Rust rejects such a
+premature short/empty EOF, and Python retries it only until the same bounded
+zero-progress deadline instead of accepting the empty-file SHA-256.
 Planning rejects recordings without SHA-256 or transcript evidence by default.
 `--defer-unready` keeps those paths unchanged and lists them in
 `deferred_paths`, allowing verified subsets to proceed without inventing a

@@ -35,6 +35,9 @@ STANDARD_NAME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:__[^/]+)*__sha256-[0-9a-f]{12}$"
 )
 STANDARD_SHA_RE = re.compile(r"__sha256-(?P<prefix>[0-9a-f]{12})(?:\.|$)")
+STAGE_SOURCE_NOT_READY_RE = re.compile(
+    r"STAGE_SOURCE_NOT_READY copied (?P<copied>\d+) of (?P<expected>\d+) bytes"
+)
 FILLER_RE = re.compile(r"\b(?:어|음|아|그|저기|그러니까|뭐지)\b[,.!?\s]*")
 SPACE_RE = re.compile(r"\s+")
 UNSAFE_NAME_RE = re.compile(r"[^0-9A-Za-z가-힣._-]+")
@@ -277,8 +280,10 @@ class RustBackend:
         *,
         timeout_seconds: float = 14_400,
     ) -> dict[str, Any]:
-        """Stream one placeholder while timing out only sustained zero progress."""
+        """Stream one placeholder, retrying premature iCloud EOFs with a stall bound."""
 
+        if timeout_seconds <= 0:
+            raise ValueError("stage stall timeout must be positive")
         command = [
             str(self.binary),
             "stage",
@@ -289,11 +294,35 @@ class RustBackend:
             "--staging-dir",
             str(staging_dir),
         ]
-        return self._run_stage_json(
-            command,
-            staging_dir,
-            stall_timeout_seconds=timeout_seconds,
-        )
+        last_progress = time.monotonic()
+        max_incomplete_bytes = 0
+        while True:
+            remaining = max(0.01, timeout_seconds - (time.monotonic() - last_progress))
+            try:
+                return self._run_stage_json(
+                    command,
+                    staging_dir,
+                    stall_timeout_seconds=remaining,
+                )
+            except subprocess.CalledProcessError as exc:
+                stderr = exc.stderr or ""
+                incomplete = STAGE_SOURCE_NOT_READY_RE.search(stderr)
+                if incomplete is None:
+                    raise
+                copied = int(incomplete.group("copied"))
+                now = time.monotonic()
+                if copied > max_incomplete_bytes:
+                    max_incomplete_bytes = copied
+                    last_progress = now
+                remaining = timeout_seconds - (now - last_progress)
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(
+                        command,
+                        timeout_seconds,
+                        output=exc.output,
+                        stderr=stderr,
+                    ) from exc
+                time.sleep(min(1.0, remaining))
 
     @staticmethod
     def _run_stage_json(

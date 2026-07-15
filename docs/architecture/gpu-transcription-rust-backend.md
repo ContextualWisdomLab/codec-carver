@@ -41,6 +41,10 @@ preferred interface for recording curation.
 - Python monitors the Rust PID-specific partial file. Its 120-second stage
   deadline resets on every size change, bounding a stuck File Provider without
   terminating a large source that is still copying and hashing normally.
+- Rust compares the staged byte count with the source logical size before
+  publishing a SHA-256. A premature File Provider EOF is reported as
+  `STAGE_SOURCE_NOT_READY`; Python retries that condition only while bytes make
+  progress or until the same stall deadline expires.
 - Mutation planning fails closed when SHA-256 or transcripts are unresolved;
   an explicit deferred mode changes only ready recordings and serializes every
   untouched source path instead of fabricating a transcript description.

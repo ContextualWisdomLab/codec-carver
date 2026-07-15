@@ -320,6 +320,14 @@ pub fn stage_relative(
             return Err(error);
         }
     };
+    let staged_size = fs::metadata(&partial)
+        .with_context(|| format!("cannot stat staged partial {}", partial.display()))
+        .map(|metadata| metadata.len())
+        .and_then(|copied| ensure_complete_stage(&canonical_path, pending.size_bytes, copied));
+    if let Err(error) = staged_size {
+        let _ = fs::remove_file(&partial);
+        return Err(error);
+    }
     let staged_path = canonical_staging.join(format!("{sha256}.{extension}"));
     if staged_path.exists() {
         if hash_file(&staged_path, None)? == sha256 {
@@ -564,6 +572,16 @@ fn copy_and_hash_file(
     writer.flush()?;
     writer.get_ref().sync_all()?;
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn ensure_complete_stage(source: &Path, expected: u64, copied: u64) -> Result<()> {
+    if copied != expected {
+        bail!(
+            "STAGE_SOURCE_NOT_READY copied {copied} of {expected} bytes from {}",
+            source.display()
+        );
+    }
+    Ok(())
 }
 
 fn parse_tmk_markers(bytes: &[u8]) -> Vec<f64> {
@@ -1059,6 +1077,18 @@ mod tests {
         assert_eq!(tmk.record.tmk_marker_count, Some(2));
         assert_eq!(tmk.record.tmk_last_marker_seconds, Some(62.5));
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn incomplete_stage_size_is_not_accepted_as_a_complete_source() {
+        let source = Path::new("placeholder.wav");
+        ensure_complete_stage(source, 5, 5).unwrap();
+        let error = ensure_complete_stage(source, 5, 0).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("STAGE_SOURCE_NOT_READY copied 0 of 5 bytes from placeholder.wav")
+        );
     }
 
     #[test]

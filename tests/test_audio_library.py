@@ -389,6 +389,59 @@ class RustBackendTests(unittest.TestCase):
                 )
             self.assertEqual(result, {"ok": True})
 
+    def test_stage_retries_incomplete_icloud_reads_only_while_progressing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "core"
+            binary.write_bytes(b"")
+            staging = root / "stage"
+            staging.mkdir()
+            backend = RustBackend(binary)
+            empty = subprocess.CalledProcessError(
+                1,
+                ["core", "stage"],
+                stderr="STAGE_SOURCE_NOT_READY copied 0 of 5 bytes",
+            )
+            partial = subprocess.CalledProcessError(
+                1,
+                ["core", "stage"],
+                stderr="STAGE_SOURCE_NOT_READY copied 3 of 5 bytes",
+            )
+            with (
+                patch.object(
+                    RustBackend,
+                    "_run_stage_json",
+                    side_effect=[empty, partial, {"ok": True}],
+                ) as run,
+                patch("audio_library.time.sleep") as sleep,
+            ):
+                self.assertEqual(
+                    backend.stage(root, "a.wav", staging, timeout_seconds=34),
+                    {"ok": True},
+                )
+            self.assertEqual(run.call_count, 3)
+            self.assertEqual(sleep.call_count, 2)
+
+            unrelated = subprocess.CalledProcessError(
+                2, ["core", "stage"], stderr="permission denied"
+            )
+            with (
+                patch.object(RustBackend, "_run_stage_json", side_effect=unrelated),
+                self.assertRaises(subprocess.CalledProcessError),
+            ):
+                backend.stage(root, "a.wav", staging, timeout_seconds=1)
+
+            with (
+                patch.object(RustBackend, "_run_stage_json", side_effect=empty),
+                patch("audio_library.time.monotonic", side_effect=[0.0, 0.0, 2.0]),
+                self.assertRaises(subprocess.TimeoutExpired) as raised,
+            ):
+                backend.stage(root, "a.wav", staging, timeout_seconds=1)
+            self.assertIn("STAGE_SOURCE_NOT_READY", raised.exception.stderr)
+
+            with self.assertRaisesRegex(ValueError, "must be positive"):
+                backend.stage(root, "a.wav", staging, timeout_seconds=0)
+
     def test_stage_stall_cleanup_errors_and_invalid_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             staging = Path(tmp)
