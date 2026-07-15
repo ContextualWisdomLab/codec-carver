@@ -299,6 +299,9 @@ pub fn stage_relative(
         .ok_or_else(|| anyhow!("unsupported audio/TMK file: {}", canonical_path.display()))?;
     let pending = pending_file(&canonical_root, &canonical_path, kind, extension.clone())?;
 
+    #[cfg(target_os = "macos")]
+    request_icloud_download_if_needed(&canonical_path, pending.materialized)?;
+
     let canonical_staging = prepare_staging_directory(staging_dir)?;
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -449,9 +452,10 @@ fn process_file(pending: &PendingFile) -> FileRecord {
     let result = if pending.materialized {
         hash_file(&pending.absolute_path, tmk_bytes.as_mut())
     } else {
-        Err(anyhow!(
-            "iCloud dataless placeholder; materialize with `brctl download` before hashing"
-        ))
+        Err(anyhow!(concat!(
+            "iCloud dataless placeholder; run `stream-transcribe` to request it through ",
+            "the native macOS FileManager API, or use Finder 'Download Now', before hashing"
+        )))
     };
     let (sha256, error) = match result {
         Ok(hash) => (Some(hash), None),
@@ -476,6 +480,31 @@ fn process_file(pending: &PendingFile) -> FileRecord {
         tmk_last_marker_seconds: markers.last().copied(),
         error,
     }
+}
+
+#[cfg(target_os = "macos")]
+fn request_icloud_download_if_needed(path: &Path, materialized: bool) -> Result<()> {
+    if materialized {
+        return Ok(());
+    }
+    request_icloud_download(path)
+}
+
+#[cfg(target_os = "macos")]
+fn request_icloud_download(path: &Path) -> Result<()> {
+    use objc2_foundation::{NSFileManager, NSURL};
+
+    let url = NSURL::from_file_path(path)
+        .ok_or_else(|| anyhow!("cannot create a file URL for {}", path.display()))?;
+    let manager = NSFileManager::defaultManager();
+    manager
+        .startDownloadingUbiquitousItemAtURL_error(&url)
+        .map_err(|error| {
+            anyhow!(
+                "cannot request iCloud materialization for {}: {error}",
+                path.display()
+            )
+        })
 }
 
 #[cfg(target_os = "macos")]
@@ -1210,7 +1239,10 @@ mod tests {
             location: None,
         };
         let record = process_file(&synthetic_dataless);
-        assert!(record.error.unwrap().contains("dataless placeholder"));
+        let error = record.error.unwrap();
+        assert!(error.contains("dataless placeholder"));
+        assert!(error.contains("native macOS FileManager API"));
+        assert!(!error.contains("brctl download"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1288,6 +1320,33 @@ mod tests {
         assert_eq!(
             infer_location("강남로 12 (1).wav"),
             Some("강남로 12".to_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_icloud_request_reports_non_file_provider_paths() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let root = temporary_directory("native-icloud-request");
+        let local_file = root.join("local.wav");
+        fs::write(&local_file, b"audio").unwrap();
+
+        request_icloud_download_if_needed(&local_file, true).unwrap();
+        let error = request_icloud_download_if_needed(&local_file, false).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot request iCloud materialization")
+        );
+        let invalid = Path::new(OsStr::from_bytes(b"/tmp/invalid\0path"));
+        assert!(
+            request_icloud_download(invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot create a file URL")
         );
         fs::remove_dir_all(root).unwrap();
     }

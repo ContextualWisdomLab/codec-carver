@@ -34,6 +34,10 @@ preferred interface for recording curation.
   sidecar is retained as `tmk_error` evidence and cannot block GPU audio work.
 - Streaming order is based on the live macOS dataless flag rather than stale
   inventory state, so locally resident audio reaches the GPU before iCloud work.
+- Before a dataless stage, Rust calls Foundation's supported
+  `FileManager.startDownloadingUbiquitousItem` API. This creates a persistent
+  File Provider download request without relying on the undocumented and
+  ineffective-on-current-macOS `brctl download` command.
 - Python monitors the Rust PID-specific partial file. Its 120-second stage
   deadline resets on every size change, bounding a stuck File Provider without
   terminating a large source that is still copying and hashing normally.

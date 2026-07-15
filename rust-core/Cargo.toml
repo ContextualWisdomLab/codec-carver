@@ -22,6 +22,9 @@ sha2 = "0.10"
 unicode-normalization = "0.1"
 walkdir = "2.5"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSFileManager", "NSString", "NSURL"] }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

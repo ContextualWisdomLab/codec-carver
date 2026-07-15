@@ -153,6 +153,11 @@ per-file timeout are the defaults because higher iCloud File Provider concurrenc
 can delay every placeholder; rerunning resumes only unresolved sidecars.
 `stream-transcribe` never blocks an audio recording on an unresolved TMK: it uses
 hydrated markers when present and records `tmk_error` evidence otherwise.
+On macOS, Rust requests every dataless item through Foundation's supported
+`FileManager.startDownloadingUbiquitousItem` API before it starts the monitored
+copy-and-hash stage; it does not depend on the undocumented `brctl download`
+command. If Finder and the native request both remain at zero bytes, inspect
+File Provider with `fileproviderctl check` before an operator-approved repair.
 At startup it samples the live macOS dataless flag and drains currently local
 audio before remote placeholders, keeping the GPU fed while iCloud catches up.
 Rust stage monitoring resets its deadline whenever the partial grows; the
