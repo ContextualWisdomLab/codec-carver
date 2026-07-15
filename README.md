@@ -133,6 +133,10 @@ python3.12 -m venv .venv
 codec-carver-library /path/to/recordings inventory --threads 4
 codec-carver-library /path/to/recordings hydrate-tmk --workers 4
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
+# For a deliberately bounded small batch, overlap iCloud reads in Rust while
+# keeping GPU transcription, checkpoints, and native eviction serialized.
+codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
+  --prefetch-workers 4 --prefetch-max-bytes 536870912
 # Add --word-timestamps only when word-level audit evidence is required.
 codec-carver-library /path/to/recordings plan
 # When iCloud has not supplied every source, mutate only fully ready recordings
@@ -142,10 +146,14 @@ codec-carver-library /path/to/recordings apply          # validation only
 codec-carver-library /path/to/recordings apply --execute
 ```
 
-`stream-transcribe` is the low-disk iCloud mode: Rust streams one remote file to
-system scratch while calculating SHA-256, Metal/CUDA transcribes that local
-stage, and Python atomically checkpoints before removing the stage. Already
-local files stay local. Run `hydrate-tmk` first when iCloud holds Sony sidecars:
+`stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
+remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
+that local stage, and Python atomically checkpoints before removing the stage.
+`--prefetch-workers` can overlap a bounded batch of Rust/iCloud staging calls;
+`--prefetch-max-bytes` caps their combined logical size (512 MiB by default),
+and the Python loop still serializes GPU work, durable checkpoints, scratch
+removal, and native eviction. Already local files stay local. Run `hydrate-tmk`
+first when iCloud holds Sony sidecars:
 it reads the tiny TMK files concurrently, checkpoints each SHA-256 and marker
 summary, and backfills any existing transcript sidecars. A later dataless flag
 does not cause the same TMK to be downloaded again. Four workers and a 60-second

@@ -9,6 +9,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 import wave
@@ -1124,6 +1125,131 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(transcript["tmk_marker_count"], 3)
             self.assertEqual(transcript["tmk_last_marker_seconds"], 90.0)
 
+    def test_stream_transcribe_prefetches_bounded_parallel_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            first = _record(
+                "first.wav", "", materialized=False, size_bytes=4, tmk_path=None
+            )
+            second = _record(
+                "second.wav", "", materialized=False, size_bytes=4, tmk_path=None
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [first, second],
+                    "duplicate_groups": [],
+                },
+            )
+            backend = Mock()
+            backend.evict.return_value = {"evicted": True}
+            library = AudioLibrary(root, backend)
+            barrier = threading.Barrier(2)
+
+            def stage(_root, path, staging_dir, *, timeout_seconds):
+                self.assertEqual(timeout_seconds, 9)
+                barrier.wait(timeout=2)
+                if path == "second.wav":
+                    raise RuntimeError("prefetch failed")
+                staged = staging_dir / f"{HASH_A}.wav"
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(b"audio")
+                return {
+                    "record": {**first, "sha256": HASH_A, "error": None},
+                    "staged_path": str(staged),
+                }
+
+            backend.stage.side_effect = stage
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "병렬 프리페치",
+                "segments": [],
+                "language": "ko",
+            }
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=[True, True, False],
+                ),
+            ):
+                summary = library.stream_transcribe(
+                    prefetch_workers=2,
+                    prefetch_max_bytes=8,
+                    stage_stall_timeout_seconds=9,
+                )
+            self.assertEqual(summary["prefetched"], 2)
+            self.assertEqual(summary["prefetch_bytes"], 8)
+            self.assertEqual(summary["completed"], 1)
+            self.assertEqual(summary["failed"], 1)
+            self.assertIn("prefetch failed", summary["failures"][0]["error"])
+            self.assertEqual(backend.stage.call_count, 2)
+            backend.evict.assert_called_once_with(root.resolve(), "first.wav")
+            self.assertFalse((library.staging_dir / f"{HASH_A}.wav").exists())
+
+    def test_stream_transcribe_validates_and_bounds_prefetch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            with self.assertRaisesRegex(ValueError, "workers"):
+                library.stream_transcribe(prefetch_workers=0)
+            with self.assertRaisesRegex(ValueError, "max bytes"):
+                library.stream_transcribe(prefetch_max_bytes=0)
+
+            state = root / ".codec-carver"
+            remote = _record(
+                "remote.wav", "", materialized=False, size_bytes=10, tmk_path=None
+            )
+            local = _record(
+                "local.wav", HASH_B, materialized=True, size_bytes=1, tmk_path=None
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [remote, local],
+                    "duplicate_groups": [],
+                },
+            )
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_B}.json", {"text": "cached"}
+            )
+            staged = library.staging_dir / f"{HASH_A}.wav"
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_bytes(b"audio")
+            backend.stage.return_value = {
+                "record": {**remote, "sha256": HASH_A, "error": None},
+                "staged_path": str(staged),
+            }
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "순차 폴백",
+                "segments": [],
+                "language": "ko",
+            }
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=lambda path: path.name == "remote.wav",
+                ),
+            ):
+                summary = library.stream_transcribe(
+                    max_files=2,
+                    prefetch_workers=2,
+                    prefetch_max_bytes=1,
+                    evict_after=False,
+                )
+            self.assertEqual(summary["prefetched"], 0)
+            self.assertEqual(summary["prefetch_bytes"], 0)
+            backend.stage.assert_called_once()
+            self.assertFalse(staged.exists())
+
     def test_stream_transcribe_prioritizes_runtime_local_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1435,6 +1561,10 @@ class CliTests(unittest.TestCase):
                 "a.wav",
                 "--stage-stall-timeout-seconds",
                 "7",
+                "--prefetch-workers",
+                "3",
+                "--prefetch-max-bytes",
+                "4096",
                 "--keep-local",
             ],
             [".", "plan", "--defer-unready"],
@@ -1462,6 +1592,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(
             library.stream_transcribe.call_args.kwargs["stage_stall_timeout_seconds"],
             7.0,
+        )
+        self.assertEqual(
+            library.stream_transcribe.call_args.kwargs["prefetch_workers"], 3
+        )
+        self.assertEqual(
+            library.stream_transcribe.call_args.kwargs["prefetch_max_bytes"], 4096
         )
         library.plan.assert_called_once_with(
             allow_missing_transcripts=False,
@@ -1549,16 +1685,15 @@ class CliTests(unittest.TestCase):
                 patch("audio_library.GpuTranscriber", return_value=fake),
                 patch(
                     "audio_library.is_icloud_dataless",
-                    side_effect=[True, True, False, False],
+                    side_effect=[True, True, False, True],
                 ),
             ):
                 unconfirmed = library.stream_transcribe()
             self.assertEqual(unconfirmed["completed"], 1)
             self.assertEqual(unconfirmed["failed"], 0)
-            self.assertEqual(unconfirmed["eviction_failed"], 1)
-            self.assertIn(
-                "without confirmation", unconfirmed["eviction_failures"][0]["error"]
-            )
+            self.assertEqual(unconfirmed["eviction_failed"], 0)
+            checkpoint = json.loads((state / "inventory.json").read_text())
+            self.assertFalse(checkpoint["files"][0]["materialized"])
             self.assertFalse(staged.exists())
 
     def test_icloud_dataless_detection(self) -> None:

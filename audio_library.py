@@ -29,6 +29,7 @@ from typing import Any, Callable, Iterable
 
 DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo-q4"
 DEFAULT_CUDA_MODEL = "large-v3-turbo"
+DEFAULT_PREFETCH_MAX_BYTES = 512 * 1024 * 1024
 MACOS_SF_DATALESS = 0x40000000
 MIN_TRANSCRIBABLE_SECONDS = 0.5
 STANDARD_NAME_RE = re.compile(
@@ -680,6 +681,8 @@ def topical_transcript_description(values: list[str], *, limit: int) -> str | No
     )
 
     def is_topical(key: str) -> bool:
+        """Keep terms repeated across the transcript without being ubiquitous."""
+
         frequency = term_frequency[key]
         return frequency >= 2 and frequency * 2 <= len(values)
 
@@ -1072,10 +1075,17 @@ class AudioLibrary:
         relative_paths: Iterable[str] | None = None,
         inspect_timeout_seconds: float = 14_400,
         stage_stall_timeout_seconds: float = 120,
+        prefetch_workers: int = 1,
+        prefetch_max_bytes: int = DEFAULT_PREFETCH_MAX_BYTES,
         evict_after: bool = True,
         progress: Callable[[int, int, str, str], None] | None = None,
     ) -> dict[str, Any]:
-        """Hash and transcribe one iCloud file at a time with durable checkpoints."""
+        """Hash and transcribe iCloud files with bounded parallel staging."""
+
+        if prefetch_workers < 1:
+            raise ValueError("prefetch workers must be at least 1")
+        if prefetch_max_bytes < 1:
+            raise ValueError("prefetch max bytes must be positive")
 
         manifest = self._load_inventory()
         records_by_path = {record["path"]: record for record in manifest["files"]}
@@ -1109,6 +1119,45 @@ class AudioLibrary:
             records = records[:max_files]
         transcriber = GpuTranscriber(config)
         transcript_dir = self.state_dir / "transcripts"
+        prefetched: dict[str, dict[str, Any] | Exception] = {}
+        prefetch_bytes = 0
+        candidates: list[dict[str, Any]] = []
+        if prefetch_workers > 1:
+            for record in records:
+                known_sha256 = record.get("sha256")
+                known_transcript = (
+                    transcript_dir / f"{known_sha256}.json" if known_sha256 else None
+                )
+                if not runtime_dataless[record["path"]] or (
+                    known_transcript and known_transcript.is_file()
+                ):
+                    continue
+                size_bytes = max(0, int(record.get("size_bytes", 0)))
+                if prefetch_bytes + size_bytes > prefetch_max_bytes:
+                    continue
+                candidates.append(record)
+                prefetch_bytes += size_bytes
+                if len(candidates) == prefetch_workers:
+                    break
+            if candidates:
+                ensure_staging_capacity(self.staging_dir, prefetch_bytes)
+                with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
+                    futures = {
+                        executor.submit(
+                            self.backend.stage,
+                            self.root,
+                            record["path"],
+                            self.staging_dir,
+                            timeout_seconds=stage_stall_timeout_seconds,
+                        ): record["path"]
+                        for record in candidates
+                    }
+                    for future in as_completed(futures):
+                        path = futures[future]
+                        try:
+                            prefetched[path] = future.result()
+                        except Exception as exc:
+                            prefetched[path] = exc
         completed = cached = failed = 0
         failures = []
         eviction_failures = []
@@ -1116,7 +1165,9 @@ class AudioLibrary:
             audio_path = self.root / record["path"]
             audio_input = audio_path
             staged_audio: Path | None = None
-            was_dataless = is_icloud_dataless(audio_path)
+            was_dataless = record["path"] in prefetched or is_icloud_dataless(
+                audio_path
+            )
             status = "failed"
             try:
                 tmk_path = record.get("tmk_path")
@@ -1147,9 +1198,6 @@ class AudioLibrary:
                 if was_dataless and not (
                     known_transcript and known_transcript.is_file()
                 ):
-                    ensure_staging_capacity(
-                        self.staging_dir, int(record.get("size_bytes", 0))
-                    )
                     preserved_tmk = {
                         "tmk_path": record.get("tmk_path"),
                         "tmk_marker_count": record.get("tmk_marker_count"),
@@ -1158,12 +1206,19 @@ class AudioLibrary:
                         ),
                         "tmk_error": record.get("tmk_error"),
                     }
-                    staged = self.backend.stage(
-                        self.root,
-                        record["path"],
-                        self.staging_dir,
-                        timeout_seconds=stage_stall_timeout_seconds,
-                    )
+                    staged = prefetched.pop(record["path"], None)
+                    if isinstance(staged, Exception):
+                        raise staged
+                    if staged is None:
+                        ensure_staging_capacity(
+                            self.staging_dir, int(record.get("size_bytes", 0))
+                        )
+                        staged = self.backend.stage(
+                            self.root,
+                            record["path"],
+                            self.staging_dir,
+                            timeout_seconds=stage_stall_timeout_seconds,
+                        )
                     staged_audio = Path(staged["staged_path"])
                     audio_input = staged_audio
                     inspected = staged["record"]
@@ -1257,6 +1312,9 @@ class AudioLibrary:
             "mode": "icloud_streaming",
             "accelerator": transcriber.accelerator,
             "model": transcriber.model,
+            "prefetch_workers": prefetch_workers,
+            "prefetched": len(candidates),
+            "prefetch_bytes": prefetch_bytes,
             "recordings_selected": len(records),
             "completed": completed,
             "cached": cached,
@@ -1658,6 +1716,10 @@ def build_parser() -> argparse.ArgumentParser:
     stream_parser.add_argument("--path", action="append", default=[])
     stream_parser.add_argument("--inspect-timeout-seconds", type=float, default=14_400)
     stream_parser.add_argument("--stage-stall-timeout-seconds", type=float, default=120)
+    stream_parser.add_argument("--prefetch-workers", type=int, default=1)
+    stream_parser.add_argument(
+        "--prefetch-max-bytes", type=int, default=DEFAULT_PREFETCH_MAX_BYTES
+    )
     stream_parser.add_argument("--keep-local", action="store_true")
     stream_parser.add_argument("--word-timestamps", action="store_true")
     plan_parser = subparsers.add_parser("plan")
@@ -1704,6 +1766,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             relative_paths=args.path,
             inspect_timeout_seconds=args.inspect_timeout_seconds,
             stage_stall_timeout_seconds=args.stage_stall_timeout_seconds,
+            prefetch_workers=args.prefetch_workers,
+            prefetch_max_bytes=args.prefetch_max_bytes,
             evict_after=not args.keep_local,
             progress=progress_line,
         )
