@@ -1517,6 +1517,36 @@ class CliTests(unittest.TestCase):
             self.assertTrue(checkpoint["files"][0]["materialized"])
             self.assertFalse(staged.exists())
 
+            (state / "transcripts" / f"{HASH_A}.json").unlink()
+            (state / "transcripts" / f"{HASH_A}.txt").unlink()
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [record],
+                    "duplicate_groups": [],
+                },
+            )
+            staged.write_bytes(b"audio")
+            library.backend.evict.side_effect = None
+            library.backend.evict.return_value = {"evicted": False}
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=[True, True, False, False],
+                ),
+            ):
+                unconfirmed = library.stream_transcribe()
+            self.assertEqual(unconfirmed["completed"], 1)
+            self.assertEqual(unconfirmed["failed"], 0)
+            self.assertEqual(unconfirmed["eviction_failed"], 1)
+            self.assertIn(
+                "without confirmation", unconfirmed["eviction_failures"][0]["error"]
+            )
+            self.assertFalse(staged.exists())
+
     def test_icloud_dataless_detection(self) -> None:
         path = Mock()
         with patch("audio_library.platform.system", return_value="Linux"):
