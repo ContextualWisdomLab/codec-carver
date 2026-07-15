@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2026-06-25 - [Fast Path for Alphanumeric Regex Replacements]
+**Learning:** Using regex substitution (e.g. `re.sub(r"^\W+|\W+$", "")`) in tight tokenization loops is extremely CPU-bound and slow. However, the majority of tokens in standard text are purely alphanumeric without any punctuation.
+**Action:** When tokenizing or processing text using regular expressions to strip non-word characters, prepend a fast-path check using `str.isalnum()` (or `str.isalpha()`) to bypass the regex overhead for purely alphanumeric words. This safely yields significant performance gains for most valid text inputs.
