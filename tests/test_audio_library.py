@@ -241,6 +241,25 @@ class NamingTests(unittest.TestCase):
             limit=48,
         )
         self.assertIn("VOC-프로세스", repeated_description)
+        display_filtered_description = audio_library.topical_transcript_description(
+            [
+                "의사결정이 되게 결론적으로는 1세대 2세대 3세대 내가 질문 관해서 채팅",
+                "의사결정 질문",
+                "1세대 모델",
+                "2세대 채팅",
+                "3세대 전략",
+                "되게 진행",
+                "결론적으로 결정",
+                "내가 확인",
+                "별도 주제",
+                "다른 안건",
+            ],
+            limit=48,
+        )
+        self.assertEqual(
+            display_filtered_description,
+            "의사결정-1세대-2세대-3세대-질문-채팅",
+        )
         unique_segments = [{"text": f"개별항목{index}"} for index in range(13)]
         self.assertIsNone(
             audio_library.topical_transcript_description(

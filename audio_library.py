@@ -189,6 +189,7 @@ DESCRIPTION_STOPWORDS = frozenset(
         "해서",
     }
 )
+DESCRIPTION_DISPLAY_STOPWORDS = frozenset({"결론적", "관해서", "내가", "되게"})
 
 
 class GpuTranscriptionUnavailableError(RuntimeError):
@@ -716,7 +717,12 @@ def topical_transcript_description(values: list[str], *, limit: int) -> str | No
     if len(selected) < 3:
         selected_keys = {key for _display, key in selected}
         selected.extend(term for term in terms if term[1] not in selected_keys)
-    source = " ".join(display for display, _key in selected[:7])
+    displayed = [
+        (display, key)
+        for display, key in selected
+        if key not in DESCRIPTION_DISPLAY_STOPWORDS
+    ]
+    source = " ".join(display for display, _key in displayed[:6])
     return sanitize_component(source, limit=limit) if source else None
 
 
