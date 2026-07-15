@@ -1159,6 +1159,7 @@ class AudioLibrary:
                             prefetched[path] = future.result()
                         except Exception as exc:
                             prefetched[path] = exc
+        prefetch_fallback_attempted = prefetch_fallback_recovered = 0
         completed = cached = failed = 0
         failures = []
         eviction_failures = []
@@ -1208,7 +1209,19 @@ class AudioLibrary:
                         "tmk_error": record.get("tmk_error"),
                     }
                     staged = prefetched.pop(record["path"], None)
-                    if isinstance(staged, Exception):
+                    if isinstance(staged, subprocess.TimeoutExpired):
+                        prefetch_fallback_attempted += 1
+                        ensure_staging_capacity(
+                            self.staging_dir, int(record.get("size_bytes", 0))
+                        )
+                        staged = self.backend.stage(
+                            self.root,
+                            record["path"],
+                            self.staging_dir,
+                            timeout_seconds=stage_stall_timeout_seconds,
+                        )
+                        prefetch_fallback_recovered += 1
+                    elif isinstance(staged, Exception):
                         raise staged
                     if staged is None:
                         ensure_staging_capacity(
@@ -1316,6 +1329,8 @@ class AudioLibrary:
             "prefetch_workers": prefetch_workers,
             "prefetched": len(candidates),
             "prefetch_bytes": prefetch_bytes,
+            "prefetch_fallback_attempted": prefetch_fallback_attempted,
+            "prefetch_fallback_recovered": prefetch_fallback_recovered,
             "recordings_selected": len(records),
             "completed": completed,
             "cached": cached,

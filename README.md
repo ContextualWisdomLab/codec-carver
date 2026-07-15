@@ -155,7 +155,11 @@ and the Python loop still serializes GPU work, durable checkpoints, scratch
 removal, and native eviction. The no-progress stage timeout defaults to 420
 seconds because real iCloud placeholders can take more than two minutes to
 deliver their first byte; override it with `--stage-stall-timeout-seconds` when
-the provider has a different latency envelope. Already local files stay local.
+the provider has a different latency envelope. A parallel prefetch that reaches
+that timeout is retried once through the serial staging path because FileProvider
+can defer every concurrent request while accepting an immediate single request;
+other failures are not retried. The run summary records fallback attempts and
+recoveries. Already local files stay local.
 Run `hydrate-tmk`
 first when iCloud holds Sony sidecars:
 it reads the tiny TMK files concurrently, checkpoints each SHA-256 and marker

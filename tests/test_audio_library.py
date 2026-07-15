@@ -1183,11 +1183,79 @@ class AudioLibraryTests(unittest.TestCase):
                 )
             self.assertEqual(summary["prefetched"], 2)
             self.assertEqual(summary["prefetch_bytes"], 8)
+            self.assertEqual(summary["prefetch_fallback_attempted"], 0)
+            self.assertEqual(summary["prefetch_fallback_recovered"], 0)
             self.assertEqual(summary["completed"], 1)
             self.assertEqual(summary["failed"], 1)
             self.assertIn("prefetch failed", summary["failures"][0]["error"])
             self.assertEqual(backend.stage.call_count, 2)
             backend.evict.assert_called_once_with(root.resolve(), "first.wav")
+            self.assertFalse((library.staging_dir / f"{HASH_A}.wav").exists())
+
+    def test_stream_transcribe_retries_prefetch_timeouts_serially(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            records = [
+                _record(path, "", materialized=False, size_bytes=4, tmk_path=None)
+                for path in ("first.wav", "second.wav")
+            ]
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": records,
+                    "duplicate_groups": [],
+                },
+            )
+            backend = Mock()
+            backend.evict.return_value = {"evicted": True}
+            library = AudioLibrary(root, backend)
+            barrier = threading.Barrier(2)
+            attempts = {record["path"]: 0 for record in records}
+
+            def stage(_root, path, staging_dir, *, timeout_seconds):
+                attempts[path] += 1
+                if attempts[path] == 1:
+                    barrier.wait(timeout=2)
+                    raise subprocess.TimeoutExpired(["stage", path], timeout_seconds)
+                staged = staging_dir / f"{HASH_A}.wav"
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(b"audio")
+                record = next(item for item in records if item["path"] == path)
+                return {
+                    "record": {**record, "sha256": HASH_A, "error": None},
+                    "staged_path": str(staged),
+                }
+
+            backend.stage.side_effect = stage
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "직렬 폴백 회복",
+                "segments": [],
+                "language": "ko",
+            }
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=[True, True, False, False],
+                ),
+            ):
+                summary = library.stream_transcribe(
+                    prefetch_workers=2,
+                    prefetch_max_bytes=8,
+                    stage_stall_timeout_seconds=9,
+                )
+            self.assertEqual(summary["prefetched"], 2)
+            self.assertEqual(summary["prefetch_fallback_attempted"], 2)
+            self.assertEqual(summary["prefetch_fallback_recovered"], 2)
+            self.assertEqual(summary["completed"], 1)
+            self.assertEqual(summary["cached"], 1)
+            self.assertEqual(summary["failed"], 0)
+            self.assertEqual(backend.stage.call_count, 4)
+            self.assertEqual(backend.evict.call_count, 2)
             self.assertFalse((library.staging_dir / f"{HASH_A}.wav").exists())
 
     def test_stream_transcribe_validates_and_bounds_prefetch(self) -> None:
