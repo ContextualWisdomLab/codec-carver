@@ -1144,11 +1144,11 @@ class AudioLibrary:
                     continue
                 candidates.append(record)
                 prefetch_bytes += size_bytes
-                if len(candidates) == prefetch_workers:
-                    break
             if candidates:
                 ensure_staging_capacity(self.staging_dir, prefetch_bytes)
-                with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
+                with ThreadPoolExecutor(
+                    max_workers=min(prefetch_workers, len(candidates))
+                ) as executor:
                     futures = {
                         executor.submit(
                             self.backend.stage,
@@ -1166,6 +1166,8 @@ class AudioLibrary:
                         except Exception as exc:
                             prefetched[path] = exc
         prefetch_fallback_attempted = prefetch_fallback_recovered = 0
+        prefetch_fallback_suppressed = 0
+        prefetch_fallback_allowed = True
         completed = cached = failed = 0
         failures = []
         eviction_failures = []
@@ -1216,16 +1218,23 @@ class AudioLibrary:
                     }
                     staged = prefetched.pop(record["path"], None)
                     if isinstance(staged, subprocess.TimeoutExpired):
+                        if not prefetch_fallback_allowed:
+                            prefetch_fallback_suppressed += 1
+                            raise staged
                         prefetch_fallback_attempted += 1
                         ensure_staging_capacity(
                             self.staging_dir, int(record.get("size_bytes", 0))
                         )
-                        staged = self.backend.stage(
-                            self.root,
-                            record["path"],
-                            self.staging_dir,
-                            timeout_seconds=stage_stall_timeout_seconds,
-                        )
+                        try:
+                            staged = self.backend.stage(
+                                self.root,
+                                record["path"],
+                                self.staging_dir,
+                                timeout_seconds=stage_stall_timeout_seconds,
+                            )
+                        except Exception:
+                            prefetch_fallback_allowed = False
+                            raise
                         prefetch_fallback_recovered += 1
                     elif isinstance(staged, Exception):
                         raise staged
@@ -1337,6 +1346,7 @@ class AudioLibrary:
             "prefetch_bytes": prefetch_bytes,
             "prefetch_fallback_attempted": prefetch_fallback_attempted,
             "prefetch_fallback_recovered": prefetch_fallback_recovered,
+            "prefetch_fallback_suppressed": prefetch_fallback_suppressed,
             "recordings_selected": len(records),
             "completed": completed,
             "cached": cached,

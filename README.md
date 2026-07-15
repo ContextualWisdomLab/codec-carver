@@ -149,17 +149,19 @@ codec-carver-library /path/to/recordings apply --execute
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
 that local stage, and Python atomically checkpoints before removing the stage.
-`--prefetch-workers` can overlap a bounded batch of Rust/iCloud staging calls;
-`--prefetch-max-bytes` caps their combined logical size (512 MiB by default),
-and the Python loop still serializes GPU work, durable checkpoints, scratch
-removal, and native eviction. The no-progress stage timeout defaults to 420
-seconds because real iCloud placeholders can take more than two minutes to
+`--prefetch-workers` keeps a bounded rolling queue of Rust/iCloud staging calls
+full; `--prefetch-max-bytes` caps their combined logical size (512 MiB by
+default), and the Python loop still serializes GPU work, durable checkpoints,
+scratch removal, and native eviction. The no-progress stage timeout defaults to
+420 seconds because real iCloud placeholders can take more than two minutes to
 deliver their first byte; override it with `--stage-stall-timeout-seconds` when
 the provider has a different latency envelope. A parallel prefetch that reaches
 that timeout is retried once through the serial staging path because FileProvider
-can defer every concurrent request while accepting an immediate single request;
-other failures are not retried. The run summary records fallback attempts and
-recoveries. Already local files stay local.
+can defer every concurrent request while accepting an immediate single request.
+If that serial canary also fails, later timeouts in the same batch skip the
+otherwise identical long retry; other failures are not retried. The run summary
+records fallback attempts, recoveries, and suppressions. Already local files
+stay local.
 Run `hydrate-tmk`
 first when iCloud holds Sony sidecars:
 it reads the tiny TMK files concurrently, checkpoints each SHA-256 and marker
