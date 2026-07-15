@@ -152,7 +152,11 @@ that local stage, and Python atomically checkpoints before removing the stage.
 `--prefetch-workers` can overlap a bounded batch of Rust/iCloud staging calls;
 `--prefetch-max-bytes` caps their combined logical size (512 MiB by default),
 and the Python loop still serializes GPU work, durable checkpoints, scratch
-removal, and native eviction. Already local files stay local. Run `hydrate-tmk`
+removal, and native eviction. The no-progress stage timeout defaults to 420
+seconds because real iCloud placeholders can take more than two minutes to
+deliver their first byte; override it with `--stage-stall-timeout-seconds` when
+the provider has a different latency envelope. Already local files stay local.
+Run `hydrate-tmk`
 first when iCloud holds Sony sidecars:
 it reads the tiny TMK files concurrently, checkpoints each SHA-256 and marker
 summary, and backfills any existing transcript sidecars. A later dataless flag

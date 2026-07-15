@@ -30,6 +30,7 @@ from typing import Any, Callable, Iterable
 DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo-q4"
 DEFAULT_CUDA_MODEL = "large-v3-turbo"
 DEFAULT_PREFETCH_MAX_BYTES = 512 * 1024 * 1024
+DEFAULT_STAGE_STALL_TIMEOUT_SECONDS = 420
 MACOS_SF_DATALESS = 0x40000000
 MIN_TRANSCRIBABLE_SECONDS = 0.5
 STANDARD_NAME_RE = re.compile(
@@ -1074,7 +1075,7 @@ class AudioLibrary:
         max_files: int | None = None,
         relative_paths: Iterable[str] | None = None,
         inspect_timeout_seconds: float = 14_400,
-        stage_stall_timeout_seconds: float = 120,
+        stage_stall_timeout_seconds: float = DEFAULT_STAGE_STALL_TIMEOUT_SECONDS,
         prefetch_workers: int = 1,
         prefetch_max_bytes: int = DEFAULT_PREFETCH_MAX_BYTES,
         evict_after: bool = True,
@@ -1715,7 +1716,11 @@ def build_parser() -> argparse.ArgumentParser:
     stream_parser.add_argument("--max-files", type=int)
     stream_parser.add_argument("--path", action="append", default=[])
     stream_parser.add_argument("--inspect-timeout-seconds", type=float, default=14_400)
-    stream_parser.add_argument("--stage-stall-timeout-seconds", type=float, default=120)
+    stream_parser.add_argument(
+        "--stage-stall-timeout-seconds",
+        type=float,
+        default=DEFAULT_STAGE_STALL_TIMEOUT_SECONDS,
+    )
     stream_parser.add_argument("--prefetch-workers", type=int, default=1)
     stream_parser.add_argument(
         "--prefetch-max-bytes", type=int, default=DEFAULT_PREFETCH_MAX_BYTES

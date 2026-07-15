@@ -1605,6 +1605,15 @@ class CliTests(unittest.TestCase):
         )
         library.apply.assert_called_once_with(execute=True)
 
+    def test_stream_parser_uses_field_tested_stage_stall_default(self) -> None:
+        args = audio_library.build_parser().parse_args([".", "stream-transcribe"])
+
+        self.assertEqual(
+            args.stage_stall_timeout_seconds,
+            audio_library.DEFAULT_STAGE_STALL_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(args.stage_stall_timeout_seconds, 420)
+
     def test_main_returns_failure_when_batch_contains_failed_files(self) -> None:
         library = Mock()
         library.stream_transcribe.return_value = {
