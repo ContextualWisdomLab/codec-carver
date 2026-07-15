@@ -230,18 +230,18 @@ class RustBackendTests(unittest.TestCase):
 
     def test_default_backend_and_optional_command_flags(self) -> None:
         completed = subprocess.CompletedProcess([], 0, stdout='{"ok": true}', stderr="")
-        with (
-            patch(
-                "audio_library.shutil.which",
-                return_value="/usr/local/bin/codec-carver-core",
-            ),
-            patch("audio_library.subprocess.run", return_value=completed) as run,
-        ):
-            backend = RustBackend()
-            backend.inventory(Path("."), Path("inventory.json"))
-            self.assertNotIn("--threads", run.call_args.args[0])
-            backend.apply(Path("plan.json"), Path("journal.json"), execute=False)
-            self.assertNotIn("--execute", run.call_args.args[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            installed = Path(tmp) / "codec-carver-core"
+            installed.write_bytes(b"")
+            with (
+                patch("audio_library.shutil.which", return_value=str(installed)),
+                patch("audio_library.subprocess.run", return_value=completed) as run,
+            ):
+                backend = RustBackend()
+                backend.inventory(Path("."), Path("inventory.json"))
+                self.assertNotIn("--threads", run.call_args.args[0])
+                backend.apply(Path("plan.json"), Path("journal.json"), execute=False)
+                self.assertNotIn("--execute", run.call_args.args[0])
 
     def test_missing_backend_has_build_instruction(self) -> None:
         with (
