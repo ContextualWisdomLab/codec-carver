@@ -148,6 +148,8 @@ summary, and backfills any existing transcript sidecars. A later dataless flag
 does not cause the same TMK to be downloaded again. Four workers and a 60-second
 per-file timeout are the defaults because higher iCloud File Provider concurrency
 can delay every placeholder; rerunning resumes only unresolved sidecars.
+`stream-transcribe` never blocks an audio recording on an unresolved TMK: it uses
+hydrated markers when present and records `tmk_error` evidence otherwise.
 Transcripts are keyed by the full SHA-256 under
 `.codec-carver/transcripts/`, so exact copies are inferred only once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized

@@ -30,6 +30,8 @@ preferred interface for recording curation.
   metadata is already complete even if iCloud restores its dataless flag.
   Its four-worker, 60-second defaults bound File Provider backpressure; reruns
   select only sidecars still lacking a hash or marker count.
+- `stream-transcribe` consumes only checkpointed TMK metadata. An unresolved
+  sidecar is retained as `tmk_error` evidence and cannot block GPU audio work.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
 - Mutations are dry-run by default. Execution rejects absolute/parent paths,

@@ -696,9 +696,6 @@ class AudioLibrary:
             try:
                 tmk_path = record.get("tmk_path")
                 tmk_record = records_by_path.get(tmk_path, {}) if tmk_path else {}
-                tmk_dataless = bool(
-                    tmk_path and is_icloud_dataless(self.root / tmk_path)
-                )
                 tmk_needs_metadata = bool(
                     tmk_path
                     and (
@@ -706,32 +703,14 @@ class AudioLibrary:
                         or tmk_record.get("tmk_marker_count") is None
                     )
                 )
-                if tmk_path and tmk_needs_metadata:
-                    if tmk_dataless:
-                        ensure_staging_capacity(
-                            self.staging_dir, int(tmk_record.get("size_bytes", 0))
-                        )
-                        staged_tmk = self.backend.stage(
-                            self.root,
-                            tmk_path,
-                            self.staging_dir,
-                            timeout_seconds=inspect_timeout_seconds,
-                        )
-                        tmk_record = staged_tmk["record"]
-                        remove_staged_file(
-                            self.staging_dir, Path(staged_tmk["staged_path"])
-                        )
-                        tmk_record["materialized"] = not is_icloud_dataless(
-                            self.root / tmk_path
+                if tmk_path:
+                    if tmk_needs_metadata:
+                        record["tmk_error"] = tmk_record.get("error") or (
+                            "TMK metadata unresolved; run hydrate-tmk before "
+                            "stream-transcribe"
                         )
                     else:
-                        tmk_record = self.backend.inspect(
-                            self.root,
-                            tmk_path,
-                            timeout_seconds=inspect_timeout_seconds,
-                        )
-                    records_by_path[tmk_path].update(tmk_record)
-                if tmk_path:
+                        record.pop("tmk_error", None)
                     record["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
                     record["tmk_last_marker_seconds"] = tmk_record.get(
                         "tmk_last_marker_seconds"
@@ -752,6 +731,7 @@ class AudioLibrary:
                         "tmk_last_marker_seconds": record.get(
                             "tmk_last_marker_seconds"
                         ),
+                        "tmk_error": record.get("tmk_error"),
                     }
                     staged = self.backend.stage(
                         self.root,
@@ -777,6 +757,7 @@ class AudioLibrary:
                         "tmk_last_marker_seconds": record.get(
                             "tmk_last_marker_seconds"
                         ),
+                        "tmk_error": record.get("tmk_error"),
                     }
                     record.update(
                         self.backend.inspect(
@@ -805,6 +786,7 @@ class AudioLibrary:
                             "tmk_last_marker_seconds": record.get(
                                 "tmk_last_marker_seconds"
                             ),
+                            "tmk_error": record.get("tmk_error"),
                         }
                     )
                     atomic_json_write(transcript_path, result)

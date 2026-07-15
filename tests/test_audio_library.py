@@ -713,7 +713,7 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(transcript["tmk_marker_count"], 3)
             self.assertEqual(transcript["tmk_last_marker_seconds"], 90.0)
 
-    def test_stream_transcribe_inspects_tmk_and_audio_then_evicts(self) -> None:
+    def test_stream_transcribe_skips_unresolved_tmk_and_streams_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".codec-carver"
@@ -729,28 +729,15 @@ class AudioLibraryTests(unittest.TestCase):
             atomic_json_write(state / "inventory.json", manifest)
             backend = Mock()
             library = AudioLibrary(root, backend)
-            backend.stage.side_effect = [
-                {
-                    "record": {
-                        **manifest["files"][1],
-                        "sha256": TMK_HASH,
-                        "materialized": False,
-                        "tmk_marker_count": 2,
-                        "tmk_last_marker_seconds": 600.0,
-                        "error": None,
-                    },
-                    "staged_path": str(library.staging_dir / f"{TMK_HASH}.tmk"),
+            backend.stage.return_value = {
+                "record": {
+                    **manifest["files"][0],
+                    "sha256": HASH_A,
+                    "materialized": False,
+                    "error": None,
                 },
-                {
-                    "record": {
-                        **manifest["files"][0],
-                        "sha256": HASH_A,
-                        "materialized": False,
-                        "error": None,
-                    },
-                    "staged_path": str(library.staging_dir / f"{HASH_A}.wav"),
-                },
-            ]
+                "staged_path": str(library.staging_dir / f"{HASH_A}.wav"),
+            }
             fake = Mock(accelerator="mlx", model="model")
             fake.transcribe.return_value = {
                 "text": "회의",
@@ -765,7 +752,7 @@ class AudioLibraryTests(unittest.TestCase):
             ):
                 summary = library.stream_transcribe(progress=progress)
             self.assertEqual(summary["completed"], 1)
-            self.assertEqual(backend.stage.call_count, 2)
+            backend.stage.assert_called_once()
             backend.inspect.assert_not_called()
             evict.assert_not_called()
             progress.assert_called_once()
@@ -774,6 +761,11 @@ class AudioLibraryTests(unittest.TestCase):
             )
             self.assertEqual(checkpoint["files"][0]["sha256"], HASH_A)
             self.assertFalse(checkpoint["files"][0]["materialized"])
+            self.assertEqual(checkpoint["files"][0]["tmk_error"], "dataless")
+            transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(transcript["tmk_error"], "dataless")
 
     def test_stream_transcribe_uses_cached_hash_and_isolates_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -858,10 +850,7 @@ class AudioLibraryTests(unittest.TestCase):
                 },
             )
             backend = Mock()
-            backend.inspect.side_effect = [
-                {**tmk, "sha256": TMK_HASH, "tmk_marker_count": 1},
-                {**audio, "sha256": HASH_A},
-            ]
+            backend.inspect.return_value = {**audio, "sha256": HASH_A}
             fake = Mock(accelerator="mlx", model="model")
             fake.transcribe.return_value = {
                 "text": "로컬 회의",
@@ -871,7 +860,11 @@ class AudioLibraryTests(unittest.TestCase):
             with patch("audio_library.GpuTranscriber", return_value=fake):
                 summary = AudioLibrary(root, backend).stream_transcribe()
             self.assertEqual(summary["completed"], 1)
-            self.assertEqual(backend.inspect.call_count, 2)
+            backend.inspect.assert_called_once()
+            transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
+            )
+            self.assertIn("run hydrate-tmk", transcript["tmk_error"])
             backend.stage.assert_not_called()
 
     def test_stream_transcribe_rejects_hash_drift_and_evicts_materialized_source(
