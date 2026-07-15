@@ -131,7 +131,7 @@ python3.12 -m venv .venv
 .venv/bin/pip install -e ".[transcribe-mlx]"  # Apple Silicon / Metal
 
 codec-carver-library /path/to/recordings inventory --threads 4
-codec-carver-library /path/to/recordings hydrate-tmk --workers 16
+codec-carver-library /path/to/recordings hydrate-tmk --workers 4
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
 # Add --word-timestamps only when word-level audit evidence is required.
 codec-carver-library /path/to/recordings plan
@@ -145,7 +145,10 @@ stage, and Python atomically checkpoints before removing the stage. Already
 local files stay local. Run `hydrate-tmk` first when iCloud holds Sony sidecars:
 it reads the tiny TMK files concurrently, checkpoints each SHA-256 and marker
 summary, and backfills any existing transcript sidecars. A later dataless flag
-does not cause the same TMK to be downloaded again. Transcripts are keyed by the full SHA-256 under
+does not cause the same TMK to be downloaded again. Four workers and a 60-second
+per-file timeout are the defaults because higher iCloud File Provider concurrency
+can delay every placeholder; rerunning resumes only unresolved sidecars.
+Transcripts are keyed by the full SHA-256 under
 `.codec-carver/transcripts/`, so exact copies are inferred only once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized
 filenames. Duplicate files move to the recoverable

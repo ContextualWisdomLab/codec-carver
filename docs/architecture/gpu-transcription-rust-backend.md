@@ -28,6 +28,8 @@ preferred interface for recording curation.
 - `hydrate-tmk` fetches unresolved iCloud TMK sidecars concurrently, atomically
   checkpoints each hash/marker result, and never refetches a sidecar whose
   metadata is already complete even if iCloud restores its dataless flag.
+  Its four-worker, 60-second defaults bound File Provider backpressure; reruns
+  select only sidecars still lacking a hash or marker count.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
 - Mutations are dry-run by default. Execution rejects absolute/parent paths,

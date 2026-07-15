@@ -532,8 +532,8 @@ class AudioLibrary:
     def hydrate_tmk_metadata(
         self,
         *,
-        workers: int = 16,
-        inspect_timeout_seconds: float = 14_400,
+        workers: int = 4,
+        inspect_timeout_seconds: float = 60,
         progress: Callable[[int, int, str, str], None] | None = None,
     ) -> dict[str, Any]:
         """Hash Sony TMK sidecars concurrently and checkpoint their markers once."""
@@ -1134,8 +1134,8 @@ def build_parser() -> argparse.ArgumentParser:
     inventory_parser = subparsers.add_parser("inventory")
     inventory_parser.add_argument("--threads", type=int)
     tmk_parser = subparsers.add_parser("hydrate-tmk")
-    tmk_parser.add_argument("--workers", type=int, default=16)
-    tmk_parser.add_argument("--inspect-timeout-seconds", type=float, default=14_400)
+    tmk_parser.add_argument("--workers", type=int, default=4)
+    tmk_parser.add_argument("--inspect-timeout-seconds", type=float, default=60)
     transcribe_parser = subparsers.add_parser("transcribe")
     transcribe_parser.add_argument(
         "--accelerator", choices=["auto", "mlx", "cuda"], default="auto"
