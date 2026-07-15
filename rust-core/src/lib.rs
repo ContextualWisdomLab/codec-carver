@@ -320,14 +320,7 @@ pub fn stage_relative(
             return Err(error);
         }
     };
-    let staged_size = fs::metadata(&partial)
-        .with_context(|| format!("cannot stat staged partial {}", partial.display()))
-        .map(|metadata| metadata.len())
-        .and_then(|copied| ensure_complete_stage(&canonical_path, pending.size_bytes, copied));
-    if let Err(error) = staged_size {
-        let _ = fs::remove_file(&partial);
-        return Err(error);
-    }
+    ensure_complete_stage(&canonical_path, &partial, pending.size_bytes)?;
     let staged_path = canonical_staging.join(format!("{sha256}.{extension}"));
     if staged_path.exists() {
         if hash_file(&staged_path, None)? == sha256 {
@@ -574,8 +567,19 @@ fn copy_and_hash_file(
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn ensure_complete_stage(source: &Path, expected: u64, copied: u64) -> Result<()> {
+fn ensure_complete_stage(source: &Path, partial: &Path, expected: u64) -> Result<()> {
+    let copied = match fs::metadata(partial)
+        .with_context(|| format!("cannot stat staged partial {}", partial.display()))
+        .map(|metadata| metadata.len())
+    {
+        Ok(copied) => copied,
+        Err(error) => {
+            let _ = fs::remove_file(partial);
+            return Err(error);
+        }
+    };
     if copied != expected {
+        let _ = fs::remove_file(partial);
         bail!(
             "STAGE_SOURCE_NOT_READY copied {copied} of {expected} bytes from {}",
             source.display()
@@ -1081,14 +1085,25 @@ mod tests {
 
     #[test]
     fn incomplete_stage_size_is_not_accepted_as_a_complete_source() {
+        let base = temporary_directory("incomplete-stage");
+        let partial = base.join("placeholder.partial");
         let source = Path::new("placeholder.wav");
-        ensure_complete_stage(source, 5, 5).unwrap();
-        let error = ensure_complete_stage(source, 5, 0).unwrap_err();
+
+        fs::write(&partial, b"audio").unwrap();
+        ensure_complete_stage(source, &partial, 5).unwrap();
+
+        fs::write(&partial, b"").unwrap();
+        let error = ensure_complete_stage(source, &partial, 5).unwrap_err();
         assert!(
             error
                 .to_string()
                 .contains("STAGE_SOURCE_NOT_READY copied 0 of 5 bytes from placeholder.wav")
         );
+        assert!(!partial.exists());
+
+        let error = ensure_complete_stage(source, &partial, 5).unwrap_err();
+        assert!(error.to_string().contains("cannot stat staged partial"));
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
