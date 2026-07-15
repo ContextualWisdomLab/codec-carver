@@ -713,6 +713,49 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(transcript["tmk_marker_count"], 3)
             self.assertEqual(transcript["tmk_last_marker_seconds"], 90.0)
 
+    def test_stream_transcribe_prioritizes_runtime_local_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            remote = _record(
+                "remote.wav",
+                HASH_A,
+                materialized=True,
+                recorded_at="2024-01-01T00:00:00+09:00",
+            )
+            local = _record(
+                "local.wav",
+                HASH_B,
+                materialized=False,
+                recorded_at="2024-01-02T00:00:00+09:00",
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [remote, local],
+                    "duplicate_groups": [],
+                },
+            )
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_B}.json",
+                {"text": "cached local"},
+            )
+            backend = Mock()
+            fake = Mock(accelerator="mlx", model="model")
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=lambda path: path.name == "remote.wav",
+                ),
+            ):
+                summary = AudioLibrary(root, backend).stream_transcribe(max_files=1)
+            self.assertEqual(summary["cached"], 1)
+            backend.stage.assert_not_called()
+            fake.transcribe.assert_not_called()
+
     def test_stream_transcribe_skips_unresolved_tmk_and_streams_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -916,7 +959,10 @@ class AudioLibraryTests(unittest.TestCase):
             atomic_json_write(state / "inventory.json", manifest)
             with (
                 patch("audio_library.GpuTranscriber", return_value=fake),
-                patch("audio_library.is_icloud_dataless", return_value=False),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=[True, True, False],
+                ),
                 patch("audio_library.evict_icloud_file") as evict,
             ):
                 summary = library.stream_transcribe()

@@ -150,6 +150,8 @@ per-file timeout are the defaults because higher iCloud File Provider concurrenc
 can delay every placeholder; rerunning resumes only unresolved sidecars.
 `stream-transcribe` never blocks an audio recording on an unresolved TMK: it uses
 hydrated markers when present and records `tmk_error` evidence otherwise.
+At startup it samples the live macOS dataless flag and drains currently local
+audio before remote placeholders, keeping the GPU fed while iCloud catches up.
 Transcripts are keyed by the full SHA-256 under
 `.codec-carver/transcripts/`, so exact copies are inferred only once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized

@@ -660,10 +660,17 @@ class AudioLibrary:
 
         manifest = self._load_inventory()
         records_by_path = {record["path"]: record for record in manifest["files"]}
+        audio_records = [
+            record for record in manifest["files"] if record["kind"] == "audio"
+        ]
+        runtime_dataless = {
+            record["path"]: is_icloud_dataless(self.root / record["path"])
+            for record in audio_records
+        }
         records = sorted(
-            (record for record in manifest["files"] if record["kind"] == "audio"),
+            audio_records,
             key=lambda record: (
-                not record.get("materialized", False),
+                runtime_dataless[record["path"]],
                 record.get("recorded_at") or "9999",
                 record["path"],
             ),
@@ -689,9 +696,7 @@ class AudioLibrary:
             audio_path = self.root / record["path"]
             audio_input = audio_path
             staged_audio: Path | None = None
-            was_dataless = not record.get("materialized", False) or is_icloud_dataless(
-                audio_path
-            )
+            was_dataless = is_icloud_dataless(audio_path)
             status = "failed"
             try:
                 tmk_path = record.get("tmk_path")

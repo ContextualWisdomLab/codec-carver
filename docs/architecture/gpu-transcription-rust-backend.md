@@ -32,6 +32,8 @@ preferred interface for recording curation.
   select only sidecars still lacking a hash or marker count.
 - `stream-transcribe` consumes only checkpointed TMK metadata. An unresolved
   sidecar is retained as `tmk_error` evidence and cannot block GPU audio work.
+- Streaming order is based on the live macOS dataless flag rather than stale
+  inventory state, so locally resident audio reaches the GPU before iCloud work.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
 - Mutations are dry-run by default. Execution rejects absolute/parent paths,
