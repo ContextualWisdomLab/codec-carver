@@ -117,6 +117,41 @@ If it is not installed, conversion runs normally and transcription is skipped
 with a `TRANSCRIBE_SKIP` notice. A failing transcript never aborts a conversion.
 Choose a model with `--transcribe-model` (default `base`).
 
+## GPU audio-library curation (Python API + Rust backend)
+
+The audio-library workflow standardizes recording names from recording time,
+known location, transcript content, and SHA-256; parses Sony `.tmk` markers; and
+quarantines exact duplicates. Byte-heavy scanning and mutations run in Rust,
+while Python keeps one GPU Whisper model loaded for the batch. Ollama is never
+used and GPU mode does not fall back to CPU.
+
+```bash
+cargo build --release --manifest-path rust-core/Cargo.toml
+python3.12 -m venv .venv
+.venv/bin/pip install -e ".[transcribe-mlx]"  # Apple Silicon / Metal
+
+codec-carver-library /path/to/recordings inventory --threads 4
+codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
+# Add --word-timestamps only when word-level audit evidence is required.
+codec-carver-library /path/to/recordings plan
+codec-carver-library /path/to/recordings apply          # validation only
+codec-carver-library /path/to/recordings apply --execute
+```
+
+`stream-transcribe` is the low-disk iCloud mode: Rust streams one remote file to
+system scratch while calculating SHA-256, Metal/CUDA transcribes that local
+stage, and Python atomically checkpoints before removing the stage. Already
+local files stay local. Transcripts are keyed by the full SHA-256 under
+`.codec-carver/transcripts/`, so exact copies are inferred only once. Ultra-short
+low-confidence words remain auditable in JSON but do not enter standardized
+filenames. Duplicate files move to the recoverable
+`.codec-carver/quarantine/exact-duplicates/` tree; no irreversible deletion is
+performed by default.
+
+The importable API is `audio_library.AudioLibrary`. The architecture, evidence
+precedence, filename contract, and primary research/standards sources are in
+[`docs/architecture/gpu-transcription-rust-backend.md`](docs/architecture/gpu-transcription-rust-backend.md).
+
 ## Safety notes
 
 - Source files selected by the scan are protected from deletion or overwrite; keep `--output-dir` as a generated-only directory so excluded originals are never mistaken for stale generated outputs.
