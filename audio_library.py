@@ -33,9 +33,14 @@ MIN_TRANSCRIBABLE_SECONDS = 0.5
 STANDARD_NAME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:__[^/]+)*__sha256-[0-9a-f]{12}$"
 )
+STANDARD_SHA_RE = re.compile(r"__sha256-(?P<prefix>[0-9a-f]{12})(?:\.|$)")
 FILLER_RE = re.compile(r"\b(?:어|음|아|그|저기|그러니까|뭐지)\b[,.!?\s]*")
 SPACE_RE = re.compile(r"\s+")
 UNSAFE_NAME_RE = re.compile(r"[^0-9A-Za-z가-힣._-]+")
+STOCK_HALLUCINATION_RE = re.compile(
+    r"(?:다음-(?:영상|비디오)에서-만나요|이-시각-세계였습니다|"
+    r"시청해-주셔서-감사합니다|이곳은-이곳에서|다음-주에-만나요)"
+)
 
 
 class GpuTranscriptionUnavailableError(RuntimeError):
@@ -168,47 +173,54 @@ class RustBackend:
         pattern = f".codec-carver-{process.pid}-*.partial"
         observed_sizes: tuple[tuple[str, int], ...] = ()
         last_activity = time.monotonic()
-        while True:
-            remaining = max(
-                0.01,
-                min(
-                    1.0,
-                    stall_timeout_seconds - (time.monotonic() - last_activity),
-                ),
-            )
-            try:
-                stdout, stderr = process.communicate(timeout=remaining)
-            except subprocess.TimeoutExpired as exc:
-                now = time.monotonic()
-                current_sizes = tuple(
-                    sorted(
-                        (partial.name, partial.stat().st_size)
-                        for partial in staging_dir.glob(pattern)
+        try:
+            while True:
+                remaining = max(
+                    0.01,
+                    min(
+                        1.0,
+                        stall_timeout_seconds - (time.monotonic() - last_activity),
+                    ),
+                )
+                try:
+                    stdout, stderr = process.communicate(timeout=remaining)
+                except subprocess.TimeoutExpired as exc:
+                    now = time.monotonic()
+                    current_sizes = tuple(
+                        sorted(
+                            (partial.name, partial.stat().st_size)
+                            for partial in staging_dir.glob(pattern)
+                        )
                     )
-                )
-                if current_sizes != observed_sizes:
-                    observed_sizes = current_sizes
-                    last_activity = now
-                if now - last_activity < stall_timeout_seconds:
-                    continue
+                    if current_sizes != observed_sizes:
+                        observed_sizes = current_sizes
+                        last_activity = now
+                    if now - last_activity < stall_timeout_seconds:
+                        continue
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    raise subprocess.TimeoutExpired(
+                        command,
+                        stall_timeout_seconds,
+                        output=stdout,
+                        stderr=stderr,
+                    ) from exc
+                if process.returncode != 0:
+                    raise subprocess.CalledProcessError(
+                        process.returncode,
+                        command,
+                        output=stdout,
+                        stderr=stderr,
+                    )
+                return json.loads(stdout)
+        except BaseException:
+            if process.poll() is None:
                 process.kill()
-                stdout, stderr = process.communicate()
-                for partial in staging_dir.glob(pattern):
-                    partial.unlink(missing_ok=True)
-                raise subprocess.TimeoutExpired(
-                    command,
-                    stall_timeout_seconds,
-                    output=stdout,
-                    stderr=stderr,
-                ) from exc
-            if process.returncode != 0:
-                raise subprocess.CalledProcessError(
-                    process.returncode,
-                    command,
-                    output=stdout,
-                    stderr=stderr,
-                )
-            return json.loads(stdout)
+                process.communicate()
+            raise
+        finally:
+            for partial in staging_dir.glob(pattern):
+                partial.unlink(missing_ok=True)
 
     def apply(self, plan: Path, journal: Path, *, execute: bool) -> dict[str, Any]:
         """Validate or execute an auditable mutation plan in Rust."""
@@ -446,6 +458,17 @@ def trusted_transcript_text(
 def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> str:
     """Derive a deterministic filename description from early transcript content."""
 
+    segment_values = [
+        str(segment.get("text", "")).strip()
+        for segment in transcript.get("segments", [])
+        if str(segment.get("text", "")).strip()
+    ]
+    stock_segment_count = sum(
+        bool(STOCK_HALLUCINATION_RE.search(sanitize_component(value, limit=256)))
+        for value in segment_values
+    )
+    if segment_values and stock_segment_count * 4 >= len(segment_values):
+        return "무음-또는-전사불명"
     candidates = [
         str(segment.get("text", "")).strip()
         for segment in transcript.get("segments", [])[:12]
@@ -457,7 +480,26 @@ def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> st
         SPACE_RE.sub(" ", FILLER_RE.sub("", value)).strip(" .,!?")
         for value in candidates
     ]
-    meaningful = [value for value in cleaned if len(value) >= 4]
+    duration = transcript.get("duration_seconds")
+    full_text = SPACE_RE.sub(
+        " ", FILLER_RE.sub("", str(transcript.get("text", "")))
+    ).strip(" .,!?")
+    if (
+        duration is not None
+        and float(duration) < 30
+        and (
+            full_text
+            in {"다음 영상에서 만나요", "다음 비디오에서 만나요", "감사합니다"}
+        )
+    ):
+        return "무음-또는-전사불명"
+    meaningful = [
+        value
+        for value in cleaned
+        if len(value) >= 4
+        and not STOCK_HALLUCINATION_RE.search(sanitize_component(value, limit=limit))
+        and cleaned.count(value) == 1
+    ]
     source = max(
         meaningful[:5],
         key=lambda value: (len(set(value.split())), len(value)),
@@ -522,11 +564,31 @@ class AudioLibrary:
     def inventory(self, *, threads: int | None = None) -> dict[str, Any]:
         """Generate the canonical SHA-256/TMK inventory."""
 
-        return self.backend.inventory(
+        inventory_path = self.state_dir / "inventory.json"
+        previous_manifest = None
+        if inventory_path.is_file():
+            previous_bytes = inventory_path.read_bytes()
+            previous_manifest = json.loads(previous_bytes)
+            history_path = (
+                self.state_dir
+                / "inventory-history"
+                / f"{hashlib.sha256(previous_bytes).hexdigest()}.json"
+            )
+            if not history_path.is_file():
+                atomic_json_write(history_path, previous_manifest)
+        manifest = self.backend.inventory(
             self.root,
-            self.state_dir / "inventory.json",
+            inventory_path,
             threads=threads,
         )
+        if "files" in manifest:
+            restore_inventory_evidence(
+                manifest,
+                self.state_dir,
+                previous_manifest=previous_manifest,
+            )
+            atomic_json_write(inventory_path, manifest)
+        return manifest
 
     def transcribe(
         self,
@@ -895,9 +957,18 @@ class AudioLibrary:
         atomic_json_write(self.state_dir / "streaming-transcription-run.json", summary)
         return summary
 
-    def plan(self, *, allow_missing_transcripts: bool = False) -> dict[str, Any]:
+    def plan(
+        self,
+        *,
+        allow_missing_transcripts: bool = False,
+        defer_unready: bool = False,
+    ) -> dict[str, Any]:
         """Create a collision-resistant duplicate quarantine and rename plan."""
 
+        if allow_missing_transcripts and defer_unready:
+            raise ValueError(
+                "allow_missing_transcripts and defer_unready are mutually exclusive"
+            )
         manifest = self._load_inventory()
         records_by_path = {record["path"]: record for record in manifest["files"]}
         earliest_by_hash = {
@@ -934,7 +1005,11 @@ class AudioLibrary:
                     )
                     moved_tmk.add(tmk_path)
 
-        missing = []
+        missing = [
+            record["path"]
+            for record in manifest["files"]
+            if record["kind"] == "audio" and not record.get("sha256")
+        ]
         for record in unique_audio_records(manifest):
             sha256 = record["sha256"]
             transcript_path = self.state_dir / "transcripts" / f"{sha256}.json"
@@ -942,6 +1017,9 @@ class AudioLibrary:
                 transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
             elif allow_missing_transcripts:
                 transcript = {"text": "전사대기", "segments": []}
+            elif defer_unready:
+                missing.append(record["path"])
+                continue
             else:
                 missing.append(record["path"])
                 continue
@@ -971,10 +1049,11 @@ class AudioLibrary:
                         )
                     )
                 moved_tmk.add(tmk_path)
-        if missing:
+        if missing and not defer_unready:
             sample = ", ".join(missing[:3])
             raise ValueError(
-                f"{len(missing)} transcripts are missing; first paths: {sample}"
+                f"{len(missing)} transcripts are missing or SHA-256 is unresolved; "
+                f"first paths: {sample}"
             )
         plan = {
             "schema_version": 1,
@@ -983,6 +1062,7 @@ class AudioLibrary:
                 (self.state_dir / "inventory.json").read_bytes()
             ).hexdigest(),
             "operations": operations,
+            "deferred_paths": sorted(set(missing)) if defer_unready else [],
         }
         atomic_json_write(self.state_dir / "mutation-plan.json", plan)
         return plan
@@ -1144,6 +1224,81 @@ def remove_staged_file(staging_dir: Path, staged_path: Path) -> None:
     candidate.unlink(missing_ok=True)
 
 
+def restore_inventory_evidence(
+    manifest: dict[str, Any],
+    state_dir: Path,
+    *,
+    previous_manifest: dict[str, Any] | None = None,
+) -> int:
+    """Restore journaled or sidecar-backed SHA evidence after placeholder rescans."""
+
+    journal_sha: dict[str, str] = {}
+    journal_path = state_dir / "mutation-journal.json"
+    if journal_path.is_file():
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        if journal.get("executed"):
+            journal_sha = {
+                operation["destination"]: operation["sha256"]
+                for operation in journal.get("completed", [])
+                if operation.get("sha256")
+            }
+    transcript_dir = state_dir / "transcripts"
+    transcript_hashes = {
+        path.stem
+        for path in transcript_dir.glob("*.json")
+        if re.fullmatch(r"[0-9a-f]{64}", path.stem)
+    }
+    previous_by_path = {
+        record["path"]: record for record in (previous_manifest or {}).get("files", [])
+    }
+    restored = 0
+    for record in manifest["files"]:
+        if not record.get("sha256"):
+            sha256 = journal_sha.get(record["path"])
+            source = "mutation_journal"
+            if not sha256:
+                match = STANDARD_SHA_RE.search(Path(record["path"]).name)
+                matches = (
+                    sorted(
+                        value
+                        for value in transcript_hashes
+                        if value.startswith(match.group("prefix"))
+                    )
+                    if match
+                    else []
+                )
+                sha256 = matches[0] if len(matches) == 1 else None
+                source = "transcript_sidecar"
+            if not sha256:
+                previous = previous_by_path.get(record["path"], {})
+                if previous.get("sha256") and previous.get("size_bytes") == record.get(
+                    "size_bytes"
+                ):
+                    sha256 = previous["sha256"]
+                    source = "previous_inventory"
+            if sha256:
+                record["sha256"] = sha256
+                record["sha256_source"] = source
+                restored += 1
+        if record["kind"] != "audio" or not record.get("sha256"):
+            continue
+        transcript_path = transcript_dir / f"{record['sha256']}.json"
+        if not transcript_path.is_file():
+            continue
+        transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+        transcript["source_path"] = record["path"]
+        transcript["recorded_at"] = record.get("recorded_at")
+        if record.get("location"):
+            transcript["location"] = record["location"]
+        transcript["tmk_path"] = record.get("tmk_path")
+        transcript["tmk_marker_count"] = record.get("tmk_marker_count")
+        transcript["tmk_last_marker_seconds"] = record.get("tmk_last_marker_seconds")
+        atomic_json_write(transcript_path, transcript)
+    rebuild_manifest_summary(manifest)
+    manifest["restored_sha256_count"] = restored
+    return restored
+
+
 def quarantine_path(sha256: str, source: str) -> str:
     """Preserve the original relative hierarchy under the recovery area."""
 
@@ -1211,6 +1366,7 @@ def build_parser() -> argparse.ArgumentParser:
     stream_parser.add_argument("--word-timestamps", action="store_true")
     plan_parser = subparsers.add_parser("plan")
     plan_parser.add_argument("--allow-missing-transcripts", action="store_true")
+    plan_parser.add_argument("--defer-unready", action="store_true")
     apply_parser = subparsers.add_parser("apply")
     apply_parser.add_argument("--execute", action="store_true")
     return parser
@@ -1256,7 +1412,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             progress=progress_line,
         )
     elif args.command == "plan":
-        result = library.plan(allow_missing_transcripts=args.allow_missing_transcripts)
+        result = library.plan(
+            allow_missing_transcripts=args.allow_missing_transcripts,
+            defer_unready=args.defer_unready,
+        )
     else:
         result = library.apply(execute=args.execute)
     print(json.dumps(result, ensure_ascii=False, indent=2))

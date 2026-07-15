@@ -135,6 +135,9 @@ codec-carver-library /path/to/recordings hydrate-tmk --workers 4
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
 # Add --word-timestamps only when word-level audit evidence is required.
 codec-carver-library /path/to/recordings plan
+# When iCloud has not supplied every source, mutate only fully ready recordings
+# and preserve the unresolved paths as explicit deferred evidence.
+codec-carver-library /path/to/recordings plan --defer-unready
 codec-carver-library /path/to/recordings apply          # validation only
 codec-carver-library /path/to/recordings apply --execute
 ```
@@ -155,6 +158,14 @@ audio before remote placeholders, keeping the GPU fed while iCloud catches up.
 Rust stage monitoring resets its deadline whenever the partial grows; the
 default 120-second stall limit skips only placeholders making no byte progress,
 not large files that are actively copying and hashing.
+Planning rejects recordings without SHA-256 or transcript evidence by default.
+`--defer-unready` keeps those paths unchanged and lists them in
+`deferred_paths`, allowing verified subsets to proceed without inventing a
+placeholder description.
+Every rescan archives the previous inventory by its SHA-256. If iCloud evicts a
+previously hashed recording, same-path/same-size evidence, executed mutation
+journals, and transcript sidecars restore its full hash with an explicit
+`sha256_source` instead of silently discarding identity.
 Transcripts are keyed by the full SHA-256 under
 `.codec-carver/transcripts/`, so exact copies are inferred only once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized

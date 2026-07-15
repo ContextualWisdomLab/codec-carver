@@ -37,6 +37,13 @@ preferred interface for recording curation.
 - Python monitors the Rust PID-specific partial file. Its 120-second stage
   deadline resets on every size change, bounding a stuck File Provider without
   terminating a large source that is still copying and hashing normally.
+- Mutation planning fails closed when SHA-256 or transcripts are unresolved;
+  an explicit deferred mode changes only ready recordings and serializes every
+  untouched source path instead of fabricating a transcript description.
+- Rust parses standardized timestamps and optional location components
+  idempotently. Python archives prior inventories and restores full SHA-256
+  identity only from executed journals, matching transcript sidecars, or an
+  unchanged prior path and byte size.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
 - Mutations are dry-run by default. Execution rejects absolute/parent paths,
@@ -104,6 +111,7 @@ The library root contains a generated, excluded state directory:
 ```text
 .codec-carver/
 ├── inventory.json
+├── inventory-history/<inventory-sha256>.json
 ├── tmk-hydration-run.json
 ├── transcripts/<sha256>.json
 ├── transcripts/<sha256>.txt

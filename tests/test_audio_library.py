@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import subprocess
@@ -30,6 +31,7 @@ from audio_library import (
     quarantine_path,
     rebuild_manifest_summary,
     remove_staged_file,
+    restore_inventory_evidence,
     sanitize_component,
     standard_filename,
     trusted_transcript_text,
@@ -161,6 +163,54 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(trusted_transcript_text([low]), "")
         self.assertEqual(
             transcript_description({"text": "", "segments": [low]}),
+            "무음-또는-전사불명",
+        )
+        self.assertEqual(
+            transcript_description(
+                {
+                    "text": "다음 영상에서 만나요.",
+                    "duration_seconds": 14.2,
+                    "segments": [{"text": "다음 영상에서 만나요."}],
+                }
+            ),
+            "무음-또는-전사불명",
+        )
+        self.assertEqual(
+            transcript_description(
+                {
+                    "text": "감사합니다.",
+                    "duration_seconds": 0.8,
+                    "segments": [{"text": "감사합니다."}],
+                }
+            ),
+            "무음-또는-전사불명",
+        )
+        self.assertEqual(
+            transcript_description(
+                {
+                    "text": "반복 문장입니다. 반복 문장입니다. 실제 안건 검토입니다.",
+                    "duration_seconds": 60,
+                    "segments": [
+                        {"text": "반복 문장입니다."},
+                        {"text": "반복 문장입니다."},
+                        {"text": "실제 안건 검토입니다."},
+                    ],
+                }
+            ),
+            "실제-안건-검토입니다",
+        )
+        self.assertEqual(
+            transcript_description(
+                {
+                    "duration_seconds": 400,
+                    "segments": [
+                        {"text": "이 시각 세계였습니다."},
+                        {"text": "이곳은 이곳에서 전달한 곳입니다."},
+                        {"text": "다음 영상에서 만나요."},
+                        {"text": "서울시장"},
+                    ],
+                }
+            ),
             "무음-또는-전사불명",
         )
 
@@ -296,6 +346,24 @@ class RustBackendTests(unittest.TestCase):
                 RustBackend._run_stage_json(
                     ["core", "stage"], staging, stall_timeout_seconds=0
                 )
+
+    def test_stage_interrupt_kills_child_and_cleans_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            staging = Path(tmp)
+            partial = staging / ".codec-carver-75-1.wav.partial"
+            partial.write_bytes(b"partial")
+            process = Mock(pid=75, returncode=None)
+            process.poll.return_value = None
+            process.communicate.side_effect = [KeyboardInterrupt, ("", "interrupted")]
+            with (
+                patch("audio_library.subprocess.Popen", return_value=process),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                RustBackend._run_stage_json(
+                    ["core", "stage"], staging, stall_timeout_seconds=1
+                )
+            process.kill.assert_called_once()
+            self.assertFalse(partial.exists())
 
     def test_default_backend_and_optional_command_flags(self) -> None:
         completed = subprocess.CompletedProcess([], 0, stdout='{"ok": true}', stderr="")
@@ -437,14 +505,47 @@ class GpuTranscriberTests(unittest.TestCase):
 class AudioLibraryTests(unittest.TestCase):
     def test_inventory_apply_and_missing_inventory(self) -> None:
         backend = Mock()
-        backend.inventory.return_value = {"ok": True}
+        backend.inventory.side_effect = [
+            {"ok": True},
+            {
+                "schema_version": 1,
+                "root": "unused",
+                "files": [],
+                "duplicate_groups": [],
+            },
+            {
+                "schema_version": 1,
+                "root": "unused",
+                "files": [],
+                "duplicate_groups": [],
+            },
+        ]
         backend.apply.return_value = {"executed": False}
         with tempfile.TemporaryDirectory() as tmp:
             library = AudioLibrary(tmp, backend)
-            self.assertEqual(library.inventory(threads=2), {"ok": True})
-            backend.inventory.assert_called_once()
             with self.assertRaises(FileNotFoundError):
                 library.plan()
+            self.assertEqual(library.inventory(), {"ok": True})
+            atomic_json_write(
+                library.state_dir / "inventory.json",
+                {"schema_version": 1, "files": []},
+            )
+            self.assertEqual(library.inventory(threads=2)["files"], [])
+            self.assertEqual(backend.inventory.call_count, 2)
+            self.assertTrue((library.state_dir / "inventory.json").is_file())
+            self.assertEqual(
+                len(list((library.state_dir / "inventory-history").glob("*.json"))),
+                1,
+            )
+            current_bytes = (library.state_dir / "inventory.json").read_bytes()
+            history_path = (
+                library.state_dir
+                / "inventory-history"
+                / f"{hashlib.sha256(current_bytes).hexdigest()}.json"
+            )
+            atomic_json_write(history_path, json.loads(current_bytes))
+            self.assertEqual(library.inventory()["files"], [])
+            self.assertEqual(backend.inventory.call_count, 3)
             self.assertEqual(library.apply(), {"executed": False})
 
     def test_unique_records_choose_duplicate_canonical(self) -> None:
@@ -453,6 +554,78 @@ class AudioLibraryTests(unittest.TestCase):
         self.assertEqual(
             [record["path"] for record in records], ["canonical.wav", "second.wav"]
         )
+
+    def test_inventory_restores_sha_and_reconciles_transcript_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            standard = "2024-01-02_03-04-05__회의__sha256-aaaaaaaaaaaa.wav"
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [
+                    _record(standard, "", materialized=False, location=None),
+                    _record("journaled.wav", "", materialized=False),
+                    _record("native.wav", TMK_HASH, materialized=True),
+                    _record("previous.wav", "", materialized=False),
+                    _record("changed.wav", "", materialized=False),
+                ],
+                "duplicate_groups": [],
+            }
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_A}.json",
+                {"text": "회의", "segments": []},
+            )
+            atomic_json_write(
+                state / "mutation-journal.json",
+                {"executed": False, "completed": []},
+            )
+            self.assertEqual(restore_inventory_evidence(manifest, state), 1)
+            self.assertEqual(manifest["files"][0]["sha256"], HASH_A)
+            transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text()
+            )
+            self.assertEqual(transcript["source_path"], standard)
+
+            previous_manifest = {
+                "files": [
+                    _record("previous.wav", HASH_B, materialized=True),
+                    {
+                        **_record("changed.wav", TMK_HASH, materialized=True),
+                        "size_bytes": 999,
+                    },
+                ]
+            }
+            self.assertEqual(
+                restore_inventory_evidence(
+                    manifest,
+                    state,
+                    previous_manifest=previous_manifest,
+                ),
+                1,
+            )
+            self.assertEqual(
+                manifest["files"][3]["sha256_source"], "previous_inventory"
+            )
+            self.assertFalse(manifest["files"][4].get("sha256"))
+
+            atomic_json_write(
+                state / "mutation-journal.json",
+                {
+                    "executed": True,
+                    "completed": [
+                        {"destination": "journaled.wav", "sha256": HASH_B},
+                        {"destination": "ignored.wav", "sha256": None},
+                    ],
+                },
+            )
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_B}.json",
+                {"text": "다른 회의", "segments": []},
+            )
+            self.assertEqual(restore_inventory_evidence(manifest, state), 1)
+            self.assertEqual(manifest["files"][1]["sha256"], HASH_B)
+            self.assertEqual(manifest["files"][1]["sha256_source"], "mutation_journal")
 
     def test_plan_quarantines_duplicates_and_renames_tmk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -494,6 +667,31 @@ class AudioLibraryTests(unittest.TestCase):
                 library.plan()
             plan = library.plan(allow_missing_transcripts=True)
             self.assertTrue(plan["operations"])
+            deferred = library.plan(defer_unready=True)
+            self.assertEqual(
+                deferred["deferred_paths"], ["canonical.wav", "second.wav"]
+            )
+            self.assertNotIn(
+                "전사대기",
+                "\n".join(item["destination"] for item in deferred["operations"]),
+            )
+            with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+                library.plan(
+                    allow_missing_transcripts=True,
+                    defer_unready=True,
+                )
+
+    def test_plan_requires_sha_or_defers_unhashed_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = _manifest(root)
+            manifest["files"][0]["sha256"] = None
+            atomic_json_write(root / ".codec-carver" / "inventory.json", manifest)
+            library = AudioLibrary(root, Mock())
+            with self.assertRaisesRegex(ValueError, "SHA-256 is unresolved"):
+                library.plan(allow_missing_transcripts=True)
+            plan = library.plan(defer_unready=True)
+            self.assertIn("canonical.wav", plan["deferred_paths"])
 
     def test_plan_rejects_unknown_time_and_skips_standard_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1096,7 +1294,7 @@ class CliTests(unittest.TestCase):
                 "7",
                 "--keep-local",
             ],
-            [".", "plan", "--allow-missing-transcripts"],
+            [".", "plan", "--defer-unready"],
             [".", "apply", "--execute"],
         ]
         with (
@@ -1122,7 +1320,10 @@ class CliTests(unittest.TestCase):
             library.stream_transcribe.call_args.kwargs["stage_stall_timeout_seconds"],
             7.0,
         )
-        library.plan.assert_called_once_with(allow_missing_transcripts=True)
+        library.plan.assert_called_once_with(
+            allow_missing_transcripts=False,
+            defer_unready=True,
+        )
         library.apply.assert_called_once_with(execute=True)
 
     def test_evict_icloud_file_platform_and_tool_checks(self) -> None:

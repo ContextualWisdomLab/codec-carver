@@ -25,6 +25,12 @@ static COMPACT_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?P<yy>\d{2})(?P<month>\d{2})(?P<day>\d{2})[_-](?P<hour>\d{2})(?P<minute>\d{2})")
         .expect("valid compact timestamp regex")
 });
+static STANDARD_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})_(?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})__",
+    )
+    .expect("valid standard timestamp regex")
+});
 static ISO_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?P<iso>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))")
         .expect("valid ISO timestamp regex")
@@ -68,6 +74,7 @@ pub enum FileKind {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TimeSource {
+    StandardFilename,
     IsoFilename,
     CompactFilename,
     FilesystemCreated,
@@ -606,6 +613,33 @@ fn infer_recorded_at(
     filename: &str,
     metadata: &fs::Metadata,
 ) -> (Option<String>, Option<TimeSource>) {
+    if let Some(capture) = STANDARD_TIME_RE.captures(filename) {
+        let year = capture["year"]
+            .parse::<i32>()
+            .expect("regex matched digits");
+        let month = capture["month"]
+            .parse::<u32>()
+            .expect("regex matched digits");
+        let day = capture["day"].parse::<u32>().expect("regex matched digits");
+        let hour = capture["hour"]
+            .parse::<u32>()
+            .expect("regex matched digits");
+        let minute = capture["minute"]
+            .parse::<u32>()
+            .expect("regex matched digits");
+        let second = capture["second"]
+            .parse::<u32>()
+            .expect("regex matched digits");
+        if let Some(naive) = NaiveDate::from_ymd_opt(year, month, day)
+            .and_then(|date| date.and_hms_opt(hour, minute, second))
+        {
+            let value = Local
+                .from_local_datetime(&naive)
+                .earliest()
+                .expect("a valid standardized recording time resolves locally");
+            return (Some(value.to_rfc3339()), Some(TimeSource::StandardFilename));
+        }
+    }
     if let Some(capture) = ISO_TIME_RE.captures(filename)
         && let Some(raw) = capture.name("iso")
         && let Ok(value) = DateTime::parse_from_rfc3339(raw.as_str())
@@ -645,6 +679,13 @@ fn system_time_to_rfc3339(time: SystemTime) -> String {
 
 fn infer_location(filename: &str) -> Option<String> {
     let stem = Path::new(filename).file_stem()?.to_string_lossy();
+    if STANDARD_TIME_RE.is_match(&stem) {
+        let components: Vec<&str> = stem.split("__").collect();
+        return (components.len() >= 4
+            && components.last()?.starts_with("sha256-")
+            && !components[1].is_empty())
+        .then(|| components[1].to_string());
+    }
     let candidates: Vec<String> = stem
         .lines()
         .map(str::trim)
@@ -1195,6 +1236,28 @@ mod tests {
 
         let metadata = fs::metadata(&audio).unwrap();
         assert_eq!(
+            infer_recorded_at(
+                "2024-01-02_03-04-05__회의__sha256-aaaaaaaaaaaa.wav",
+                &metadata
+            ),
+            (
+                Some(
+                    Local
+                        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+                        .earliest()
+                        .unwrap()
+                        .to_rfc3339()
+                ),
+                Some(TimeSource::StandardFilename)
+            )
+        );
+        let invalid_standard = infer_recorded_at(
+            "2024-13-99_25-99-99__회의__sha256-aaaaaaaaaaaa.wav",
+            &metadata,
+        );
+        assert!(invalid_standard.0.is_some());
+        assert_ne!(invalid_standard.1, Some(TimeSource::StandardFilename));
+        assert_eq!(
             infer_recorded_at("2024-01-02T03:04:05+09:00.wav", &metadata).1,
             Some(TimeSource::IsoFilename)
         );
@@ -1206,6 +1269,22 @@ mod tests {
         assert!(infer_recorded_at("plain.wav", &metadata).0.is_some());
         assert!(!system_time_to_rfc3339(SystemTime::now()).is_empty());
         assert_eq!(infer_location(""), None);
+        assert_eq!(
+            infer_location("2024-01-02_03-04-05__양평동4가-24-1__회의__sha256-aaaaaaaaaaaa.wav"),
+            Some("양평동4가-24-1".to_string())
+        );
+        assert_eq!(
+            infer_location("2024-01-02_03-04-05__양평동4가-회의__sha256-aaaaaaaaaaaa.wav"),
+            None
+        );
+        assert_eq!(
+            infer_location("2024-01-02_03-04-05____회의__sha256-aaaaaaaaaaaa.wav"),
+            None
+        );
+        assert_eq!(
+            infer_location("2024-01-02_03-04-05__양평동4가__회의__not-a-sha.wav"),
+            None
+        );
         assert_eq!(
             infer_location("강남로 12 (1).wav"),
             Some("강남로 12".to_string())
