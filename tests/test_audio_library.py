@@ -528,6 +528,191 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(summary["cached"], 1)
             fake.transcribe.assert_not_called()
 
+    def test_hydrate_tmk_metadata_parallel_checkpoint_and_empty_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            records = [
+                {
+                    "path": "remote.tmk",
+                    "kind": "tmk",
+                    "extension": "tmk",
+                    "size_bytes": 20,
+                    "sha256": None,
+                    "materialized": False,
+                    "tmk_marker_count": None,
+                },
+                {
+                    "path": "local.tmk",
+                    "kind": "tmk",
+                    "extension": "tmk",
+                    "size_bytes": 20,
+                    "sha256": None,
+                    "materialized": True,
+                    "tmk_marker_count": None,
+                },
+                {
+                    "path": "failed.tmk",
+                    "kind": "tmk",
+                    "extension": "tmk",
+                    "size_bytes": 20,
+                    "sha256": None,
+                    "materialized": False,
+                    "tmk_marker_count": None,
+                },
+            ]
+            audio_records = [
+                _record(
+                    "remote.wav",
+                    HASH_A,
+                    materialized=False,
+                    tmk_path="remote.tmk",
+                ),
+                _record(
+                    "local.wav",
+                    HASH_B,
+                    materialized=True,
+                    tmk_path="local.tmk",
+                ),
+            ]
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": records + audio_records,
+                    "duplicate_groups": [],
+                },
+            )
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_A}.json",
+                {"text": "existing transcript"},
+            )
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            staged = library.staging_dir / f"{TMK_HASH}.tmk"
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_bytes(b"markers")
+            backend.stage.side_effect = [
+                {
+                    "record": {
+                        **records[0],
+                        "sha256": TMK_HASH,
+                        "tmk_marker_count": 2,
+                        "tmk_last_marker_seconds": 600.0,
+                    },
+                    "staged_path": str(staged),
+                },
+                RuntimeError("iCloud timeout"),
+            ]
+            backend.inspect.return_value = {
+                **records[1],
+                "sha256": HASH_B,
+                "tmk_marker_count": 1,
+                "tmk_last_marker_seconds": 30.0,
+            }
+            progress = Mock()
+            with patch(
+                "audio_library.is_icloud_dataless",
+                side_effect=[True, False, False],
+            ):
+                summary = library.hydrate_tmk_metadata(
+                    workers=1,
+                    inspect_timeout_seconds=12,
+                    progress=progress,
+                )
+            self.assertEqual(summary["completed"], 2)
+            self.assertEqual(summary["failed"], 1)
+            self.assertIn("iCloud timeout", summary["failures"][0]["error"])
+            self.assertFalse(staged.exists())
+            self.assertEqual(progress.call_count, 3)
+            checkpoint = json.loads(
+                (state / "inventory.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(checkpoint["files"][0]["sha256"], TMK_HASH)
+            self.assertEqual(checkpoint["files"][1]["tmk_marker_count"], 1)
+            self.assertIn("iCloud timeout", checkpoint["files"][2]["error"])
+            self.assertEqual(checkpoint["files"][3]["tmk_marker_count"], 2)
+            self.assertEqual(checkpoint["files"][4]["tmk_marker_count"], 1)
+            existing_transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(existing_transcript["tmk_last_marker_seconds"], 600.0)
+            with self.assertRaisesRegex(ValueError, "at least 1"):
+                library.hydrate_tmk_metadata(workers=0)
+
+            resumed_staged = library.staging_dir / f"{HASH_A}.tmk"
+            resumed_staged.write_bytes(b"")
+            backend.stage.side_effect = None
+            backend.stage.return_value = {
+                "record": {
+                    **checkpoint["files"][2],
+                    "sha256": HASH_A,
+                    "tmk_marker_count": 0,
+                    "tmk_last_marker_seconds": None,
+                },
+                "staged_path": str(resumed_staged),
+            }
+            with patch("audio_library.is_icloud_dataless", return_value=True):
+                resumed = library.hydrate_tmk_metadata(workers=2)
+            self.assertEqual(resumed["selected"], 1)
+            self.assertEqual(resumed["completed"], 1)
+            empty = library.hydrate_tmk_metadata(workers=2)
+            self.assertEqual(empty["selected"], 0)
+
+    def test_stream_transcribe_reuses_pre_hydrated_dataless_tmk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            audio = _record("remote.wav", "", materialized=False, tmk_path="remote.tmk")
+            tmk = {
+                "path": "remote.tmk",
+                "kind": "tmk",
+                "extension": "tmk",
+                "size_bytes": 20,
+                "sha256": TMK_HASH,
+                "materialized": False,
+                "tmk_marker_count": 3,
+                "tmk_last_marker_seconds": 90.0,
+                "error": None,
+            }
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [audio, tmk],
+                    "duplicate_groups": [],
+                },
+            )
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            staged = library.staging_dir / f"{HASH_A}.wav"
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_bytes(b"audio")
+            backend.stage.return_value = {
+                "record": {**audio, "sha256": HASH_A, "error": None},
+                "staged_path": str(staged),
+            }
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "사전 수집 TMK",
+                "segments": [],
+                "language": "ko",
+            }
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch("audio_library.is_icloud_dataless", return_value=True),
+            ):
+                summary = library.stream_transcribe(evict_after=False)
+            self.assertEqual(summary["completed"], 1)
+            backend.stage.assert_called_once()
+            transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(transcript["tmk_marker_count"], 3)
+            self.assertEqual(transcript["tmk_last_marker_seconds"], 90.0)
+
     def test_stream_transcribe_inspects_tmk_and_audio_then_evicts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -766,7 +951,9 @@ class CliTests(unittest.TestCase):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             audio_library.progress_line(1, 2, "a.wav", "completed")
+            audio_library.tmk_progress_line(2, 3, "a.tmk", "completed")
         self.assertIn("1/2", output.getvalue())
+        self.assertIn("TMK\t2/3", output.getvalue())
         backend = Mock()
         library = Mock()
         library.inventory.return_value = {"ok": True}
@@ -783,10 +970,12 @@ class CliTests(unittest.TestCase):
     def test_main_routes_transcribe_stream_plan_and_apply(self) -> None:
         library = Mock()
         library.transcribe.return_value = {"mode": "transcribe"}
+        library.hydrate_tmk_metadata.return_value = {"mode": "tmk"}
         library.stream_transcribe.return_value = {"mode": "stream"}
         library.plan.return_value = {"mode": "plan"}
         library.apply.return_value = {"mode": "apply"}
         commands = [
+            [".", "hydrate-tmk", "--workers", "2", "--inspect-timeout-seconds", "3"],
             [".", "transcribe", "--max-files", "1", "--word-timestamps"],
             [
                 ".",
@@ -808,6 +997,11 @@ class CliTests(unittest.TestCase):
             for command in commands:
                 self.assertEqual(audio_library.main(command), 0)
         library.transcribe.assert_called_once()
+        library.hydrate_tmk_metadata.assert_called_once_with(
+            workers=2,
+            inspect_timeout_seconds=3.0,
+            progress=audio_library.tmk_progress_line,
+        )
         self.assertTrue(library.transcribe.call_args.args[0].word_timestamps)
         library.stream_transcribe.assert_called_once()
         self.assertFalse(library.stream_transcribe.call_args.kwargs["evict_after"])

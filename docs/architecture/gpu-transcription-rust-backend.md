@@ -25,6 +25,9 @@ preferred interface for recording curation.
   available recording time is retained on the group.
 - Sony TMK markers such as `[00075:00.00]` are interpreted as minute-based
   offsets and joined to audio by directory and normalized stem.
+- `hydrate-tmk` fetches unresolved iCloud TMK sidecars concurrently, atomically
+  checkpoints each hash/marker result, and never refetches a sidecar whose
+  metadata is already complete even if iCloud restores its dataless flag.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
 - Mutations are dry-run by default. Execution rejects absolute/parent paths,
@@ -41,7 +44,7 @@ preferred interface for recording curation.
 
 `audio_library.AudioLibrary` owns model selection, persistent GPU model use,
 transcript sidecars, deterministic description extraction, iCloud streaming
-checkpoints, and mutation-plan generation.
+checkpoints, parallel one-time TMK hydration, and mutation-plan generation.
 
 - Apple Silicon: `mlx-whisper` on the Metal GPU, defaulting to
   `mlx-community/whisper-large-v3-turbo-q4`.
@@ -92,6 +95,7 @@ The library root contains a generated, excluded state directory:
 ```text
 .codec-carver/
 ├── inventory.json
+├── tmk-hydration-run.json
 ├── transcripts/<sha256>.json
 ├── transcripts/<sha256>.txt
 ├── mutation-plan.json

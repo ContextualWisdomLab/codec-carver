@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import time
 import wave
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -528,6 +529,123 @@ class AudioLibrary:
         atomic_json_write(self.state_dir / "transcription-run.json", summary)
         return summary
 
+    def hydrate_tmk_metadata(
+        self,
+        *,
+        workers: int = 16,
+        inspect_timeout_seconds: float = 14_400,
+        progress: Callable[[int, int, str, str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Hash Sony TMK sidecars concurrently and checkpoint their markers once."""
+
+        if workers < 1:
+            raise ValueError("TMK hydration workers must be at least 1")
+        manifest = self._load_inventory()
+        records = [
+            record
+            for record in manifest["files"]
+            if record["kind"] == "tmk"
+            and (not record.get("sha256") or record.get("tmk_marker_count") is None)
+        ]
+        completed = failed = 0
+        failures = []
+
+        def inspect_one(record: dict[str, Any]) -> dict[str, Any]:
+            """Fetch and inspect one unresolved TMK record in an isolated worker."""
+
+            source = self.root / record["path"]
+            dataless = not record.get("materialized", False) or is_icloud_dataless(
+                source
+            )
+            staged_path: Path | None = None
+            try:
+                if dataless:
+                    ensure_staging_capacity(
+                        self.staging_dir, int(record.get("size_bytes", 0))
+                    )
+                    staged = self.backend.stage(
+                        self.root,
+                        record["path"],
+                        self.staging_dir,
+                        timeout_seconds=inspect_timeout_seconds,
+                    )
+                    staged_path = Path(staged["staged_path"])
+                    inspected = staged["record"]
+                else:
+                    inspected = self.backend.inspect(
+                        self.root,
+                        record["path"],
+                        timeout_seconds=inspect_timeout_seconds,
+                    )
+                inspected["materialized"] = not is_icloud_dataless(source)
+                return inspected
+            finally:
+                if staged_path is not None:
+                    remove_staged_file(self.staging_dir, staged_path)
+
+        if records:
+            with ThreadPoolExecutor(max_workers=min(workers, len(records))) as executor:
+                futures = {
+                    executor.submit(inspect_one, record): record for record in records
+                }
+                for index, future in enumerate(as_completed(futures), start=1):
+                    record = futures[future]
+                    status = "failed"
+                    try:
+                        record.update(future.result())
+                        record["error"] = None
+                        for audio_record in manifest["files"]:
+                            if (
+                                audio_record["kind"] == "audio"
+                                and audio_record.get("tmk_path") == record["path"]
+                            ):
+                                audio_record["tmk_marker_count"] = record.get(
+                                    "tmk_marker_count"
+                                )
+                                audio_record["tmk_last_marker_seconds"] = record.get(
+                                    "tmk_last_marker_seconds"
+                                )
+                                transcript_path = (
+                                    self.state_dir
+                                    / "transcripts"
+                                    / f"{audio_record.get('sha256')}.json"
+                                )
+                                if (
+                                    audio_record.get("sha256")
+                                    and transcript_path.is_file()
+                                ):
+                                    transcript = json.loads(
+                                        transcript_path.read_text(encoding="utf-8")
+                                    )
+                                    transcript["tmk_marker_count"] = record.get(
+                                        "tmk_marker_count"
+                                    )
+                                    transcript["tmk_last_marker_seconds"] = record.get(
+                                        "tmk_last_marker_seconds"
+                                    )
+                                    atomic_json_write(transcript_path, transcript)
+                        completed += 1
+                        status = "completed"
+                    except Exception as exc:
+                        failed += 1
+                        record["error"] = str(exc)
+                        failures.append({"path": record["path"], "error": str(exc)})
+                    finally:
+                        rebuild_manifest_summary(manifest)
+                        atomic_json_write(self.state_dir / "inventory.json", manifest)
+                    if progress:
+                        progress(index, len(records), record["path"], status)
+        summary = {
+            "schema_version": 1,
+            "mode": "tmk_hydration",
+            "selected": len(records),
+            "completed": completed,
+            "failed": failed,
+            "failures": failures,
+        }
+        atomic_json_write(self.state_dir / "tmk-hydration-run.json", summary)
+        return summary
+
     def stream_transcribe(
         self,
         config: TranscriptionConfig = TranscriptionConfig(),
@@ -581,7 +699,14 @@ class AudioLibrary:
                 tmk_dataless = bool(
                     tmk_path and is_icloud_dataless(self.root / tmk_path)
                 )
-                if tmk_path and (not tmk_record.get("sha256") or tmk_dataless):
+                tmk_needs_metadata = bool(
+                    tmk_path
+                    and (
+                        not tmk_record.get("sha256")
+                        or tmk_record.get("tmk_marker_count") is None
+                    )
+                )
+                if tmk_path and tmk_needs_metadata:
                     if tmk_dataless:
                         ensure_staging_capacity(
                             self.staging_dir, int(tmk_record.get("size_bytes", 0))
@@ -606,6 +731,7 @@ class AudioLibrary:
                             timeout_seconds=inspect_timeout_seconds,
                         )
                     records_by_path[tmk_path].update(tmk_record)
+                if tmk_path:
                     record["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
                     record["tmk_last_marker_seconds"] = tmk_record.get(
                         "tmk_last_marker_seconds"
@@ -620,7 +746,13 @@ class AudioLibrary:
                     ensure_staging_capacity(
                         self.staging_dir, int(record.get("size_bytes", 0))
                     )
-                    preserved_tmk = record.get("tmk_path")
+                    preserved_tmk = {
+                        "tmk_path": record.get("tmk_path"),
+                        "tmk_marker_count": record.get("tmk_marker_count"),
+                        "tmk_last_marker_seconds": record.get(
+                            "tmk_last_marker_seconds"
+                        ),
+                    }
                     staged = self.backend.stage(
                         self.root,
                         record["path"],
@@ -636,10 +768,16 @@ class AudioLibrary:
                             f"expected {known_sha256}, got {inspected.get('sha256')}"
                         )
                     record.update(inspected)
-                    record["tmk_path"] = preserved_tmk
+                    record.update(preserved_tmk)
                     record["materialized"] = not is_icloud_dataless(audio_path)
                 elif not record.get("sha256"):
-                    preserved_tmk = record.get("tmk_path")
+                    preserved_tmk = {
+                        "tmk_path": record.get("tmk_path"),
+                        "tmk_marker_count": record.get("tmk_marker_count"),
+                        "tmk_last_marker_seconds": record.get(
+                            "tmk_last_marker_seconds"
+                        ),
+                    }
                     record.update(
                         self.backend.inspect(
                             self.root,
@@ -647,7 +785,7 @@ class AudioLibrary:
                             timeout_seconds=inspect_timeout_seconds,
                         )
                     )
-                    record["tmk_path"] = preserved_tmk
+                    record.update(preserved_tmk)
                 sha256 = record["sha256"]
                 transcript_path = transcript_dir / f"{sha256}.json"
                 if transcript_path.is_file():
@@ -980,6 +1118,12 @@ def progress_line(index: int, total: int, path: str, status: str) -> None:
     print(f"TRANSCRIBE\t{index}/{total}\t{status}\t{path}", flush=True)
 
 
+def tmk_progress_line(index: int, total: int, path: str, status: str) -> None:
+    """Print a compact, flush-safe TMK metadata progress record."""
+
+    print(f"TMK\t{index}/{total}\t{status}\t{path}", flush=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create the command-line adapter around the Python API."""
 
@@ -989,6 +1133,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     inventory_parser = subparsers.add_parser("inventory")
     inventory_parser.add_argument("--threads", type=int)
+    tmk_parser = subparsers.add_parser("hydrate-tmk")
+    tmk_parser.add_argument("--workers", type=int, default=16)
+    tmk_parser.add_argument("--inspect-timeout-seconds", type=float, default=14_400)
     transcribe_parser = subparsers.add_parser("transcribe")
     transcribe_parser.add_argument(
         "--accelerator", choices=["auto", "mlx", "cuda"], default="auto"
@@ -1022,6 +1169,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     library = AudioLibrary(args.root, RustBackend(args.backend_binary))
     if args.command == "inventory":
         result = library.inventory(threads=args.threads)
+    elif args.command == "hydrate-tmk":
+        result = library.hydrate_tmk_metadata(
+            workers=args.workers,
+            inspect_timeout_seconds=args.inspect_timeout_seconds,
+            progress=tmk_progress_line,
+        )
     elif args.command == "transcribe":
         result = library.transcribe(
             TranscriptionConfig(
