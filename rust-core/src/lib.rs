@@ -42,7 +42,8 @@ static TMK_MARK_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid TMK regex")
 });
 static ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[가-힣0-9]+(?:동|가|로|길)(?:\s*[0-9-]+)?").expect("valid Korean address regex")
+    Regex::new(r"(?:^|[^가-힣])[가-힣0-9]+(?:동|가|로|길)(?:[0-9]|\s|[,._-]|$)")
+        .expect("valid Korean address regex")
 });
 
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "m4a", "mp3", "flac", "aac", "opus", "ogg", "wma"];
@@ -1154,6 +1155,10 @@ mod tests {
             Some("양평동4가".to_string())
         );
         assert_eq!(infer_location("251125_0905_02.wav"), None);
+        assert_eq!(
+            infer_location("배동오 에스에이씨(주)_260630_2121.m4a"),
+            None
+        );
     }
 
     #[test]
