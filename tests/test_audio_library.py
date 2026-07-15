@@ -222,11 +222,80 @@ class RustBackendTests(unittest.TestCase):
                 self.assertIn("--execute", run.call_args.args[0])
                 backend.inspect(Path(tmp), "a.wav", timeout_seconds=12)
                 self.assertEqual(run.call_args.kwargs["timeout"], 12)
-                backend.stage(
-                    Path(tmp), "a.wav", Path(tmp) / "stage", timeout_seconds=34
+
+    def test_stage_command_decodes_success_and_monitors_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "core"
+            binary.write_bytes(b"")
+            staging = root / "stage"
+            staging.mkdir()
+            backend = RustBackend(binary)
+            process = Mock(pid=71, returncode=0)
+            process.communicate.return_value = ('{"ok": true}', "")
+            with patch("audio_library.subprocess.Popen", return_value=process) as popen:
+                self.assertEqual(
+                    backend.stage(root, "a.wav", staging, timeout_seconds=34),
+                    {"ok": True},
                 )
-                self.assertIn("--staging-dir", run.call_args.args[0])
-                self.assertEqual(run.call_args.kwargs["timeout"], 34)
+            self.assertIn("--staging-dir", popen.call_args.args[0])
+            self.assertFalse(popen.call_args.kwargs["shell"])
+
+            partial = staging / ".codec-carver-72-1.wav.partial"
+            partial.write_bytes(b"progress")
+            process = Mock(pid=72, returncode=0)
+            process.communicate.side_effect = [
+                subprocess.TimeoutExpired(["core", "stage"], 1),
+                ('{"ok": true}', ""),
+            ]
+            with (
+                patch("audio_library.subprocess.Popen", return_value=process),
+                patch(
+                    "audio_library.time.monotonic",
+                    side_effect=[0.0, 0.0, 0.5, 0.5],
+                ),
+            ):
+                result = RustBackend._run_stage_json(
+                    ["core", "stage"], staging, stall_timeout_seconds=1
+                )
+            self.assertEqual(result, {"ok": True})
+
+    def test_stage_stall_cleanup_errors_and_invalid_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            staging = Path(tmp)
+            partial = staging / ".codec-carver-73-1.wav.partial"
+            process = Mock(pid=73, returncode=None)
+            process.communicate.side_effect = [
+                subprocess.TimeoutExpired(["core", "stage"], 1),
+                ("", "stalled"),
+            ]
+            process.kill.side_effect = lambda: partial.write_bytes(b"")
+            with (
+                patch("audio_library.subprocess.Popen", return_value=process),
+                patch("audio_library.time.monotonic", side_effect=[0.0, 0.0, 2.0]),
+                self.assertRaises(subprocess.TimeoutExpired) as raised,
+            ):
+                RustBackend._run_stage_json(
+                    ["core", "stage"], staging, stall_timeout_seconds=1
+                )
+            process.kill.assert_called_once()
+            self.assertEqual(raised.exception.stderr, "stalled")
+            self.assertFalse(partial.exists())
+
+            process = Mock(pid=74, returncode=2)
+            process.communicate.return_value = ("", "bad stage")
+            with (
+                patch("audio_library.subprocess.Popen", return_value=process),
+                self.assertRaises(subprocess.CalledProcessError) as raised,
+            ):
+                RustBackend._run_stage_json(
+                    ["core", "stage"], staging, stall_timeout_seconds=1
+                )
+            self.assertEqual(raised.exception.stderr, "bad stage")
+            with self.assertRaisesRegex(ValueError, "must be positive"):
+                RustBackend._run_stage_json(
+                    ["core", "stage"], staging, stall_timeout_seconds=0
+                )
 
     def test_default_backend_and_optional_command_flags(self) -> None:
         completed = subprocess.CompletedProcess([], 0, stdout='{"ok": true}', stderr="")
@@ -1023,6 +1092,8 @@ class CliTests(unittest.TestCase):
                 "1",
                 "--path",
                 "a.wav",
+                "--stage-stall-timeout-seconds",
+                "7",
                 "--keep-local",
             ],
             [".", "plan", "--allow-missing-transcripts"],
@@ -1046,6 +1117,10 @@ class CliTests(unittest.TestCase):
         self.assertFalse(library.stream_transcribe.call_args.kwargs["evict_after"])
         self.assertEqual(
             library.stream_transcribe.call_args.kwargs["relative_paths"], ["a.wav"]
+        )
+        self.assertEqual(
+            library.stream_transcribe.call_args.kwargs["stage_stall_timeout_seconds"],
+            7.0,
         )
         library.plan.assert_called_once_with(allow_missing_transcripts=True)
         library.apply.assert_called_once_with(execute=True)

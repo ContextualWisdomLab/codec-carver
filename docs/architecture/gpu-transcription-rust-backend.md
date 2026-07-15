@@ -34,6 +34,9 @@ preferred interface for recording curation.
   sidecar is retained as `tmk_error` evidence and cannot block GPU audio work.
 - Streaming order is based on the live macOS dataless flag rather than stale
   inventory state, so locally resident audio reaches the GPU before iCloud work.
+- Python monitors the Rust PID-specific partial file. Its 120-second stage
+  deadline resets on every size change, bounding a stuck File Provider without
+  terminating a large source that is still copying and hashing normally.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
 - Mutations are dry-run by default. Execution rejects absolute/parent paths,

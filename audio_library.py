@@ -129,21 +129,86 @@ class RustBackend:
         *,
         timeout_seconds: float = 14_400,
     ) -> dict[str, Any]:
-        """Stream one iCloud placeholder to local scratch while Rust hashes it."""
+        """Stream one placeholder while timing out only sustained zero progress."""
 
-        return self._run_json(
-            [
-                str(self.binary),
-                "stage",
-                "--root",
-                str(root),
-                "--path",
-                relative_path,
-                "--staging-dir",
-                str(staging_dir),
-            ],
-            timeout_seconds=timeout_seconds,
+        command = [
+            str(self.binary),
+            "stage",
+            "--root",
+            str(root),
+            "--path",
+            relative_path,
+            "--staging-dir",
+            str(staging_dir),
+        ]
+        return self._run_stage_json(
+            command,
+            staging_dir,
+            stall_timeout_seconds=timeout_seconds,
         )
+
+    @staticmethod
+    def _run_stage_json(
+        command: list[str],
+        staging_dir: Path,
+        *,
+        stall_timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """Decode a stage response while resetting its timeout on byte progress."""
+
+        if stall_timeout_seconds <= 0:
+            raise ValueError("stage stall timeout must be positive")
+        process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=False,
+        )
+        pattern = f".codec-carver-{process.pid}-*.partial"
+        observed_sizes: tuple[tuple[str, int], ...] = ()
+        last_activity = time.monotonic()
+        while True:
+            remaining = max(
+                0.01,
+                min(
+                    1.0,
+                    stall_timeout_seconds - (time.monotonic() - last_activity),
+                ),
+            )
+            try:
+                stdout, stderr = process.communicate(timeout=remaining)
+            except subprocess.TimeoutExpired as exc:
+                now = time.monotonic()
+                current_sizes = tuple(
+                    sorted(
+                        (partial.name, partial.stat().st_size)
+                        for partial in staging_dir.glob(pattern)
+                    )
+                )
+                if current_sizes != observed_sizes:
+                    observed_sizes = current_sizes
+                    last_activity = now
+                if now - last_activity < stall_timeout_seconds:
+                    continue
+                process.kill()
+                stdout, stderr = process.communicate()
+                for partial in staging_dir.glob(pattern):
+                    partial.unlink(missing_ok=True)
+                raise subprocess.TimeoutExpired(
+                    command,
+                    stall_timeout_seconds,
+                    output=stdout,
+                    stderr=stderr,
+                ) from exc
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    process.returncode,
+                    command,
+                    output=stdout,
+                    stderr=stderr,
+                )
+            return json.loads(stdout)
 
     def apply(self, plan: Path, journal: Path, *, execute: bool) -> dict[str, Any]:
         """Validate or execute an auditable mutation plan in Rust."""
@@ -653,6 +718,7 @@ class AudioLibrary:
         max_files: int | None = None,
         relative_paths: Iterable[str] | None = None,
         inspect_timeout_seconds: float = 14_400,
+        stage_stall_timeout_seconds: float = 120,
         evict_after: bool = True,
         progress: Callable[[int, int, str, str], None] | None = None,
     ) -> dict[str, Any]:
@@ -742,7 +808,7 @@ class AudioLibrary:
                         self.root,
                         record["path"],
                         self.staging_dir,
-                        timeout_seconds=inspect_timeout_seconds,
+                        timeout_seconds=stage_stall_timeout_seconds,
                     )
                     staged_audio = Path(staged["staged_path"])
                     audio_input = staged_audio
@@ -1140,6 +1206,7 @@ def build_parser() -> argparse.ArgumentParser:
     stream_parser.add_argument("--max-files", type=int)
     stream_parser.add_argument("--path", action="append", default=[])
     stream_parser.add_argument("--inspect-timeout-seconds", type=float, default=14_400)
+    stream_parser.add_argument("--stage-stall-timeout-seconds", type=float, default=120)
     stream_parser.add_argument("--keep-local", action="store_true")
     stream_parser.add_argument("--word-timestamps", action="store_true")
     plan_parser = subparsers.add_parser("plan")
@@ -1184,6 +1251,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             max_files=args.max_files,
             relative_paths=args.path,
             inspect_timeout_seconds=args.inspect_timeout_seconds,
+            stage_stall_timeout_seconds=args.stage_stall_timeout_seconds,
             evict_after=not args.keep_local,
             progress=progress_line,
         )

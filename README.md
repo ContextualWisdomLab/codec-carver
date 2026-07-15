@@ -152,6 +152,9 @@ can delay every placeholder; rerunning resumes only unresolved sidecars.
 hydrated markers when present and records `tmk_error` evidence otherwise.
 At startup it samples the live macOS dataless flag and drains currently local
 audio before remote placeholders, keeping the GPU fed while iCloud catches up.
+Rust stage monitoring resets its deadline whenever the partial grows; the
+default 120-second stall limit skips only placeholders making no byte progress,
+not large files that are actively copying and hashing.
 Transcripts are keyed by the full SHA-256 under
 `.codec-carver/transcripts/`, so exact copies are inferred only once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized
