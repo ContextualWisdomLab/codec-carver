@@ -465,6 +465,49 @@ class PlanningTests(unittest.TestCase):
         )
         self.assertEqual(command[-1], f"{Path('-output.flac').resolve()}")
 
+    def test_build_plans_use_absolute_paths_to_prevent_argument_injection(self) -> None:
+        source = Path("-input.wav")
+        output_dir = Path("-out_dir")
+
+        probe = MediaProbe(
+            format_name="wav",
+            duration_seconds=10.0,
+            size_bytes=1000,
+            has_video=False,
+            audio_codec="pcm_s16le",
+            audio_bit_rate=1411200,
+        )
+
+        plan = build_audio_plan(
+            source_path=source,
+            probe=probe,
+            target_bytes=2000000000,
+            output_dir=output_dir,
+            output_format="flac"
+        )
+        self.assertIn(f"{source.resolve()}", plan.ffmpeg_args)
+        self.assertIn(f"{plan.output_path.resolve()}", plan.ffmpeg_args)
+
+        plan_opus = build_audio_plan(
+            source_path=source,
+            probe=probe,
+            target_bytes=2000000000,
+            output_dir=output_dir,
+            output_format="opus",
+        )
+        self.assertIn(f"{source.resolve()}", plan_opus.ffmpeg_args)
+        self.assertIn(f"{plan_opus.output_path.resolve()}", plan_opus.ffmpeg_args)
+
+        plan_mp3 = build_audio_plan(
+            source_path=source,
+            probe=probe,
+            target_bytes=2000000000,
+            output_dir=output_dir,
+            output_format="mp3",
+        )
+        self.assertIn(f"{source.resolve()}", plan_mp3.ffmpeg_args)
+        self.assertIn(f"{plan_mp3.output_path.resolve()}", plan_mp3.ffmpeg_args)
+
     def test_lossy_audio_uses_highest_opus_bitrate_that_fits_target_with_safety_margin(
         self,
     ) -> None:

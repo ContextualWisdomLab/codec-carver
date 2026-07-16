@@ -450,7 +450,7 @@ def build_audio_plan(
                 "-protocol_whitelist",
                 "file,crypto,data",
                 "-i",
-                str(source_path),
+                f"{source_path.resolve()}",
                 "-map",
                 "0:a:0",
                 "-map_metadata",
@@ -463,7 +463,7 @@ def build_audio_plan(
                 "flac",
                 "-compression_level",
                 "12",
-                str(output_path),
+                f"{output_path.resolve()}",
             ]
         )
         args = _with_loudnorm(args, normalize)
@@ -527,7 +527,7 @@ def build_opus_plan(
             "-protocol_whitelist",
             "file,crypto,data",
             "-i",
-            str(source_path),
+            f"{source_path.resolve()}",
             "-map",
             "0:a:0",
             "-map_metadata",
@@ -546,7 +546,7 @@ def build_opus_plan(
             "on",
             "-compression_level",
             "10",
-            str(output_path),
+            f"{output_path.resolve()}",
         ]
     )
     args = _with_loudnorm(args, normalize)
@@ -599,7 +599,7 @@ def _build_lossy_plan(
             "-protocol_whitelist",
             "file,crypto,data",
             "-i",
-            str(source_path),
+            f"{source_path.resolve()}",
             "-map",
             "0:a:0",
             "-map_metadata",
@@ -612,7 +612,7 @@ def _build_lossy_plan(
             codec,
             "-b:a",
             str(bitrate),
-            str(output_path),
+            f"{output_path.resolve()}",
         ]
     )
     args = _with_loudnorm(args, normalize)
