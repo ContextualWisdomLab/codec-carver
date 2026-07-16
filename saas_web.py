@@ -257,6 +257,8 @@ HTML_TEMPLATE = """
 
                 if (this.value === '') {
                     preview.innerText = '';
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
                     return;
                 }
 
@@ -289,6 +291,8 @@ HTML_TEMPLATE = """
 
                 if (this.value === '') {
                     preview.innerText = '';
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
                     return;
                 }
 
