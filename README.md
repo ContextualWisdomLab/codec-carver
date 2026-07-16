@@ -166,7 +166,12 @@ execution inode, seals its directory, and forces every Rust command to that
 SHA-256-pinned snapshot. Replacing the configured source path after validation
 therefore cannot change the bytes that execute. Duration probing uses only the
 approved fixed system `ffprobe` locations. `CODEC_CARVER_FFPROBE` may select one
-of those fixed paths but cannot introduce an arbitrary executable.
+of those fixed paths but cannot introduce an arbitrary executable. MLX audio is
+decoded first by an equivalently approved absolute `ffmpeg` and passed to
+Whisper as an in-memory waveform, so `mlx-whisper` never resolves a bare
+`ffmpeg` from caller-controlled `PATH`. Rust, ffprobe, and ffmpeg children all
+receive a minimal allowlisted environment that excludes `LD_*` and `DYLD_*`
+loader injection controls.
 
 `describe` loads the pinned 4-bit
 `mlx-community/gemma-4-e2b-it-4bit` revision once per batch, samples up to 48
@@ -272,8 +277,10 @@ cache hit or new mutation plan, then copied and hashed into private scratch
 before a GPU call.
 Transcripts are keyed by the full SHA-256 under
 `.codec-carver/transcripts/`, use owner-only directory/file permissions, and
-accept only canonical 64-hex digest filenames. Exact copies are inferred only
-once. Ultra-short
+accept only canonical 64-hex digest filenames. Every transcript consumer opens
+the final sidecar relative to a verified directory descriptor with
+`O_NOFOLLOW`; symlinks and non-regular sidecars are unavailable evidence, never
+external JSON input. Exact copies are inferred only once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized
 filenames. For long meetings, the optional Gemma phase records the central idea,
 outcome, confidence, and directly supporting segment IDs before it creates the
@@ -297,7 +304,10 @@ Rust returns inventory and mutation-journal JSON on stdout; Python alone commits
 those state files through descriptor-relative atomic replacement. Final-name
 symlinks are never followed, and a partial or schema-invalid mutation journal is
 moved to `.codec-carver/recovery/malformed-journals/` so a damaged checkpoint
-cannot brick later inventories.
+cannot brick later inventories. Both recovery path components are created and
+opened from the verified state-directory descriptor with `mkdirat`/`openat`
+semantics, so an intermediate symlink cannot redirect quarantine outside the
+library.
 
 The importable API is `audio_library.AudioLibrary`. The architecture, evidence
 precedence, filename contract, and primary research/standards sources are in

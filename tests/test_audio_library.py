@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import io
 import json
@@ -1152,6 +1153,30 @@ class NamingTests(unittest.TestCase):
 
 
 class RustBackendTests(unittest.TestCase):
+    def test_trusted_child_environment_drops_injection_controls(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "PATH": "/tmp/hostile",
+                "LD_PRELOAD": "/tmp/hostile.so",
+                "LD_LIBRARY_PATH": "/tmp/libraries",
+                "DYLD_INSERT_LIBRARIES": "/tmp/hostile.dylib",
+                "DYLD_LIBRARY_PATH": "/tmp/dylibs",
+                "LANG": "ko_KR.UTF-8",
+            },
+            clear=True,
+        ):
+            environment = audio_library.trusted_child_environment()
+        self.assertEqual(environment["PATH"], audio_library.TRUSTED_CHILD_PATH)
+        self.assertEqual(environment["LANG"], "ko_KR.UTF-8")
+        for key in (
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+        ):
+            self.assertNotIn(key, environment)
+
     def test_inventory_and_apply_commands_decode_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "core"
@@ -1169,6 +1194,10 @@ class RustBackendTests(unittest.TestCase):
                 command = run.call_args.args[0]
                 self.assertIn("--threads", command)
                 self.assertFalse(run.call_args.kwargs["shell"])
+                self.assertEqual(
+                    run.call_args.kwargs["env"],
+                    audio_library.trusted_child_environment(),
+                )
                 backend.apply(Path(tmp) / "plan.json", execute=True)
                 self.assertIn("--execute", run.call_args.args[0])
                 self.assertNotIn("--output", command)
@@ -1198,6 +1227,10 @@ class RustBackendTests(unittest.TestCase):
                 )
             self.assertIn("--staging-dir", popen.call_args.args[0])
             self.assertFalse(popen.call_args.kwargs["shell"])
+            self.assertEqual(
+                popen.call_args.kwargs["env"],
+                audio_library.trusted_child_environment(),
+            )
 
             partial = staging / ".codec-carver-72-1.wav.partial"
             partial.write_bytes(b"progress")
@@ -1486,8 +1519,8 @@ class RustBackendTests(unittest.TestCase):
 
             binary.write_bytes(b"trusted executable bytes")
             binary.chmod(0o700)
-            snapshot, pinned, pinned_digest = (
-                audio_library.snapshot_trusted_executable(binary, digest)
+            snapshot, pinned, pinned_digest = audio_library.snapshot_trusted_executable(
+                binary, digest
             )
             snapshot_parent = pinned.parent
             self.assertEqual(pinned_digest, digest)
@@ -1579,6 +1612,7 @@ class GpuTranscriberTests(unittest.TestCase):
 
     def test_mlx_auto_selects_gpu_and_transcribes(self) -> None:
         package, core, whisper = self._mlx_modules()
+        decoded_audio = object()
         with (
             patch.dict(
                 sys.modules, {"mlx": package, "mlx.core": core, "mlx_whisper": whisper}
@@ -1586,10 +1620,15 @@ class GpuTranscriberTests(unittest.TestCase):
             patch("audio_library.platform.system", return_value="Darwin"),
             patch("audio_library.platform.machine", return_value="arm64"),
             patch("audio_library.audio_duration_seconds", return_value=1.0),
+            patch(
+                "audio_library.decode_audio_for_mlx", return_value=decoded_audio
+            ) as decode,
         ):
             transcriber = GpuTranscriber()
             result = transcriber.transcribe(Path("clip.wav"))
         core.set_default_device.assert_called_once_with(core.gpu)
+        decode.assert_called_once_with(Path("clip.wav"))
+        self.assertIs(whisper.transcribe.call_args.args[0], decoded_audio)
         self.assertEqual(result["accelerator"], "mlx")
         self.assertEqual(result["text"], "안녕하세요")
         self.assertEqual(result["segments"][0]["text"], "안녕하세요")
@@ -1606,13 +1645,82 @@ class GpuTranscriberTests(unittest.TestCase):
                 {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
             ),
             patch("audio_library.audio_duration_seconds", return_value=0.1),
+            patch("audio_library.decode_audio_for_mlx") as decode,
         ):
             result = GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(
                 Path("short.wav")
             )
         self.assertEqual(result["text"], "")
         self.assertEqual(result["quality_flags"], ["too_short_for_reliable_speech"])
+        decode.assert_not_called()
         whisper.transcribe.assert_not_called()
+
+    def test_mlx_decode_uses_absolute_ffmpeg_and_sanitized_environment(self) -> None:
+        class FakeArray:
+            def flatten(self):
+                return self
+
+            def astype(self, _dtype):
+                return self
+
+            def __truediv__(self, _value):
+                return "decoded"
+
+        core = types.ModuleType("mlx.core")
+        core.float32 = object()
+        core.array = Mock(return_value=FakeArray())
+        package = types.ModuleType("mlx")
+        package.core = core
+        numpy = types.ModuleType("numpy")
+        numpy.int16 = object()
+        numpy.frombuffer = Mock(return_value="samples")
+        completed = subprocess.CompletedProcess([], 0, stdout=b"\0\0", stderr=b"")
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": core, "numpy": numpy},
+            ),
+            patch.dict(
+                os.environ,
+                {
+                    "PATH": "/tmp/hostile",
+                    "LD_PRELOAD": "/tmp/hostile.so",
+                    "DYLD_INSERT_LIBRARIES": "/tmp/hostile.dylib",
+                },
+                clear=True,
+            ),
+            patch(
+                "audio_library.trusted_ffmpeg_binary",
+                return_value=Path("/usr/bin/ffmpeg"),
+            ),
+            patch("audio_library.subprocess.run", return_value=completed) as run,
+        ):
+            self.assertEqual(
+                audio_library.decode_audio_for_mlx(Path("recording.wav")), "decoded"
+            )
+        command = run.call_args.args[0]
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual(command[0], "/usr/bin/ffmpeg")
+        self.assertEqual(environment["PATH"], audio_library.TRUSTED_CHILD_PATH)
+        self.assertNotIn("LD_PRELOAD", environment)
+        self.assertNotIn("DYLD_INSERT_LIBRARIES", environment)
+        numpy.frombuffer.assert_called_once_with(b"\0\0", numpy.int16)
+
+        with patch("audio_library.trusted_ffmpeg_binary", return_value=None):
+            with self.assertRaisesRegex(
+                GpuTranscriptionUnavailableError, "approved system path"
+            ):
+                audio_library.decode_audio_for_mlx(Path("recording.wav"))
+        failed = subprocess.CalledProcessError(1, ["ffmpeg"], stderr=b"decode failed")
+        with (
+            patch(
+                "audio_library.trusted_ffmpeg_binary",
+                return_value=Path("/usr/bin/ffmpeg"),
+            ),
+            patch("audio_library.subprocess.run", side_effect=failed),
+            self.assertRaisesRegex(RuntimeError, "decode failed"),
+        ):
+            audio_library.decode_audio_for_mlx(Path("recording.wav"))
 
     def test_cuda_model_is_persistent_and_transcribes(self) -> None:
         calls = {}
@@ -3397,6 +3505,10 @@ class CliTests(unittest.TestCase):
             with patch("audio_library.GemmaDescriptionGenerator", return_value=Mock()):
                 invalid_json = library.describe(relative_paths=["b.wav"])
             self.assertEqual(invalid_json["failed"], 1)
+            b_path.write_text("[]", encoding="utf-8")
+            with patch("audio_library.GemmaDescriptionGenerator", return_value=Mock()):
+                non_object_json = library.describe(relative_paths=["b.wav"])
+            self.assertEqual(non_object_json["failed"], 1)
 
     def test_main_routes_transcribe_stream_plan_and_apply(self) -> None:
         library = Mock()
@@ -3865,6 +3977,149 @@ class CliTests(unittest.TestCase):
                 4,
             )
 
+    def test_malformed_journal_quarantine_rejects_each_symlink_component(self) -> None:
+        for symlink_component in ("recovery", "malformed-journals"):
+            with self.subTest(symlink_component=symlink_component):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp) / "library"
+                    root.mkdir()
+                    state = root / ".codec-carver"
+                    journal = state / "mutation-journal.json"
+                    audio_library.atomic_text_write(journal, "{malformed")
+                    outside = Path(tmp) / "outside"
+                    outside.mkdir()
+                    if symlink_component == "recovery":
+                        (state / "recovery").symlink_to(
+                            outside, target_is_directory=True
+                        )
+                    else:
+                        recovery = state / "recovery"
+                        recovery.mkdir(mode=0o700)
+                        (recovery / "malformed-journals").symlink_to(
+                            outside, target_is_directory=True
+                        )
+                    manifest = {
+                        "schema_version": 1,
+                        "root": str(root),
+                        "files": [],
+                        "duplicate_groups": [],
+                    }
+                    with self.assertRaisesRegex(
+                        ValueError, "component is not a real directory"
+                    ):
+                        restore_inventory_evidence(manifest, state)
+                    self.assertTrue(journal.is_file())
+                    self.assertEqual(list(outside.iterdir()), [])
+
+    def test_transcript_sidecar_symlink_is_unavailable_not_dereferenced(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "library"
+            root.mkdir()
+            state = root / ".codec-carver"
+            transcript_dir = state / "transcripts"
+            audio_library.ensure_private_directory(transcript_dir)
+            external = Path(tmp) / "external.json"
+            external_payload = {
+                "schema_version": 1,
+                "sha256": HASH_A,
+                "text": "attacker-controlled transcript",
+                "segments": [],
+                "external_secret": "EXTERNAL_JSON_READ",
+            }
+            external.write_text(json.dumps(external_payload), encoding="utf-8")
+            sidecar = transcript_dir / f"{HASH_A}.json"
+            sidecar.symlink_to(external)
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [
+                    _record(
+                        "recording.wav",
+                        HASH_A,
+                        tmk_path=None,
+                        materialized=True,
+                    )
+                ],
+                "duplicate_groups": [],
+            }
+
+            self.assertEqual(restore_inventory_evidence(manifest, state), 0)
+            self.assertTrue(sidecar.is_symlink())
+            self.assertEqual(
+                json.loads(external.read_text(encoding="utf-8")), external_payload
+            )
+            self.assertIsNone(audio_library.read_optional_private_json(sidecar))
+
+            poisoned_record = _record(
+                f"2024-01-02_03-04-00__sha256-{HASH_A[:12]}.wav",
+                "",
+                materialized=False,
+            )
+            poisoned_manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [poisoned_record],
+                "duplicate_groups": [],
+            }
+            self.assertEqual(restore_inventory_evidence(poisoned_manifest, state), 0)
+            self.assertFalse(poisoned_record.get("sha256"))
+
+            sidecar.unlink()
+            sidecar.mkdir()
+            self.assertIsNone(audio_library.read_optional_private_json(sidecar))
+
+    def test_trusted_transcript_hashes_filters_unsafe_and_malformed_entries(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "transcripts"
+            audio_library.ensure_private_directory(transcript_dir)
+            malformed_hash = "1" * 64
+            non_object_hash = "2" * 64
+            directory_hash = "3" * 64
+            audio_library.atomic_text_write(
+                transcript_dir / f"{HASH_A}.json",
+                json.dumps({"text": "legacy sidecar"}),
+            )
+            audio_library.atomic_text_write(
+                transcript_dir / f"{HASH_B}.json",
+                json.dumps({"sha256": HASH_B, "text": "bound sidecar"}),
+            )
+            audio_library.atomic_text_write(
+                transcript_dir / f"{TMK_HASH}.json",
+                json.dumps({"sha256": HASH_A, "text": "mismatched sidecar"}),
+            )
+            audio_library.atomic_text_write(
+                transcript_dir / f"{malformed_hash}.json", "{"
+            )
+            audio_library.atomic_text_write(
+                transcript_dir / f"{non_object_hash}.json", "[]"
+            )
+            (transcript_dir / f"{directory_hash}.json").mkdir()
+            (transcript_dir / "notes.txt").write_text("ignored", encoding="utf-8")
+            (transcript_dir / "not-a-digest.json").write_text("{}", encoding="utf-8")
+
+            self.assertEqual(
+                audio_library.trusted_transcript_hashes(transcript_dir),
+                {HASH_A, HASH_B},
+            )
+
+            with patch(
+                "audio_library.read_private_text_at",
+                side_effect=FileNotFoundError("raced away"),
+            ):
+                self.assertEqual(
+                    audio_library.trusted_transcript_hashes(transcript_dir), set()
+                )
+            with (
+                patch(
+                    "audio_library.read_private_text_at",
+                    side_effect=PermissionError(errno.EACCES, "denied"),
+                ),
+                self.assertRaisesRegex(PermissionError, "denied"),
+            ):
+                audio_library.trusted_transcript_hashes(transcript_dir)
+
     def test_gpu_stage_rejects_escape_and_symlink_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4145,6 +4400,102 @@ class CliTests(unittest.TestCase):
             with (
                 patch("audio_library.os.stat", side_effect=swap_to_non_regular),
                 self.assertRaisesRegex(ValueError, "not a regular file"),
+            ):
+                audio_library.quarantine_malformed_private_file(
+                    malformed, directory / "quarantine"
+                )
+
+    def test_private_descriptor_helpers_reject_invalid_components_and_races(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "state"
+            directory.mkdir()
+            parent_fd = os.open(
+                directory,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                with self.assertRaisesRegex(ValueError, "unsafe private directory"):
+                    audio_library.open_private_subdirectory_at(parent_fd, [".."])
+                with (
+                    patch(
+                        "audio_library.os.open",
+                        side_effect=PermissionError(errno.EACCES, "denied"),
+                    ),
+                    self.assertRaisesRegex(PermissionError, "denied"),
+                ):
+                    audio_library.open_private_subdirectory_at(parent_fd, ["denied"])
+
+                not_directory = types.SimpleNamespace(
+                    st_mode=audio_library.stat.S_IFREG,
+                    st_uid=os.geteuid(),
+                )
+                with (
+                    patch("audio_library.os.fstat", return_value=not_directory),
+                    self.assertRaisesRegex(ValueError, "not a directory"),
+                ):
+                    audio_library.open_private_subdirectory_at(parent_fd, ["file-kind"])
+
+                wrong_owner = types.SimpleNamespace(
+                    st_mode=audio_library.stat.S_IFDIR,
+                    st_uid=os.geteuid() + 1,
+                )
+                with (
+                    patch("audio_library.os.fstat", return_value=wrong_owner),
+                    self.assertRaisesRegex(PermissionError, "not owned"),
+                ):
+                    audio_library.open_private_subdirectory_at(parent_fd, ["owner"])
+
+                with self.assertRaisesRegex(ValueError, "unsafe private state name"):
+                    audio_library.read_private_text_at(
+                        parent_fd, "../state.json", path_label=directory / "state.json"
+                    )
+            finally:
+                os.close(parent_fd)
+
+            with (
+                patch(
+                    "audio_library.read_private_text",
+                    side_effect=PermissionError(errno.EACCES, "denied"),
+                ),
+                self.assertRaisesRegex(PermissionError, "denied"),
+            ):
+                audio_library.read_optional_private_text(directory / "state.json")
+
+            non_object = directory / "non-object.json"
+            audio_library.atomic_text_write(non_object, "[]")
+            with self.assertRaisesRegex(ValueError, "must be an object"):
+                audio_library.read_optional_private_json(non_object)
+
+            malformed = directory / "malformed.json"
+            audio_library.atomic_text_write(malformed, "{")
+            with self.assertRaisesRegex(ValueError, "remain under state root"):
+                audio_library.quarantine_malformed_private_file(
+                    malformed, Path(tmp) / "outside"
+                )
+            with self.assertRaisesRegex(ValueError, "must be a child"):
+                audio_library.quarantine_malformed_private_file(malformed, directory)
+            with self.assertRaises(FileNotFoundError):
+                audio_library.quarantine_malformed_private_file(
+                    directory / "missing.json", directory / "quarantine"
+                )
+
+            real_stat = os.stat
+
+            def replace_identity(path, *args, **kwargs):
+                metadata = real_stat(path, *args, **kwargs)
+                if path == malformed.name and kwargs.get("dir_fd") is not None:
+                    return types.SimpleNamespace(
+                        st_mode=metadata.st_mode,
+                        st_dev=metadata.st_dev,
+                        st_ino=metadata.st_ino + 1,
+                    )
+                return metadata
+
+            with (
+                patch("audio_library.os.stat", side_effect=replace_identity),
+                self.assertRaisesRegex(ValueError, "changed before quarantine"),
             ):
                 audio_library.quarantine_malformed_private_file(
                     malformed, directory / "quarantine"
@@ -4527,6 +4878,15 @@ class CliTests(unittest.TestCase):
                 patch.dict(os.environ, {}, clear=True),
             ):
                 self.assertEqual(audio_library.trusted_ffprobe_binary(), good.resolve())
+            with (
+                patch.object(audio_library, "APPROVED_FFMPEG_PATHS", (good,)),
+                patch.dict(
+                    os.environ,
+                    {"CODEC_CARVER_FFMPEG": str(good)},
+                    clear=True,
+                ),
+            ):
+                self.assertEqual(audio_library.trusted_ffmpeg_binary(), good.resolve())
         with (
             patch("audio_library.trusted_ffprobe_binary", return_value=None),
             patch("audio_library.shutil.which", return_value="/tmp/hostile") as which,

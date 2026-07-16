@@ -95,7 +95,9 @@ preferred interface for recording curation.
   parent, Windows-drive, UNC, or malformed SHA values fail closed.
 - `.codec-carver` and transcript directories are owner-only; JSON/text sidecars
   are mode `0600`. The state directory and unpredictable per-process scratch
-  directory must be real directories rather than symlinks.
+  directory must be real directories rather than symlinks. Every transcript
+  read opens the final SHA sidecar with `O_NOFOLLOW`; a symlink or non-regular
+  entry is unavailable evidence and is never dereferenced.
 - Scratch cleanup unlinks a direct regular-file child relative to a no-follow
   directory descriptor, avoiding pathname containment check/use races.
 - Before staged audio or TMK metadata is consumed, Python opens the reported
@@ -114,10 +116,17 @@ preferred interface for recording curation.
   Python copies the exact bytes from a stable, no-follow source descriptor into
   a sealed owner-only execution inode and binds every Rust launch to that
   independent snapshot, so a later source-path replacement cannot redirect
-  execution. `ffprobe` comes only from fixed approved system roots;
-  `CODEC_CARVER_FFPROBE` can select but not extend that allowlist. Neither uses
-  ambient `PATH` discovery. Executed mutation-journal hashes remain unverified
+  execution. `ffprobe` and MLX decoding `ffmpeg` come only from fixed approved
+  system roots; their environment variables can select but not extend those
+  allowlists. MLX receives the decoded waveform instead of a path, preventing
+  its dependency from launching a bare PATH-resolved ffmpeg. Rust, ffprobe, and
+  ffmpeg subprocesses receive a minimal environment without dynamic-loader
+  injection variables. Executed mutation-journal hashes remain unverified
   identity hints until current bytes are hashed again.
+- Malformed-journal quarantine creates and opens `recovery` and
+  `malformed-journals` relative to one verified state-directory descriptor.
+  Each component uses no-follow directory operations, so an intermediate
+  symlink cannot relocate state outside the library.
 
 ## Runtime split
 

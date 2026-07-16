@@ -10,6 +10,7 @@ fallback when GPU transcription is requested.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import inspect
 import json
@@ -40,6 +41,23 @@ APPROVED_FFPROBE_PATHS = (
     Path("/opt/homebrew/bin/ffprobe"),
     Path("/usr/local/bin/ffprobe"),
     Path("/usr/bin/ffprobe"),
+)
+APPROVED_FFMPEG_PATHS = (
+    Path("/opt/homebrew/bin/ffmpeg"),
+    Path("/usr/local/bin/ffmpeg"),
+    Path("/usr/bin/ffmpeg"),
+)
+TRUSTED_CHILD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+TRUSTED_CHILD_ENV_KEYS = (
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SYSTEMROOT",
+    "WINDIR",
 )
 DEFAULT_PREFETCH_MAX_BYTES = 512 * 1024 * 1024
 DEFAULT_STAGE_STALL_TIMEOUT_SECONDS = 420
@@ -473,6 +491,17 @@ def snapshot_trusted_executable(
     return snapshot, pinned, digest
 
 
+def trusted_child_environment() -> dict[str, str]:
+    """Return a minimal child environment without loader injection controls."""
+
+    environment = {"PATH": TRUSTED_CHILD_PATH}
+    for key in TRUSTED_CHILD_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            environment[key] = value
+    return environment
+
+
 class RustBackend:
     """One-process-per-batch bridge to the optimized Rust backend."""
 
@@ -703,6 +732,7 @@ class RustBackend:
             stderr=subprocess.PIPE,
             text=True,
             shell=False,
+            env=trusted_child_environment(),
         )
         pattern = f".codec-carver-{process.pid}-*.partial"
         observed_sizes: tuple[tuple[str, int], ...] = ()
@@ -782,6 +812,7 @@ class RustBackend:
             text=True,
             shell=False,
             timeout=timeout_seconds,
+            env=trusted_child_environment(),
         )
         return json.loads(completed.stdout)
 
@@ -859,8 +890,9 @@ class GpuTranscriber:
         if self.accelerator == "mlx":
             import mlx_whisper  # type: ignore[import-not-found]
 
+            decoded_audio = decode_audio_for_mlx(audio_path)
             raw = mlx_whisper.transcribe(
-                str(audio_path),
+                decoded_audio,
                 path_or_hf_repo=self.model,
                 language=self.config.language,
                 word_timestamps=self.config.word_timestamps,
@@ -913,21 +945,23 @@ class GpuTranscriber:
         }
 
 
-def trusted_ffprobe_binary() -> Path | None:
-    """Resolve ffprobe only from fixed, owner-controlled system paths."""
+def trusted_media_binary(
+    environment_key: str, approved_paths: tuple[Path, ...]
+) -> Path | None:
+    """Resolve one media tool only from fixed, owner-controlled system paths."""
 
-    configured = os.environ.get("CODEC_CARVER_FFPROBE")
+    configured = os.environ.get(environment_key)
     configured_candidate: Path | None = None
     candidates: list[Path] = []
     if configured:
         configured_path = Path(configured).expanduser()
         if not configured_path.is_absolute():
-            raise ValueError("CODEC_CARVER_FFPROBE must be an absolute path")
-        if configured_path not in APPROVED_FFPROBE_PATHS:
-            raise ValueError("CODEC_CARVER_FFPROBE is not an approved system path")
+            raise ValueError(f"{environment_key} must be an absolute path")
+        if configured_path not in approved_paths:
+            raise ValueError(f"{environment_key} is not an approved system path")
         configured_candidate = configured_path
         candidates.append(configured_path)
-    candidates.extend(APPROVED_FFPROBE_PATHS)
+    candidates.extend(approved_paths)
     for candidate in dict.fromkeys(candidates):
         if not candidate.is_file():
             continue
@@ -939,6 +973,18 @@ def trusted_ffprobe_binary() -> Path | None:
             continue
         return resolved
     return None
+
+
+def trusted_ffprobe_binary() -> Path | None:
+    """Resolve ffprobe only from fixed, owner-controlled system paths."""
+
+    return trusted_media_binary("CODEC_CARVER_FFPROBE", APPROVED_FFPROBE_PATHS)
+
+
+def trusted_ffmpeg_binary() -> Path | None:
+    """Resolve ffmpeg only from fixed, owner-controlled system paths."""
+
+    return trusted_media_binary("CODEC_CARVER_FFMPEG", APPROVED_FFMPEG_PATHS)
 
 
 def audio_duration_seconds(audio_path: Path) -> float | None:
@@ -972,10 +1018,54 @@ def audio_duration_seconds(audio_path: Path) -> float | None:
             text=True,
             shell=False,
             timeout=60,
+            env=trusted_child_environment(),
         )
         return float(completed.stdout.strip())
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
+
+
+def decode_audio_for_mlx(audio_path: Path) -> Any:
+    """Decode one recording through an approved absolute ffmpeg into an MLX array."""
+
+    ffmpeg = trusted_ffmpeg_binary()
+    if ffmpeg is None:
+        raise GpuTranscriptionUnavailableError(
+            "MLX GPU transcription requires ffmpeg at an approved system path"
+        )
+    try:
+        completed = subprocess.run(
+            [
+                str(ffmpeg),
+                "-nostdin",
+                "-i",
+                str(audio_path),
+                "-threads",
+                "0",
+                "-f",
+                "s16le",
+                "-ac",
+                "1",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "16000",
+                "-",
+            ],
+            check=True,
+            capture_output=True,
+            shell=False,
+            timeout=14_400,
+            env=trusted_child_environment(),
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"approved ffmpeg failed to decode audio: {detail}") from exc
+    import mlx.core as mx  # type: ignore[import-not-found]
+    import numpy as np  # type: ignore[import-not-found]
+
+    samples = np.frombuffer(completed.stdout, np.int16)
+    return mx.array(samples).flatten().astype(mx.float32) / 32768.0
 
 
 def normalize_segment(segment: dict[str, Any]) -> dict[str, Any]:
@@ -2285,6 +2375,62 @@ def ensure_private_directory(path: Path) -> None:
     os.close(descriptor)
 
 
+def open_private_subdirectory_at(parent_fd: int, components: Iterable[str]) -> int:
+    """Create and open owner-only descendants without following any component."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:  # pragma: no cover - unsupported OS
+        raise RuntimeError(
+            "secure directory descriptors require O_NOFOLLOW and O_DIRECTORY"
+        )
+    current_fd = os.dup(parent_fd)
+    try:
+        for component in components:
+            if (
+                not isinstance(component, str)
+                or component in {"", ".", ".."}
+                or "/" in component
+                or "\\" in component
+                or "\x00" in component
+            ):
+                raise ValueError(f"unsafe private directory component: {component!r}")
+            try:
+                os.mkdir(component, 0o700, dir_fd=current_fd)
+            except FileExistsError:
+                pass
+            flags = os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
+            try:
+                child_fd = os.open(component, flags, dir_fd=current_fd)
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                    raise ValueError(
+                        f"private directory component is not a real directory: {component}"
+                    ) from exc
+                raise
+            try:
+                metadata = os.fstat(child_fd)
+                if not stat.S_ISDIR(metadata.st_mode):
+                    raise ValueError(
+                        f"private directory component is not a directory: {component}"
+                    )
+                if metadata.st_uid != os.geteuid():
+                    raise PermissionError(
+                        f"private directory component is not owned by this user: {component}"
+                    )
+                # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+                os.fchmod(child_fd, 0o700)
+            except Exception:
+                os.close(child_fd)
+                raise
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
 def atomic_text_replace(path: Path, value: str) -> None:
     """Replace one private file using only a verified parent-directory descriptor."""
 
@@ -2341,54 +2487,151 @@ def atomic_text_write(path: Path, value: str) -> None:
     atomic_text_replace(path, value)
 
 
+def read_private_text_at(
+    directory_fd: int, name: str, *, path_label: Path
+) -> tuple[str, os.stat_result]:
+    """Read a direct private child and return the opened file identity."""
+
+    if name in {"", ".", ".."} or "/" in name or "\\" in name or "\x00" in name:
+        raise ValueError(f"unsafe private state name: {name!r}")
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(name, flags, dir_fd=directory_fd)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"private state is not a regular file: {path_label}")
+        if metadata.st_uid != os.geteuid():
+            raise PermissionError(
+                f"private state is not owned by this user: {path_label}"
+            )
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = None
+            return handle.read(), metadata
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def read_private_text(path: Path) -> str:
     """Read one owner-owned regular state file without following its final name."""
 
     directory_fd = open_private_directory(path.parent)
-    descriptor: int | None = None
     try:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-        descriptor = os.open(path.name, flags, dir_fd=directory_fd)
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError(f"private state is not a regular file: {path}")
-        if metadata.st_uid != os.geteuid():
-            raise PermissionError(f"private state is not owned by this user: {path}")
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-            descriptor = None
-            return handle.read()
+        value, _metadata = read_private_text_at(
+            directory_fd, path.name, path_label=path
+        )
+        return value
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
         os.close(directory_fd)
+
+
+def read_optional_private_text(path: Path) -> str | None:
+    """Read optional private text while treating unsafe final names as unavailable."""
+
+    try:
+        return read_private_text(path)
+    except FileNotFoundError:
+        return None
+    except ValueError:
+        return None
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            return None
+        raise
+
+
+def read_optional_private_json(path: Path) -> dict[str, Any] | None:
+    """Read one optional private JSON object without dereferencing unsafe names."""
+
+    value = read_optional_private_text(path)
+    if value is None:
+        return None
+    payload = json.loads(value)
+    if not isinstance(payload, dict):
+        raise ValueError(f"private JSON state must be an object: {path}")
+    return payload
+
+
+def trusted_transcript_hashes(transcript_dir: Path) -> set[str]:
+    """Return hashes backed by no-follow, self-consistent transcript sidecars."""
+
+    directory_fd = open_private_directory(transcript_dir)
+    hashes: set[str] = set()
+    try:
+        for name in os.listdir(directory_fd):
+            if not name.endswith(".json"):
+                continue
+            digest = name.removesuffix(".json")
+            if SHA256_RE.fullmatch(digest) is None:
+                continue
+            try:
+                value, _metadata = read_private_text_at(
+                    directory_fd,
+                    name,
+                    path_label=transcript_dir / name,
+                )
+            except (FileNotFoundError, ValueError):
+                continue
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                    continue
+                raise
+            try:
+                payload = json.loads(value)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and payload.get("sha256", digest) == digest:
+                hashes.add(digest)
+    finally:
+        os.close(directory_fd)
+    return hashes
 
 
 def quarantine_malformed_private_file(path: Path, quarantine_dir: Path) -> Path:
     """Move malformed regular state aside by directory descriptors for recovery."""
 
-    payload = read_private_text(path).encode("utf-8")
-    source_fd = open_private_directory(path.parent)
-    quarantine_fd = open_private_directory(quarantine_dir)
-    destination_name = (
-        f"{path.stem}-{hashlib.sha256(payload).hexdigest()[:12]}-"
-        f"{secrets.token_hex(8)}{path.suffix}"
-    )
     try:
-        metadata = os.stat(path.name, dir_fd=source_fd, follow_symlinks=False)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError(f"malformed state is not a regular file: {path}")
-        os.rename(
-            path.name,
-            destination_name,
-            src_dir_fd=source_fd,
-            dst_dir_fd=quarantine_fd,
+        relative_quarantine = quarantine_dir.relative_to(path.parent)
+    except ValueError as exc:
+        raise ValueError(
+            "malformed-state quarantine must remain under state root"
+        ) from exc
+    if not relative_quarantine.parts:
+        raise ValueError("malformed-state quarantine must be a child directory")
+    source_fd = open_private_directory(path.parent)
+    try:
+        value, opened = read_private_text_at(source_fd, path.name, path_label=path)
+        payload = value.encode("utf-8")
+        destination_name = (
+            f"{path.stem}-{hashlib.sha256(payload).hexdigest()[:12]}-"
+            f"{secrets.token_hex(8)}{path.suffix}"
         )
-        os.fsync(source_fd)
-        os.fsync(quarantine_fd)
+        quarantine_fd = open_private_subdirectory_at(
+            source_fd, relative_quarantine.parts
+        )
+        try:
+            current = os.stat(path.name, dir_fd=source_fd, follow_symlinks=False)
+            if not stat.S_ISREG(current.st_mode):
+                raise ValueError(f"malformed state is not a regular file: {path}")
+            if (
+                current.st_dev,
+                current.st_ino,
+            ) != (opened.st_dev, opened.st_ino):
+                raise ValueError(f"malformed state changed before quarantine: {path}")
+            os.rename(
+                path.name,
+                destination_name,
+                src_dir_fd=source_fd,
+                dst_dir_fd=quarantine_fd,
+            )
+            os.fsync(source_fd)
+            os.fsync(quarantine_fd)
+        finally:
+            os.close(quarantine_fd)
     finally:
         os.close(source_fd)
-        os.close(quarantine_fd)
-    return quarantine_dir / destination_name
+    return path.parent / relative_quarantine / destination_name
 
 
 def safe_transcript_path(
@@ -2648,10 +2891,12 @@ class AudioLibrary:
                                     if audio_sha256
                                     else None
                                 )
-                                if transcript_path and transcript_path.is_file():
-                                    transcript = json.loads(
-                                        transcript_path.read_text(encoding="utf-8")
-                                    )
+                                transcript = (
+                                    read_optional_private_json(transcript_path)
+                                    if transcript_path
+                                    else None
+                                )
+                                if transcript is not None:
                                     transcript["tmk_marker_count"] = record.get(
                                         "tmk_marker_count"
                                     )
@@ -2912,7 +3157,7 @@ class AudioLibrary:
                 sha256 = validate_sha256(record["sha256"])
                 transcript_path = safe_transcript_path(transcript_dir, sha256)
                 text_path = safe_transcript_path(transcript_dir, sha256, ".txt")
-                if transcript_path.is_file():
+                if read_optional_private_json(transcript_path) is not None:
                     cached += 1
                     status = "cached"
                 else:
@@ -3022,8 +3267,9 @@ class AudioLibrary:
             transcript_path = safe_transcript_path(
                 self.state_dir / "transcripts", record["sha256"]
             )
-            if transcript_path.is_file():
-                records.append((record, transcript_path))
+            transcript_text = read_optional_private_text(transcript_path)
+            if transcript_text is not None:
+                records.append((record, transcript_path, transcript_text))
         records.sort(
             key=lambda item: (
                 item[0].get("recorded_at") or "9999",
@@ -3035,11 +3281,16 @@ class AudioLibrary:
         generator = GemmaDescriptionGenerator(model, revision) if records else None
         completed = cached = failed = 0
         failures = []
-        for index, (record, transcript_path) in enumerate(records, start=1):
+        for index, (record, transcript_path, transcript_text) in enumerate(
+            records, start=1
+        ):
             status = "failed"
             transcript: dict[str, Any] | None = None
             try:
-                transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+                loaded_transcript = json.loads(transcript_text)
+                if not isinstance(loaded_transcript, dict):
+                    raise ValueError("transcript sidecar must be a JSON object")
+                transcript = loaded_transcript
                 same_generation = (
                     transcript.get("filename_description_model") == model
                     and transcript.get("filename_description_revision") == revision
@@ -3249,14 +3500,13 @@ class AudioLibrary:
             transcript_path = safe_transcript_path(
                 self.state_dir / "transcripts", sha256
             )
-            if transcript_path.is_file():
-                transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
-            elif allow_missing_transcripts:
+            transcript = read_optional_private_json(transcript_path)
+            if transcript is None and allow_missing_transcripts:
                 transcript = {"text": "전사대기", "segments": []}
-            elif defer_unready:
+            elif transcript is None and defer_unready:
                 missing.append(record["path"])
                 continue
-            else:
+            elif transcript is None:
                 missing.append(record["path"])
                 continue
             recorded_at = earliest_by_hash.get(sha256) or record.get("recorded_at")
@@ -3893,11 +4143,7 @@ def restore_inventory_evidence(
                 and SHA256_RE.fullmatch(str(operation["sha256"]))
             }
     transcript_dir = state_dir / "transcripts"
-    transcript_hashes = {
-        path.stem
-        for path in transcript_dir.glob("*.json")
-        if re.fullmatch(r"[0-9a-f]{64}", path.stem)
-    }
+    transcript_hashes = trusted_transcript_hashes(transcript_dir)
     previous_by_path = {
         record["path"]: record for record in (previous_manifest or {}).get("files", [])
     }
@@ -3940,9 +4186,9 @@ def restore_inventory_evidence(
         ):
             continue
         transcript_path = safe_transcript_path(transcript_dir, record["sha256"])
-        if not transcript_path.is_file():
+        transcript = read_optional_private_json(transcript_path)
+        if transcript is None:
             continue
-        transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
         transcript["source_path"] = record["path"]
         transcript["recorded_at"] = record.get("recorded_at")
         if record.get("location"):
