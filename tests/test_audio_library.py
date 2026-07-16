@@ -722,6 +722,12 @@ class NamingTests(unittest.TestCase):
             ),
             "공장마다-맞게-바스를-개발해봤는데-표준하고-상품화",
         )
+        self.assertEqual(
+            audio_library.validate_contextual_title_specificity(
+                "VUC-GPT로드맵과-AICC음원분석-현업에-바로-적용"
+            ),
+            "VUC-GPT로드맵과-AICC음원분석-현업에-바로-적용",
+        )
         with self.assertRaisesRegex(ValueError, "omits the concrete outcome"):
             audio_library.validate_contextual_title_specificity(
                 "바스-고도화-프로젝트", outcome="상품화 추진"

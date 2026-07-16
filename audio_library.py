@@ -145,6 +145,7 @@ CONTEXT_TITLE_RELATION_MARKERS = (
     "대신",
     "없이",
     "따로",
+    "현업에",
     "하고",
     "하며",
     "해서",
