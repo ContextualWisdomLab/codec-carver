@@ -146,6 +146,11 @@ codec-carver-library /path/to/recordings apply          # validation only
 codec-carver-library /path/to/recordings apply --execute
 ```
 
+The library backend is loaded only from an explicit `--backend-binary` or the
+repository's own release/debug build; it is never selected from ambient
+`PATH`. Duration probing likewise uses fixed system `ffprobe` locations, or an
+operator-supplied absolute `CODEC_CARVER_FFPROBE` path.
+
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
 that local stage, and Python atomically checkpoints before removing the stage.
@@ -192,9 +197,12 @@ used. Eviction is optional cleanup, so a native eviction error is recorded in
 `eviction_failures` without converting a completed transcription into a failure.
 At startup it samples the live macOS dataless flag and drains currently local
 audio before remote placeholders, keeping the GPU fed while iCloud catches up.
-Rust stage monitoring resets its deadline whenever the partial grows; the
-default 120-second stall limit skips only placeholders making no byte progress,
-not large files that are actively copying and hashing. File Provider can expose
+Rust stage monitoring resets its stall clock whenever the partial grows; the
+default 420-second stall limit skips only placeholders making no byte progress,
+not large files that are actively copying and hashing. An independent absolute
+deadline, four times the configured stall limit, also bounds repeated premature
+EOF retries even when a faulty provider reports monotonically increasing byte
+counts. File Provider can expose
 the logical source size before any bytes are readable; Rust rejects such a
 premature short/empty EOF, and Python retries it only until the same bounded
 zero-progress deadline instead of accepting the empty-file SHA-256.
@@ -205,11 +213,16 @@ Planning rejects recordings without SHA-256 or transcript evidence by default.
 `deferred_paths`, allowing verified subsets to proceed without inventing a
 placeholder description.
 Every rescan archives the previous inventory by its SHA-256. If iCloud evicts a
-previously hashed recording, same-path/same-size evidence, executed mutation
-journals, and transcript sidecars restore its full hash with an explicit
-`sha256_source` instead of silently discarding identity.
+previously hashed recording, same-path/same-size evidence and transcript
+sidecars restore its full hash only as an explicitly unverified identity hint.
+It cannot form an exact-duplicate group or a new rename/quarantine operation
+until Rust hashes current bytes. An executed mutation journal remains verified
+because Rust checked the full source digest before the move. Materialized files
+are rehashed before any transcript cache hit, GPU call, or new mutation plan.
 Transcripts are keyed by the full SHA-256 under
-`.codec-carver/transcripts/`, so exact copies are inferred only once. Ultra-short
+`.codec-carver/transcripts/`, use owner-only directory/file permissions, and
+accept only canonical 64-hex digest filenames. Exact copies are inferred only
+once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized
 filenames. For long meetings, filename descriptions come from a deterministic
 corpus-central phrase rather than only the opening segments: per-segment topic
@@ -219,7 +232,10 @@ name has a valid recording timestamp, known location, and matching SHA prefix,
 later extractor improvements preserve it instead of renaming the library again.
 Duplicate files move to the recoverable
 `.codec-carver/quarantine/exact-duplicates/` tree; no irreversible deletion is
-performed by default.
+performed by default. Inventory, TMK, transcript, and mutation paths are
+validated beneath the canonical library root before Python or Rust receives
+them. Symlinked state/staging roots are refused, and scratch cleanup uses a
+no-follow directory handle rather than a check-then-unlink pathname.
 
 The importable API is `audio_library.AudioLibrary`. The architecture, evidence
 precedence, filename contract, and primary research/standards sources are in

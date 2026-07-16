@@ -40,9 +40,11 @@ preferred interface for recording curation.
   which keeps the current File Provider domain's download request active. This
   does not rely on the undocumented and ineffective-on-current-macOS
   `brctl download` command; materialized files retain the direct fast path.
-- Python monitors the Rust PID-specific partial file. Its 120-second stage
+- Python monitors the Rust PID-specific partial file. Its 420-second stall
   deadline resets on every size change, bounding a stuck File Provider without
-  terminating a large source that is still copying and hashing normally.
+  terminating a large source that is still copying and hashing normally. A
+  separate absolute deadline at four times the stall setting bounds repeated
+  premature-EOF retries even if reported byte progress never stops.
 - After the transcript and inventory checkpoint are durable, the Rust `evict`
   command calls Foundation's `FileManager.evictUbiquitousItem` directly. The
   Python API records a native eviction problem separately in `eviction_failures`;
@@ -55,9 +57,10 @@ preferred interface for recording curation.
   an explicit deferred mode changes only ready recordings and serializes every
   untouched source path instead of fabricating a transcript description.
 - Rust parses standardized timestamps and optional location components
-  idempotently. Python archives prior inventories and restores full SHA-256
-  identity only from executed journals, matching transcript sidecars, or an
-  unchanged prior path and byte size.
+  idempotently. Python archives prior inventories. An executed mutation journal
+  restores verified SHA-256 identity because Rust checked the source before the
+  move; a matching transcript sidecar or unchanged prior path and byte size is
+  only an unverified hint until current bytes are staged and hashed.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
 - Long-transcript descriptions use deterministic extractive topic density over
@@ -74,6 +77,20 @@ preferred interface for recording curation.
   `.codec-carver/quarantine/exact-duplicates/<sha256>/...` move. Nothing is
   irreversibly deleted by the default workflow.
 - GPU transcription never calls Ollama and never silently falls back to CPU.
+- Every materialized recording is rehashed before a cache hit, GPU call, or new
+  mutation. Unverified placeholder evidence cannot form an exact-duplicate
+  group or a new rename/quarantine operation.
+- Inventory paths, TMK links, digest-keyed transcript paths, and mutation paths
+  are validated beneath the canonical library root. Symlinks and absolute,
+  parent, Windows-drive, UNC, or malformed SHA values fail closed.
+- `.codec-carver` and transcript directories are owner-only; JSON/text sidecars
+  are mode `0600`. The state directory and unpredictable per-process scratch
+  directory must be real directories rather than symlinks.
+- Scratch cleanup unlinks a direct regular-file child relative to a no-follow
+  directory descriptor, avoiding pathname containment check/use races.
+- The Rust executable comes only from an explicit path or repository build.
+  `ffprobe` comes from fixed system roots or an explicit absolute
+  `CODEC_CARVER_FFPROBE`; neither uses ambient `PATH` discovery.
 
 ## Runtime split
 
@@ -143,12 +160,14 @@ The library root contains a generated, excluded state directory:
 ```
 
 Transcripts are keyed by full SHA-256 so a renamed recording or duplicate copy
-does not trigger a second inference run.
+does not trigger a second inference run. The directory is `0700` and every
+sidecar is `0600` because transcripts can contain sensitive conversations.
 
-Large audio scratch is outside the iCloud library under the operating system
-temporary directory. Only one recording is staged at a time, at least 512 MiB
-of free-space headroom is required, and scratch deletion rejects paths outside
-the library-specific staging root.
+Large audio scratch is outside the iCloud library in an unpredictable,
+owner-only directory created directly under the resolved operating-system
+temporary root. The bounded prefetch byte limit controls concurrent logical
+size, at least 512 MiB of free-space headroom is required, and descriptor-based
+scratch deletion accepts only direct regular-file children.
 
 ## Primary references
 

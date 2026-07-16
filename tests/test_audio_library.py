@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -704,6 +705,12 @@ class AudioLibraryTests(unittest.TestCase):
             atomic_json_write(history_path, json.loads(current_bytes))
             self.assertEqual(library.inventory()["files"], [])
             self.assertEqual(backend.inventory.call_count, 3)
+            current = json.loads(
+                (library.state_dir / "inventory.json").read_text(encoding="utf-8")
+            )
+            current["root"] = str(library.root)
+            atomic_json_write(library.state_dir / "inventory.json", current)
+            library.plan(defer_unready=True)
             self.assertEqual(library.apply(), {"executed": False})
 
     def test_unique_records_choose_duplicate_canonical(self) -> None:
@@ -743,7 +750,8 @@ class AudioLibraryTests(unittest.TestCase):
             transcript = json.loads(
                 (state / "transcripts" / f"{HASH_A}.json").read_text()
             )
-            self.assertEqual(transcript["source_path"], standard)
+            self.assertNotIn("source_path", transcript)
+            self.assertFalse(manifest["files"][0]["sha256_verified"])
 
             previous_manifest = {
                 "files": [
@@ -784,6 +792,8 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(restore_inventory_evidence(manifest, state), 1)
             self.assertEqual(manifest["files"][1]["sha256"], HASH_B)
             self.assertEqual(manifest["files"][1]["sha256_source"], "mutation_journal")
+            manifest["files"][1]["location"] = None
+            self.assertEqual(restore_inventory_evidence(manifest, state), 0)
 
     def test_plan_quarantines_duplicates_and_renames_tmk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -844,6 +854,7 @@ class AudioLibraryTests(unittest.TestCase):
             root = Path(tmp)
             manifest = _manifest(root)
             manifest["files"][0]["sha256"] = None
+            rebuild_manifest_summary(manifest)
             atomic_json_write(root / ".codec-carver" / "inventory.json", manifest)
             library = AudioLibrary(root, Mock())
             with self.assertRaisesRegex(ValueError, "SHA-256 is unresolved"):
@@ -918,12 +929,19 @@ class AudioLibraryTests(unittest.TestCase):
                 {"text": "성공", "segments": [], "language": "ko"},
                 RuntimeError("corrupt"),
             ]
+            backend = Mock()
+            backend.inspect.side_effect = [manifest["files"][0], manifest["files"][2]]
             progress = Mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, Mock()).transcribe(progress=progress)
+                summary = AudioLibrary(root, backend).transcribe(progress=progress)
             self.assertEqual(summary["completed"], 1)
             self.assertEqual(summary["failed"], 1)
             self.assertTrue((state / "transcripts" / f"{HASH_A}.json").is_file())
+            self.assertEqual(
+                (state / "transcripts" / f"{HASH_A}.txt").stat().st_mode & 0o777,
+                0o600,
+            )
+            self.assertEqual((state / "transcripts").stat().st_mode & 0o777, 0o700)
             self.assertEqual(progress.call_count, 2)
 
     def test_transcribe_honors_cache_and_max_files(self) -> None:
@@ -934,10 +952,13 @@ class AudioLibraryTests(unittest.TestCase):
             atomic_json_write(
                 state / "transcripts" / f"{HASH_A}.json", {"text": "cached"}
             )
+            (root / "canonical.wav").write_bytes(b"one")
+            backend = Mock()
+            backend.inspect.return_value = _manifest(root)["files"][0]
             fake = Mock(accelerator="mlx", model="model")
             progress = Mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, Mock()).transcribe(
+                summary = AudioLibrary(root, backend).transcribe(
                     max_files=1, progress=progress
                 )
             self.assertEqual(summary["cached"], 1)
@@ -951,12 +972,12 @@ class AudioLibraryTests(unittest.TestCase):
                 "language": "ko",
             }
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, Mock()).transcribe(max_files=1)
+                summary = AudioLibrary(root, backend).transcribe(max_files=1)
             self.assertEqual(summary["completed"], 1)
 
             fake.reset_mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, Mock()).transcribe(max_files=1)
+                summary = AudioLibrary(root, backend).transcribe(max_files=1)
             self.assertEqual(summary["cached"], 1)
             fake.transcribe.assert_not_called()
 
@@ -1700,7 +1721,9 @@ class AudioLibraryTests(unittest.TestCase):
                 state / "transcripts" / f"{HASH_B}.json",
                 {"text": "cached local"},
             )
+            (root / "local.wav").write_bytes(b"local")
             backend = Mock()
+            backend.inspect.return_value = local
             fake = Mock(accelerator="mlx", model="model")
             with (
                 patch("audio_library.GpuTranscriber", return_value=fake),
@@ -1776,10 +1799,13 @@ class AudioLibraryTests(unittest.TestCase):
             manifest["files"][0]["materialized"] = True
             manifest["duplicate_groups"] = []
             atomic_json_write(state / "inventory.json", manifest)
+            (root / "second.wav").write_bytes(b"audio")
+            backend = Mock()
+            backend.inspect.return_value = manifest["files"][0]
             fake = Mock(accelerator="mlx", model="model")
             fake.transcribe.side_effect = RuntimeError("bad audio")
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, Mock()).stream_transcribe(
+                summary = AudioLibrary(root, backend).stream_transcribe(
                     max_files=1, evict_after=False
                 )
             self.assertEqual(summary["failed"], 1)
@@ -1790,7 +1816,7 @@ class AudioLibraryTests(unittest.TestCase):
             )
             fake.reset_mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, Mock()).stream_transcribe(
+                summary = AudioLibrary(root, backend).stream_transcribe(
                     max_files=1, evict_after=False
                 )
             self.assertEqual(summary["cached"], 1)
@@ -2159,6 +2185,413 @@ class CliTests(unittest.TestCase):
             self.assertFalse(staged.exists())
             with self.assertRaisesRegex(ValueError, "escaped scratch root"):
                 remove_staged_file(staging, Path(tmp) / "outside.wav")
+            remove_staged_file(staging, staging / "missing.wav")
+            symlink = staging / "linked.wav"
+            outside = Path(tmp) / "outside.wav"
+            outside.write_bytes(b"outside")
+            symlink.symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                remove_staged_file(staging, symlink)
+            self.assertTrue(outside.exists())
+
+    def test_security_boundaries_reject_manifest_and_sidecar_escapes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp).resolve()
+            root = base_dir / "library"
+            root.mkdir()
+            library = AudioLibrary(root, Mock())
+            inventory_path = library.state_dir / "inventory.json"
+
+            def load(payload):
+                atomic_json_write(inventory_path, payload)
+                return library._load_inventory()
+
+            base = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [_record("safe.wav", HASH_A, tmk_path=None)],
+                "duplicate_groups": [],
+            }
+            invalid_payloads = [
+                ({**base, "root": str(root.parent)}, "inventory root"),
+                ({**base, "files": {}}, "files must be a list"),
+                ({**base, "files": ["bad"]}, "must be an object"),
+                (
+                    {**base, "files": [{**base["files"][0], "kind": "other"}]},
+                    "invalid kind",
+                ),
+                (
+                    {**base, "files": [base["files"][0], base["files"][0].copy()]},
+                    "duplicate inventory path",
+                ),
+                (
+                    {**base, "files": [{**base["files"][0], "sha256": "../bad"}]},
+                    "64 lowercase",
+                ),
+                (
+                    {**base, "files": [{**base["files"][0], "tmk_path": "../x"}]},
+                    "stay beneath",
+                ),
+                ({**base, "duplicate_groups": {}}, "must be a list"),
+                ({**base, "duplicate_groups": ["bad"]}, "must be an object"),
+                (
+                    {
+                        **base,
+                        "duplicate_groups": [
+                            {
+                                "sha256": HASH_A,
+                                "canonical_path": "safe.wav",
+                                "duplicate_paths": None,
+                            }
+                        ],
+                    },
+                    "paths must be a list",
+                ),
+                (
+                    {
+                        **base,
+                        "duplicate_groups": [
+                            {
+                                "sha256": HASH_A,
+                                "canonical_path": "safe.wav",
+                                "duplicate_paths": ["missing.wav"],
+                            }
+                        ],
+                    },
+                    "not bound",
+                ),
+            ]
+            for payload, message in invalid_payloads:
+                with self.subTest(message=message):
+                    with self.assertRaisesRegex(ValueError, message):
+                        load(payload)
+
+            for value, message in (
+                (None, "non-empty"),
+                ("C:\\escape.wav", "non-portable"),
+                ("/tmp/escape.wav", "stay beneath"),
+                ("../escape.wav", "stay beneath"),
+            ):
+                payload = {
+                    **base,
+                    "files": [{**base["files"][0], "path": value}],
+                }
+                with self.subTest(path=value):
+                    with self.assertRaisesRegex(ValueError, message):
+                        load(payload)
+
+            outside = base_dir / "outside"
+            outside.mkdir()
+            linked = root / "linked"
+            linked.symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                load(
+                    {
+                        **base,
+                        "files": [{**base["files"][0], "path": "linked/file.wav"}],
+                    }
+                )
+            with (
+                patch("audio_library.Path.resolve", side_effect=[root, root.parent]),
+                self.assertRaisesRegex(ValueError, "escapes the library root"),
+            ):
+                audio_library.validate_relative_path(root, "safe.wav", label="test")
+
+            transcript_dir = library.state_dir / "transcripts"
+            with self.assertRaisesRegex(ValueError, "64 lowercase"):
+                audio_library.safe_transcript_path(transcript_dir, "../../escape")
+            with self.assertRaisesRegex(ValueError, "unsupported"):
+                audio_library.safe_transcript_path(transcript_dir, HASH_A, ".sh")
+            for source in ("", "..\\escape.wav", "../escape.wav", "/tmp/x.wav"):
+                with self.subTest(quarantine=source):
+                    with self.assertRaises(ValueError):
+                        quarantine_path(HASH_A, source)
+
+    def test_security_boundaries_reject_state_and_temporary_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            missing = base / "missing"
+            with self.assertRaises(NotADirectoryError):
+                AudioLibrary(missing, Mock())
+
+            root = base / "root"
+            external = base / "external"
+            root.mkdir()
+            external.mkdir()
+            (root / ".codec-carver").symlink_to(external, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+                AudioLibrary(root, Mock())
+
+            direct_link = base / "direct-link"
+            direct_link.symlink_to(external, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+                audio_library.ensure_private_directory(direct_link)
+
+            racy = base / "racy"
+            with (
+                patch("audio_library.Path.is_symlink", side_effect=[False, True]),
+                self.assertRaisesRegex(ValueError, "not a real directory"),
+            ):
+                audio_library.ensure_private_directory(racy)
+
+            safe_root = base / "safe"
+            safe_root.mkdir()
+            temp_link = base / "temp-link"
+            temp_link.symlink_to(external, target_is_directory=True)
+            with (
+                patch("audio_library.tempfile.gettempdir", return_value=str(temp_link)),
+                self.assertRaisesRegex(
+                    ValueError, "temporary root must not be a symlink"
+                ),
+            ):
+                AudioLibrary(safe_root, Mock())
+
+            secure = AudioLibrary(safe_root, Mock())
+            with (
+                patch("audio_library.Path.resolve", return_value=base),
+                self.assertRaisesRegex(ValueError, "state directory escaped"),
+            ):
+                secure._ensure_secure_state_dir()
+
+    def test_security_boundaries_revalidate_sha_before_cache_and_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            record = _record("record.wav", HASH_A, tmk_path=None, materialized=True)
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [record],
+                "duplicate_groups": [],
+            }
+            atomic_json_write(state / "inventory.json", manifest)
+            atomic_json_write(state / "transcripts" / f"{HASH_A}.json", {"text": "old"})
+            (root / "record.wav").write_bytes(b"replacement")
+            backend = Mock()
+            backend.inspect.return_value = {**record, "sha256": HASH_B}
+            fake = Mock(accelerator="mlx", model="model")
+            with patch("audio_library.GpuTranscriber", return_value=fake):
+                summary = AudioLibrary(root, backend).transcribe(max_files=1)
+            self.assertEqual(summary["failed"], 1)
+            self.assertEqual(summary["cached"], 0)
+            fake.transcribe.assert_not_called()
+
+            atomic_json_write(state / "inventory.json", manifest)
+            with patch("audio_library.GpuTranscriber", return_value=fake):
+                summary = AudioLibrary(root, backend).stream_transcribe(max_files=1)
+            self.assertEqual(summary["failed"], 1)
+            self.assertEqual(summary["cached"], 0)
+
+            atomic_json_write(state / "inventory.json", manifest)
+            with self.assertRaisesRegex(ValueError, "SHA-256 changed"):
+                AudioLibrary(root, backend).plan()
+
+            backend.inspect.return_value = record
+            library = AudioLibrary(root, backend)
+            current = record.copy()
+            self.assertTrue(library._record_ready_for_mutation(current))
+            self.assertTrue(current["sha256_verified"])
+
+    def test_security_boundaries_defer_unverified_placeholder_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            canonical = _record(
+                "canonical.wav",
+                HASH_A,
+                tmk_path=None,
+                materialized=False,
+                sha256_verified=False,
+                sha256_source="previous_inventory",
+            )
+            duplicate = _record(
+                "duplicate.wav",
+                HASH_A,
+                tmk_path=None,
+                materialized=False,
+                sha256_verified=False,
+                sha256_source="previous_inventory",
+            )
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [canonical, duplicate],
+                "duplicate_groups": [
+                    {
+                        "sha256": HASH_A,
+                        "canonical_path": "canonical.wav",
+                        "duplicate_paths": ["duplicate.wav"],
+                        "earliest_recorded_at": canonical["recorded_at"],
+                    }
+                ],
+            }
+            atomic_json_write(state / "inventory.json", manifest)
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_A}.json",
+                {"text": "unverified", "segments": []},
+            )
+            plan = AudioLibrary(root, Mock()).plan(defer_unready=True)
+            self.assertEqual(plan["operations"], [])
+            self.assertEqual(plan["deferred_paths"], ["canonical.wav", "duplicate.wav"])
+
+    def test_security_boundaries_reject_tampered_mutation_plans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            inventory = {
+                "schema_version": 1,
+                "root": str(library.root),
+                "files": [],
+                "duplicate_groups": [],
+            }
+            inventory_path = library.state_dir / "inventory.json"
+            atomic_json_write(inventory_path, inventory)
+            digest = hashlib.sha256(inventory_path.read_bytes()).hexdigest()
+            plan_path = library.state_dir / "mutation-plan.json"
+
+            with self.assertRaisesRegex(FileNotFoundError, "plan not found"):
+                library.apply()
+
+            valid = {
+                "schema_version": 1,
+                "root": str(library.root),
+                "inventory_sha256": digest,
+                "operations": [],
+                "deferred_paths": [],
+            }
+            invalid = [
+                ({**valid, "root": str(root.parent)}, "root does not match"),
+                ({**valid, "inventory_sha256": HASH_A}, "inventory changed"),
+                ({**valid, "operations": {}}, "must be a list"),
+                ({**valid, "operations": ["bad"]}, "invalid mutation"),
+                (
+                    {
+                        **valid,
+                        "operations": [
+                            {
+                                "action": "rename",
+                                "source": "../escape",
+                                "destination": "safe",
+                                "sha256": HASH_A,
+                            }
+                        ],
+                    },
+                    "stay beneath",
+                ),
+                (
+                    {
+                        **valid,
+                        "operations": [
+                            {
+                                "action": "quarantine",
+                                "source": "safe",
+                                "destination": "/tmp/escape",
+                                "sha256": HASH_A,
+                            }
+                        ],
+                    },
+                    "stay beneath",
+                ),
+                (
+                    {
+                        **valid,
+                        "operations": [
+                            {
+                                "action": "rename",
+                                "source": "safe",
+                                "destination": "other",
+                                "sha256": "bad",
+                            }
+                        ],
+                    },
+                    "64 lowercase",
+                ),
+            ]
+            for payload, message in invalid:
+                with self.subTest(message=message):
+                    atomic_json_write(plan_path, payload)
+                    with self.assertRaisesRegex(ValueError, message):
+                        library.apply()
+
+            backend.apply.return_value = {"executed": False}
+            valid_without_sha = {
+                **valid,
+                "operations": [
+                    {
+                        "action": "rename",
+                        "source": "safe",
+                        "destination": "other",
+                        "sha256": None,
+                    }
+                ],
+            }
+            atomic_json_write(plan_path, valid_without_sha)
+            self.assertEqual(library.apply(), {"executed": False})
+
+    def test_stage_has_absolute_deadline_and_no_ambient_path_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "core"
+            binary.write_bytes(b"")
+            staging = root / "stage"
+            staging.mkdir()
+            backend = RustBackend(binary)
+            with (
+                patch("audio_library.time.monotonic", side_effect=[0.0, 2.0]),
+                self.assertRaises(subprocess.TimeoutExpired),
+            ):
+                backend.stage(
+                    root,
+                    "record.wav",
+                    staging,
+                    timeout_seconds=1,
+                    total_timeout_seconds=1,
+                )
+            with self.assertRaisesRegex(ValueError, "total timeout"):
+                backend.stage(
+                    root,
+                    "record.wav",
+                    staging,
+                    timeout_seconds=1,
+                    total_timeout_seconds=0,
+                )
+
+            with (
+                patch("audio_library.Path.is_file", return_value=False),
+                patch(
+                    "audio_library.shutil.which", return_value="/tmp/hostile"
+                ) as which,
+                self.assertRaises(FileNotFoundError),
+            ):
+                RustBackend()
+            which.assert_not_called()
+
+    def test_ffprobe_requires_fixed_or_explicit_absolute_path(self) -> None:
+        with patch.dict(os.environ, {"CODEC_CARVER_FFPROBE": "relative/ffprobe"}):
+            with self.assertRaisesRegex(ValueError, "absolute path"):
+                audio_library.trusted_ffprobe_binary()
+        with tempfile.TemporaryDirectory() as tmp:
+            ffprobe = Path(tmp) / "ffprobe"
+            ffprobe.write_bytes(b"")
+            ffprobe.chmod(0o700)
+            with patch.dict(
+                os.environ, {"CODEC_CARVER_FFPROBE": str(ffprobe)}, clear=False
+            ):
+                self.assertEqual(
+                    audio_library.trusted_ffprobe_binary(), ffprobe.resolve()
+                )
+        with (
+            patch("audio_library.trusted_ffprobe_binary", return_value=None),
+            patch("audio_library.shutil.which", return_value="/tmp/hostile") as which,
+            patch("audio_library.subprocess.run") as run,
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            media = Path(tmp) / "clip.m4a"
+            media.write_bytes(b"audio")
+            self.assertIsNone(audio_duration_seconds(media))
+            which.assert_not_called()
+            run.assert_not_called()
 
 
 if __name__ == "__main__":
