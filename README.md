@@ -151,17 +151,24 @@ codec-carver-library /path/to/recordings apply          # validation only
 codec-carver-library /path/to/recordings apply --execute
 ```
 
-The library backend is loaded only from an explicit `--backend-binary` or the
-repository's own release/debug build; it is never selected from ambient
-`PATH`. Duration probing likewise uses fixed system `ffprobe` locations, or an
-operator-supplied absolute `CODEC_CARVER_FFPROBE` path.
+The library backend is loaded only from the repository's release/debug build or
+an explicit `--backend-binary` accompanied by `--backend-sha256`; it is never
+selected from ambient `PATH`. The selected binary must be owner-controlled,
+non-symlinked, non-group/world-writable, and its SHA-256 is rechecked before
+each launch. Duration probing uses only the approved fixed system `ffprobe`
+locations. `CODEC_CARVER_FFPROBE` may select one of those fixed paths but cannot
+introduce an arbitrary executable.
 
 `describe` loads the pinned 4-bit
 `mlx-community/gemma-4-e2b-it-4bit` revision once per batch, samples up to 48
 Whisper segments across the full recording, and caches a validated two-to-six
-topic description in the SHA-keyed transcript sidecar. Planning consumes this
-semantic description when present and retains the deterministic extractor as a
-failure-safe fallback. Existing SHA-bound standard names remain stable.
+topic description in the SHA-keyed transcript sidecar. The model identifier and
+revision are allowlisted, tokenizer remote code is disabled, transcript prompt
+data is control-delimiter escaped JSON, and every output term must be present in
+the transcript or composed entirely from transcript terms. Planning consumes
+this grounded semantic description when present and retains the deterministic
+extractor as a failure-safe fallback. Existing SHA-bound standard names remain
+stable.
 
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes

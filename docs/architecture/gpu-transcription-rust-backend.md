@@ -70,9 +70,12 @@ preferred interface for recording curation.
 - A name already satisfying the timestamp, known-location, extension, and
   SHA-prefix contract is stable across rescans. Description extractor upgrades
   therefore affect only previously unstandardized recordings.
-- Mutations are dry-run by default. Execution rejects absolute/parent paths,
-  missing sources, existing destinations, and duplicate destinations. A failed
-  batch rolls completed moves back in reverse order.
+- Mutations are dry-run by default. Python recomputes the exact authorized
+  operation list from the current inventory and transcript evidence; Rust then
+  rehashes every audio and TMK source before any move. Execution rejects
+  hashless, changed, unlisted, absolute/parent, missing, existing-destination,
+  and duplicate-destination operations. A failed batch rolls completed moves
+  back in reverse order.
 - Exact duplicates leave the active library through a recoverable
   `.codec-carver/quarantine/exact-duplicates/<sha256>/...` move. Nothing is
   irreversibly deleted by the default workflow.
@@ -88,9 +91,12 @@ preferred interface for recording curation.
   directory must be real directories rather than symlinks.
 - Scratch cleanup unlinks a direct regular-file child relative to a no-follow
   directory descriptor, avoiding pathname containment check/use races.
-- The Rust executable comes only from an explicit path or repository build.
-  `ffprobe` comes from fixed system roots or an explicit absolute
-  `CODEC_CARVER_FFPROBE`; neither uses ambient `PATH` discovery.
+- The Rust executable comes only from an integrity-pinned explicit path or a
+  repository build and is checked for owner, mode, symlink, and SHA-256 drift.
+  `ffprobe` comes only from fixed approved system roots;
+  `CODEC_CARVER_FFPROBE` can select but not extend that allowlist. Neither uses
+  ambient `PATH` discovery. Executed mutation-journal hashes remain unverified
+  identity hints until current bytes are hashed again.
 
 ## Runtime split
 
@@ -106,9 +112,9 @@ generation.
 - Apple Silicon filename topics: `mlx-vlm` with the pinned 4-bit Gemma 4 E2B
   instruct model. It runs after transcription as a separate batch so Whisper
   and Gemma do not need to occupy unified memory simultaneously.
-  The runtime is pinned to upstream commit
-  `94e06ec3b381f6ea92da54c8580c8ca1ecf4e1fb`, after its fix for loading
-  already-converted Gemma 4 audio weights without transposing them twice.
+  The runtime uses the released `mlx-vlm==0.6.4` wheel plus a narrow compatibility
+  shim for the already-converted Gemma 4 audio-weight layout fixed upstream in
+  PR #931 (`bc3461b13a636d7cb8213b0008d885a9965f1e69`).
 - NVIDIA: `faster-whisper` on CUDA with FP16 compute.
 
 MLX Whisper caches the loaded model within the process, so the library API keeps
@@ -123,12 +129,13 @@ word timestamps are enabled, an ultra-short segment below 0.5 seconds with mean
 word probability below 0.25 remains in the JSON evidence with a
 `low_confidence` flag but is excluded from usable text and filename descriptions.
 
-The optional `describe` phase treats transcript text as untrusted prompt data,
+The optional `describe` phase treats transcript text as escaped JSON data,
 selects an information-rich segment from each of at most 48 time buckets, uses
-greedy generation, and accepts only two-to-six portable topic tokens. The model
-identifier and immutable Hub revision are stored beside the generated
-description. No Ollama server is used and transcript text is not sent to a
-hosted inference API.
+greedy generation, and accepts only two-to-six portable topic tokens grounded
+in the transcript. The only accepted model identifier and immutable Hub
+revision are compiled in, tokenizer `trust_remote_code` is forced off, and the
+validation version is stored beside the generated description. No Ollama
+server is used and transcript text is not sent to a hosted inference API.
 
 ### Rust backend
 

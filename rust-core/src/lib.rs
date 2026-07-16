@@ -993,8 +993,30 @@ pub fn apply_plan(plan: &MutationPlan, execute: bool) -> Result<ApplyJournal> {
         }
         let source = root.join(&operation.source);
         let destination = root.join(&operation.destination);
+        let expected_sha256 = operation.sha256.as_deref().ok_or_else(|| {
+            anyhow!(
+                "mutation source is not content-bound by SHA-256: {}",
+                operation.source
+            )
+        })?;
+        if expected_sha256.len() != 64
+            || !expected_sha256
+                .bytes()
+                .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
+        {
+            bail!("invalid mutation SHA-256 for {}", operation.source);
+        }
         if !source.is_file() {
             bail!("source is missing or not a file: {}", source.display());
+        }
+        let actual_sha256 = hash_file(&source, None)?;
+        if actual_sha256 != expected_sha256 {
+            bail!(
+                "mutation source SHA-256 changed for {}: expected {}, got {}",
+                operation.source,
+                expected_sha256,
+                actual_sha256
+            );
         }
         if destination.exists() {
             bail!("destination already exists: {}", destination.display());
@@ -1684,6 +1706,8 @@ mod tests {
         let root = temporary_directory("mutations");
         fs::write(root.join("a.wav"), b"a").unwrap();
         fs::write(root.join("b.wav"), b"b").unwrap();
+        let a_hash = format!("{:x}", Sha256::digest(b"a"));
+        let b_hash = format!("{:x}", Sha256::digest(b"b"));
         let plan = MutationPlan {
             schema_version: 1,
             root: root.to_string_lossy().to_string(),
@@ -1692,13 +1716,13 @@ mod tests {
                     action: MutationAction::Rename,
                     source: "a.wav".to_string(),
                     destination: "renamed/a.wav".to_string(),
-                    sha256: None,
+                    sha256: Some(a_hash),
                 },
                 MutationOperation {
                     action: MutationAction::Quarantine,
                     source: "b.wav".to_string(),
                     destination: "quarantine/b.wav".to_string(),
-                    sha256: None,
+                    sha256: Some(b_hash),
                 },
             ],
         };
@@ -1719,7 +1743,7 @@ mod tests {
                 action: MutationAction::Rename,
                 source: "c.wav".to_string(),
                 destination: "d.wav".to_string(),
-                sha256: None,
+                sha256: Some(format!("{:x}", Sha256::digest(b"c"))),
             }],
         };
         let plan_path = root.join("plan.json");
@@ -1743,6 +1767,7 @@ mod tests {
         assert!(apply_plan_file(&root.join("invalid.json"), None, false).is_err());
 
         fs::write(root.join("rollback.wav"), b"rollback").unwrap();
+        let rollback_hash = format!("{:x}", Sha256::digest(b"rollback"));
         let rollback = MutationPlan {
             schema_version: 1,
             root: root.to_string_lossy().to_string(),
@@ -1751,13 +1776,13 @@ mod tests {
                     action: MutationAction::Rename,
                     source: "rollback.wav".to_string(),
                     destination: "first.wav".to_string(),
-                    sha256: None,
+                    sha256: Some(rollback_hash.clone()),
                 },
                 MutationOperation {
                     action: MutationAction::Rename,
                     source: "rollback.wav".to_string(),
                     destination: "second.wav".to_string(),
-                    sha256: None,
+                    sha256: Some(rollback_hash),
                 },
             ],
         };
@@ -1782,7 +1807,7 @@ mod tests {
             action: MutationAction::Rename,
             source: source.to_string(),
             destination: destination.to_string(),
-            sha256: None,
+            sha256: Some(format!("{:x}", Sha256::digest(b"source"))),
         };
 
         assert!(apply_plan(&make_plan(2, vec![]), false).is_err());
@@ -1797,6 +1822,20 @@ mod tests {
             )
             .is_err()
         );
+        let hashless = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "hashless.wav".to_string(),
+            sha256: None,
+        };
+        assert!(apply_plan(&make_plan(1, vec![hashless]), false).is_err());
+        let wrong_hash = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "wrong-hash.wav".to_string(),
+            sha256: Some("0".repeat(64)),
+        };
+        assert!(apply_plan(&make_plan(1, vec![wrong_hash]), false).is_err());
         assert!(
             apply_plan(
                 &make_plan(1, vec![operation("source.wav", "source.wav")]),
