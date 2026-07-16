@@ -239,6 +239,9 @@ class NamingTests(unittest.TestCase):
         self.assertIn("프로젝트-예산-검토", transcript_description(transcript))
         self.assertEqual(transcript_description({"text": ""}), "무음-또는-전사불명")
         self.assertIn(("VOC", "voc"), audio_library.description_terms("VOC들을"))
+        self.assertIn(
+            ("구현", "구현"), audio_library.description_terms("기능을 구현하자는")
+        )
         self.assertFalse(audio_library.transcript_cache_is_usable(None))
         self.assertFalse(audio_library.transcript_cache_is_usable({"text": ""}))
         self.assertFalse(
@@ -3737,6 +3740,7 @@ class CliTests(unittest.TestCase):
             for sha256, text in (
                 (HASH_A, "BAS 공정 데이터"),
                 (HASH_B, "VOC 고객 분석"),
+                (TMK_HASH, "VOC 목적 목표 공개"),
             ):
                 atomic_json_write(
                     audio_library.safe_transcript_path(transcript_dir, sha256),
@@ -3853,6 +3857,17 @@ class CliTests(unittest.TestCase):
                 regenerated = library.describe(relative_paths=["a.wav"])
             self.assertEqual(regenerated["completed"], 1)
             self.assertEqual(regenerated["cached"], 0)
+
+            standard_generator = Mock()
+            standard_generator.analyze.return_value = generated_result
+            with patch(
+                "audio_library.GemmaDescriptionGenerator",
+                return_value=standard_generator,
+            ):
+                refreshed_standard = library.describe(relative_paths=[standard_path])
+            self.assertEqual(refreshed_standard["selected"], 1)
+            self.assertEqual(refreshed_standard["completed"], 1)
+            standard_generator.analyze.assert_called_once()
 
             with self.assertRaisesRegex(ValueError, "absent from inventory"):
                 library.describe(relative_paths=["missing.wav"])

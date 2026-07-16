@@ -122,6 +122,7 @@ CONTEXT_GENERIC_TITLE_TOKENS = SEMANTIC_GENERIC_TOKENS | frozenset(
     }
 )
 DESCRIPTION_PARTICLE_SUFFIXES = (
+    "하자",
     "으로부터",
     "에서부터",
     "에게서",
@@ -3476,7 +3477,11 @@ class AudioLibrary:
             if requested_paths and record["path"] not in requested_paths:
                 continue
             recorded_at = record.get("recorded_at")
-            if recorded_at and is_existing_standard_filename(record, recorded_at):
+            if (
+                recorded_at
+                and is_existing_standard_filename(record, recorded_at)
+                and record["path"] not in requested_paths
+            ):
                 continue
             if not record_sha_is_verified(record):
                 continue
