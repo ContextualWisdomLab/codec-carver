@@ -712,6 +712,16 @@ class NamingTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "only generic keywords"):
             audio_library.validate_contextual_title_specificity("데이터-통합-의사결정")
+        with self.assertRaisesRegex(ValueError, "without a thesis relation"):
+            audio_library.validate_contextual_title_specificity(
+                "화학공정-설비데이터-BI대시보드연동-GPT보고서자동화"
+            )
+        self.assertEqual(
+            audio_library.validate_contextual_title_specificity(
+                "공장마다-맞게-바스를-개발해봤는데-표준하고-상품화"
+            ),
+            "공장마다-맞게-바스를-개발해봤는데-표준하고-상품화",
+        )
         with self.assertRaisesRegex(ValueError, "omits the concrete outcome"):
             audio_library.validate_contextual_title_specificity(
                 "바스-고도화-프로젝트", outcome="상품화 추진"

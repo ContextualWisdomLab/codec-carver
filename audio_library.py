@@ -134,6 +134,45 @@ CONTEXT_GENERIC_TITLE_TOKENS = SEMANTIC_GENERIC_TOKENS | frozenset(
         "회의",
     }
 )
+CONTEXT_TITLE_RELATION_MARKERS = (
+    "마다",
+    "부터",
+    "까지",
+    "에서",
+    "으로",
+    "위해",
+    "위한",
+    "대신",
+    "없이",
+    "따로",
+    "하고",
+    "하며",
+    "해서",
+    "하여",
+    "지만",
+    "는데",
+    "도록",
+    "해봤",
+)
+CONTEXT_TITLE_PROBLEM_MARKERS = (
+    "지연",
+    "오류",
+    "실패",
+    "부족",
+    "수작업",
+    "위험",
+    "한계",
+    "장애",
+    "데미지",
+    "부재",
+    "누락",
+    "불일치",
+    "초과",
+    "혼선",
+    "이탈",
+    "막힘",
+    "불명",
+)
 DESCRIPTION_PARTICLE_SUFFIXES = (
     "하자",
     "으로부터",
@@ -1746,6 +1785,27 @@ def validate_contextual_title_specificity(
     tokens = [token.casefold() for token in DESCRIPTION_TOKEN_RE.findall(title)]
     if tokens and all(token in CONTEXT_GENERIC_TITLE_TOKENS for token in tokens):
         raise ValueError("contextual title contains only generic keywords")
+    generic_topic_tokens = sum(
+        any(
+            len(generic) >= 2 and generic in token
+            for generic in CONTEXT_GENERIC_TITLE_TOKENS
+        )
+        for token in tokens
+    )
+    has_relation = any(
+        marker in token for token in tokens for marker in CONTEXT_TITLE_RELATION_MARKERS
+    )
+    has_problem_relation = any(
+        marker in token for token in tokens for marker in CONTEXT_TITLE_PROBLEM_MARKERS
+    )
+    if (
+        len(tokens) >= 3
+        and generic_topic_tokens >= 2
+        and not (has_relation or has_problem_relation)
+    ):
+        raise ValueError(
+            "contextual title is a technical topic list without a thesis relation"
+        )
     if outcome is not None:
         outcome_terms = contextual_outcome_terms(outcome)
         if not outcome_terms:
