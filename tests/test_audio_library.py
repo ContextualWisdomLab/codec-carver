@@ -621,6 +621,39 @@ class NamingTests(unittest.TestCase):
         )
         self.assertEqual(rescued_context.title, "바스고도화-상품화")
         self.assertEqual(rescued_context.outcome, "상품화")
+        with self.assertRaisesRegex(ValueError, "no concrete decision target"):
+            audio_library.literal_evidence_contextual_description(
+                "CENTRAL_IDEA: 빠른 감지를 통한 체계 구축이 필요합니다.\n"
+                "OUTCOME: 나아가기 단계 당장\n"
+                "EVIDENCE: S001,S002\n"
+                "CONFIDENCE: medium\n"
+                "DESCRIPTION: 빠른감지-나아가기단계당장",
+                grounding_text=(
+                    "[S001] 빠른 감지가 필요합니다.\n"
+                    "[S002] 나아가기 단계는 당장 어렵습니다."
+                ),
+            )
+        literal_candidate = (
+            "CENTRAL_IDEA: 설비 데이터 기준 통합이 필요합니다.\n"
+            "OUTCOME: 경영 보고 지연을 줄입니다.\n"
+            "EVIDENCE: {evidence}\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: 설비데이터-경영보고지연"
+        )
+        literal_grounding = (
+            "[S001] 설비 데이터 기준 통합이 필요합니다.\n"
+            "[S002] 경영 보고 지연을 줄입니다."
+        )
+        with self.assertRaisesRegex(ValueError, "insufficient transcript evidence"):
+            audio_library.literal_evidence_contextual_description(
+                literal_candidate.format(evidence="S001"),
+                grounding_text=literal_grounding,
+            )
+        with self.assertRaisesRegex(ValueError, "absent transcript evidence"):
+            audio_library.literal_evidence_contextual_description(
+                literal_candidate.format(evidence="S001,S999"),
+                grounding_text=literal_grounding,
+            )
         self.assertEqual(
             audio_library.contextual_fallback_title(
                 title_hint="관계없는제목",
@@ -1135,6 +1168,98 @@ class NamingTests(unittest.TestCase):
                 "바스고도화-상품화",
             )
         self.assertEqual(generate.call_count, 2)
+        generate.reset_mock()
+        unsupported_paraphrase = (
+            "CENTRAL_IDEA: 설비 데이터를 통한 체계 구축이 필요합니다.\n"
+            "OUTCOME: 경영 보고 지연을 줄입니다.\n"
+            "EVIDENCE: S001,S003\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: 설비데이터-경영보고지연"
+        )
+        grounded_context = (
+            "CENTRAL_IDEA: 설비 데이터가 부서마다 달라 경영 보고가 늦어집니다.\n"
+            "OUTCOME: 설비 데이터 기준을 통합해야 합니다.\n"
+            "EVIDENCE: S001,S002\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: 경영보고지연-설비데이터-통합"
+        )
+        generate.side_effect = [
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(text=grounded_context),
+            types.SimpleNamespace(text="DESCRIPTION: 경영보고지연-설비데이터-통합"),
+        ]
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.models": fake_models,
+                "mlx_vlm.models.gemma4": fake_gemma4_package,
+                "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
+                "mlx_vlm.prompt_utils": fake_prompt_utils,
+                "mlx_vlm.utils": fake_utils,
+                "transformers": fake_transformers,
+            },
+        ):
+            grounding_retry_generator = GemmaDescriptionGenerator()
+            self.assertEqual(
+                grounding_retry_generator.describe(
+                    {
+                        "segments": [
+                            {
+                                "text": (
+                                    "설비 데이터가 부서마다 달라 경영 보고가 늦어집니다"
+                                )
+                            },
+                            {"text": "설비 데이터 기준을 통합해야 합니다"},
+                            {"text": "그래야 경영 보고 지연을 줄입니다"},
+                        ]
+                    }
+                ),
+                "경영보고지연-설비데이터-통합",
+            )
+        self.assertEqual(generate.call_count, 4)
+        self.assertIn(
+            "allowed_terms",
+            apply_chat_template.call_args_list[-2].args[2],
+        )
+        generate.reset_mock()
+        generate.side_effect = [
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(text=unsupported_paraphrase),
+        ]
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.models": fake_models,
+                "mlx_vlm.models.gemma4": fake_gemma4_package,
+                "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
+                "mlx_vlm.prompt_utils": fake_prompt_utils,
+                "mlx_vlm.utils": fake_utils,
+                "transformers": fake_transformers,
+            },
+        ):
+            literal_retry_generator = GemmaDescriptionGenerator()
+            self.assertEqual(
+                literal_retry_generator.describe(
+                    {
+                        "segments": [
+                            {
+                                "text": (
+                                    "설비 데이터가 부서마다 달라 경영 보고가 늦어집니다"
+                                )
+                            },
+                            {"text": "설비 데이터 기준을 통합해야 합니다"},
+                            {"text": "그래야 경영 보고 지연을 줄입니다"},
+                        ]
+                    }
+                ),
+                "설비데이터-경영보고지연",
+            )
+        self.assertEqual(generate.call_count, 3)
+        self.assertIn("allowed_terms", apply_chat_template.call_args.args[2])
         generate.reset_mock()
         valid_purpose_context = (
             "CENTRAL_IDEA: 바스 고도화 프로젝트를 추진합니다.\n"
@@ -4126,9 +4251,7 @@ class CliTests(unittest.TestCase):
                 "audio_library.GemmaDescriptionGenerator",
                 return_value=unverified_generator,
             ):
-                described_dataless = library.describe(
-                    relative_paths=["unverified.wav"]
-                )
+                described_dataless = library.describe(relative_paths=["unverified.wav"])
             self.assertEqual(described_dataless["selected"], 1)
             self.assertEqual(described_dataless["completed"], 1)
             unverified_generator.analyze.assert_called_once()
@@ -4150,9 +4273,7 @@ class CliTests(unittest.TestCase):
                 json.loads(unverified_path.read_text(encoding="utf-8"))["sha256"],
                 HASH_A,
             )
-            missing_identity = json.loads(
-                unverified_path.read_text(encoding="utf-8")
-            )
+            missing_identity = json.loads(unverified_path.read_text(encoding="utf-8"))
             missing_identity.pop("sha256")
             atomic_json_write(unverified_path, missing_identity)
             with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
