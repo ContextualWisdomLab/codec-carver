@@ -74,6 +74,6 @@
 ## 2024-07-13 - 일괄 업로드 폼에 프리셋 버튼 및 파일 크기 미리보기 추가
 **Learning:** 일괄 파일 업로드 폼에서 대상 바이트(target_bytes) 입력 필드만 제공하면 사용자가 원하는 용량을 바이트 단위로 정확히 계산하기 어려워 사용성이 떨어집니다. 사용자가 여러 파일을 업로드할 때 총 파일 크기를 파악하지 못해 업로드 제한을 초과하거나 잘못된 대상 바이트를 설정할 위험이 큽니다.
 **Action:** 일괄 파일 업로드 폼에도 단일 파일 업로드 폼과 동일하게 대상 바이트를 쉽게 선택할 수 있는 빠른 프리셋 버튼을 추가하고, `onchange` 이벤트 발생 시 선택된 모든 파일의 크기를 합산하여 사람이 읽기 쉬운 단위(MiB, GiB 등)로 미리보기를 제공하도록 JavaScript 로직을 개선했습니다.
-## 2024-05-13 - Empty Numeric Inputs Cause Premature Validation Errors
-**Learning:** When users delete the contents of a numeric input field (leaving it empty), `parseInt(this.value, 10)` returns `NaN`. If validation logic treats `NaN` as an error and sets custom validity immediately, users see a glaring error state ("Must be greater than 0") before they even finish interacting with the field or triggering native HTML5 constraints.
-**Action:** When implementing inline validation for numeric inputs, always check for the empty string state (`this.value === ''`) first and clear custom errors, allowing native HTML validation to handle the required state.
+## 2024-07-16 - 빈 숫자 입력 시 유효성 검사 에러 노출 방지
+**Learning:** 숫자 입력 필드에서 사용자가 값을 지워 빈칸(`''`)이 되었을 때, `parseInt(this.value, 10)`는 `NaN`을 반환합니다. 이 때 커스텀 유효성 검사(`setCustomValidity`)로 에러를 설정하면, 사용자가 새로운 값을 입력하기 전이나 HTML5의 기본 `required` 속성이 작동하기도 전에 즉시 불필요한 에러 메시지("Must be greater than 0")가 화면에 노출되고 `aria-invalid`가 설정되어 시각적, 접근성 측면에서 사용자 경험(UX)을 크게 저하시킵니다.
+**Action:** 숫자 입력을 인라인으로 검증할 때 빈 문자열 상태(`this.value === ''`)를 먼저 확인하고, 빈칸인 경우 `setCustomValidity('')` 및 `removeAttribute('aria-invalid')`를 호출하여 커스텀 에러 상태를 명시적으로 해제하도록 구현했습니다. 이렇게 하면 사용자가 값을 지울 때 거슬리는 오류가 발생하지 않으며, 필수 입력 검증은 브라우저의 기본 HTML 동작에 위임할 수 있습니다.
