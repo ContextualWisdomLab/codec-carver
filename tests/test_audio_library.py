@@ -1431,6 +1431,36 @@ class AudioLibraryTests(unittest.TestCase):
                     defer_unready=True,
                 )
 
+    def test_plan_defers_failed_semantic_description(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            manifest = _manifest(root)
+            atomic_json_write(state / "inventory.json", manifest)
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_A}.json",
+                {
+                    "text": "불명확한 전사",
+                    "segments": [{"text": "불명확한 전사"}],
+                    "filename_description_status": "deferred",
+                    "filename_description_error": "context confidence is too low",
+                },
+            )
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_B}.json",
+                {"text": "개발 일정 공유", "segments": [{"text": "개발 일정 공유"}]},
+            )
+            library = AudioLibrary(root, Mock())
+
+            with self.assertRaisesRegex(ValueError, "semantic descriptions"):
+                library.plan(allow_missing_transcripts=True)
+            plan = library.plan(defer_unready=True)
+            self.assertIn("canonical.wav", plan["deferred_paths"])
+            self.assertNotIn(
+                "canonical.wav",
+                [operation["source"] for operation in plan["operations"]],
+            )
+
     def test_plan_requires_sha_or_defers_unhashed_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2749,7 +2779,12 @@ class CliTests(unittest.TestCase):
             )
             atomic_json_write(b_path, stored_b)
             failing_generator = Mock()
-            failing_generator.analyze.side_effect = RuntimeError("generation failed")
+
+            def fail_after_partial_output(transcript):
+                transcript["filename_description_partial"] = "discard me"
+                raise RuntimeError("generation failed")
+
+            failing_generator.analyze.side_effect = fail_after_partial_output
             with patch(
                 "audio_library.GemmaDescriptionGenerator",
                 return_value=failing_generator,
@@ -2766,6 +2801,10 @@ class CliTests(unittest.TestCase):
                 "filename_description",
                 json.loads(b_path.read_text(encoding="utf-8")),
             )
+            deferred_b = json.loads(b_path.read_text(encoding="utf-8"))
+            self.assertEqual(deferred_b["filename_description_status"], "deferred")
+            self.assertIn("generation failed", deferred_b["filename_description_error"])
+            self.assertIn("filename_description_attempted_at", deferred_b)
             self.assertEqual(
                 json.loads(
                     audio_library.safe_transcript_path(
@@ -2802,6 +2841,11 @@ class CliTests(unittest.TestCase):
                 empty = library.describe(max_files=0)
             self.assertEqual(empty["selected"], 0)
             generator_class.assert_not_called()
+
+            b_path.write_text("{", encoding="utf-8")
+            with patch("audio_library.GemmaDescriptionGenerator", return_value=Mock()):
+                invalid_json = library.describe(relative_paths=["b.wav"])
+            self.assertEqual(invalid_json["failed"], 1)
 
     def test_main_routes_transcribe_stream_plan_and_apply(self) -> None:
         library = Mock()

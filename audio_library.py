@@ -2422,6 +2422,7 @@ class AudioLibrary:
         failures = []
         for index, (record, transcript_path) in enumerate(records, start=1):
             status = "failed"
+            transcript: dict[str, Any] | None = None
             try:
                 transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
                 same_generation = (
@@ -2465,6 +2466,12 @@ class AudioLibrary:
                 else:
                     assert generator is not None
                     result = generator.analyze(transcript)
+                    for key in (
+                        "filename_description_status",
+                        "filename_description_error",
+                        "filename_description_attempted_at",
+                    ):
+                        transcript.pop(key, None)
                     transcript["filename_description"] = result.title
                     transcript["filename_description_context"] = {
                         "central_idea": result.central_idea,
@@ -2487,6 +2494,18 @@ class AudioLibrary:
             except Exception as exc:
                 failed += 1
                 failures.append({"path": record["path"], "error": str(exc)})
+                if transcript is not None:
+                    for key in tuple(transcript):
+                        if key.startswith("filename_description"):
+                            transcript.pop(key)
+                    transcript["filename_description_status"] = "deferred"
+                    transcript["filename_description_error"] = str(exc)[:2_000]
+                    transcript["filename_description_model"] = model
+                    transcript["filename_description_revision"] = revision
+                    transcript["filename_description_attempted_at"] = (
+                        datetime.now().astimezone().isoformat()
+                    )
+                    atomic_json_write(transcript_path, transcript)
             if progress:
                 progress(index, len(records), record["path"], status)
         summary = {
@@ -2611,6 +2630,9 @@ class AudioLibrary:
             if is_existing_standard_filename(record, recorded_at):
                 destination = record["path"]
             else:
+                if transcript.get("filename_description_status") == "deferred":
+                    missing.append(record["path"])
+                    continue
                 if not ready(record):
                     missing.append(record["path"])
                     continue
@@ -2648,7 +2670,8 @@ class AudioLibrary:
             unique_missing = sorted(set(missing))
             sample = ", ".join(unique_missing[:3])
             raise ValueError(
-                f"{len(unique_missing)} transcripts are missing or SHA-256 is unresolved; "
+                f"{len(unique_missing)} transcripts are missing, semantic descriptions "
+                "are deferred, or SHA-256 is unresolved; "
                 f"first paths: {sample}"
             )
         return operations, sorted(set(missing)) if defer_unready else []

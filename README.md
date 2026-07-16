@@ -173,7 +173,10 @@ are allowlisted, tokenizer remote code is disabled, transcript prompt data is
 control-delimiter escaped JSON, and title concepts must be supported by the
 transcript or its validated contextual analysis. Old keyword-only caches are not
 silently upgraded. Planning consumes this evidence-backed description when
-present and retains the deterministic extractor as a failure-safe fallback.
+present and retains the deterministic extractor as a no-model failure-safe.
+Once semantic analysis has explicitly failed, its reason is checkpointed and
+the unstandardized recording is deferred instead of being renamed from a
+keyword-only fallback.
 Existing SHA-bound standard names remain stable.
 
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one

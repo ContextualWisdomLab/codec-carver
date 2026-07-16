@@ -139,7 +139,9 @@ confidence are rejected, and the complete audit context is stored beside the
 title. The only accepted model identifier and immutable Hub revision are
 compiled in, tokenizer `trust_remote_code` is forced off, and old validation
 versions are regenerated rather than relabeled. No Ollama server is used and
-transcript text is not sent to a hosted inference API.
+transcript text is not sent to a hosted inference API. A failed semantic
+analysis is checkpointed as an explicit deferral; mutation planning cannot
+silently replace it with the deterministic keyword fallback.
 
 ### Rust backend
 
