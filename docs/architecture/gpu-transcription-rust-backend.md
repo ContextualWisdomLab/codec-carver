@@ -78,8 +78,11 @@ preferred interface for recording curation.
   operation list from the current inventory and transcript evidence; Rust then
   rehashes every audio and TMK source before any move. Execution rejects
   hashless, changed, unlisted, absolute/parent, missing, existing-destination,
-  and duplicate-destination operations. A failed batch rolls completed moves
-  back in reverse order.
+  and duplicate-destination operations. Rust holds an exclusive lock on the
+  library root throughout validation and execution, traverses and creates
+  parents relative to no-follow directory descriptors, and uses atomic
+  no-overwrite descriptor-relative rename primitives. A failed batch rolls
+  completed moves back in reverse order through the same guarded path.
 - Exact duplicates leave the active library through a recoverable
   `.codec-carver/quarantine/exact-duplicates/<sha256>/...` move. Nothing is
   irreversibly deleted by the default workflow.
@@ -95,6 +98,10 @@ preferred interface for recording curation.
   directory must be real directories rather than symlinks.
 - Scratch cleanup unlinks a direct regular-file child relative to a no-follow
   directory descriptor, avoiding pathname containment check/use races.
+- Before staged audio or TMK metadata is consumed, Python opens the reported
+  direct scratch child relative to that descriptor with `O_NOFOLLOW`, hashes
+  the opened file, and requires its real byte count and SHA-256 to match the
+  backend record and any known inventory digest.
 - Rust opens every materialized audio path component with no-follow descriptors
   and the GPU consumes only a private copy hashed from that opened descriptor.
   Symlink swaps cannot redirect the GPU read after validation.
@@ -175,7 +182,12 @@ any existing staged content, and returns the scratch path plus the original file
 record. Already-local sources are opened component by component with `openat`,
 `O_NOFOLLOW`, and directory descriptors before that same single-pass
 copy-and-hash. The `evict` command releases local iCloud blocks with Foundation
-rather than a shell utility. A changed known hash stops transcription.
+rather than a shell utility. A changed known hash stops transcription. Mutation
+execution opens and locks the library root, reopens and hashes each source
+through `openat`, traverses destination parents without following symlinks, and
+uses macOS `renameatx_np(RENAME_EXCL)` or Linux
+`renameat2(RENAME_NOREPLACE)`; rollback follows the same descriptor-relative
+route.
 
 ## Evidence precedence
 
@@ -221,7 +233,9 @@ Large audio scratch is outside the iCloud library in an unpredictable,
 owner-only directory created directly under the resolved operating-system
 temporary root. The bounded prefetch byte limit controls concurrent logical
 size, at least 512 MiB of free-space headroom is required, and descriptor-based
-scratch deletion accepts only direct regular-file children.
+scratch deletion accepts only direct regular-file children. A backend-reported
+stage becomes usable only after Python has independently hashed that no-follow
+child descriptor and matched its actual size and digest.
 
 ## Primary references
 

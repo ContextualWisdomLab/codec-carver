@@ -194,7 +194,10 @@ Already-materialized recordings follow the same byte-binding rule: Rust opens
 each path component with no-follow descriptors, copies and hashes the opened
 file into private scratch, and the GPU reads only that verified copy. A pathname
 swap after inspection therefore cannot redirect transcription outside the
-library.
+library. Python independently opens the backend-reported scratch child relative
+to its owner-only directory with `O_NOFOLLOW`, hashes that exact descriptor, and
+compares the actual byte count and SHA-256 with both the backend record and any
+known inventory digest before the path can reach the GPU or TMK metadata flow.
 `--prefetch-workers` keeps a bounded rolling queue of Rust/iCloud staging calls
 full; `--prefetch-max-bytes` caps their combined logical size (512 MiB by
 default). As soon as the next selected recording is staged, the ordered Python
@@ -281,6 +284,12 @@ performed by default. Inventory, TMK, transcript, and mutation paths are
 validated beneath the canonical library root before Python or Rust receives
 them. Symlinked state/staging roots are refused, and scratch cleanup uses a
 no-follow directory handle rather than a check-then-unlink pathname.
+Rust holds an exclusive per-library mutation lock from validation through
+execution, walks or creates every source/destination parent relative to the
+locked root descriptor with `O_NOFOLLOW`, and performs no-overwrite
+descriptor-relative renames (`RENAME_EXCL` on macOS, `RENAME_NOREPLACE` on
+Linux). Rollback uses the same primitive, so replacing a destination parent
+with a symlink cannot redirect a move outside the library.
 Rust returns inventory and mutation-journal JSON on stdout; Python alone commits
 those state files through descriptor-relative atomic replacement. Final-name
 symlinks are never followed, and a partial or schema-invalid mutation journal is

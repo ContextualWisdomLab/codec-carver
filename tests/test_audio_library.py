@@ -46,9 +46,12 @@ from audio_library import (
 )
 
 
-HASH_A = "a" * 64
-HASH_B = "b" * 64
-TMK_HASH = "c" * 64
+AUDIO_A_BYTES = b"audio-a-00"
+AUDIO_B_BYTES = b"audio-b-00"
+TMK_BYTES = b"tmk-data00"
+HASH_A = hashlib.sha256(AUDIO_A_BYTES).hexdigest()
+HASH_B = hashlib.sha256(AUDIO_B_BYTES).hexdigest()
+TMK_HASH = hashlib.sha256(TMK_BYTES).hexdigest()
 
 
 def _record(path: str, sha256: str, **updates):
@@ -91,13 +94,19 @@ def _configure_private_stage(
 
     def stage(_root, relative_path, staging_dir, *, timeout_seconds):
         del timeout_seconds
+        sha256 = sha256_by_path[relative_path]
         staged_path = Path(staging_dir) / (
             f"unit-{next(sequence)}{Path(relative_path).suffix}"
         )
-        staged_path.write_bytes(b"private staged audio")
+        content_by_sha256 = {
+            HASH_A: AUDIO_A_BYTES,
+            HASH_B: AUDIO_B_BYTES,
+            TMK_HASH: TMK_BYTES,
+        }
+        staged_path.write_bytes(content_by_sha256[sha256])
         return {
             "staged_path": str(staged_path),
-            "record": {"sha256": sha256_by_path[relative_path]},
+            "record": {"sha256": sha256, "size_bytes": len(content_by_sha256[sha256])},
         }
 
     backend.stage.side_effect = stage
@@ -1076,7 +1085,8 @@ class NamingTests(unittest.TestCase):
         )
         self.assertEqual(
             name,
-            "2024-01-02_03-04-05__양평동4가-24-1__프로젝트-일정-검토-회의__sha256-aaaaaaaaaaaa.wav",
+            "2024-01-02_03-04-05__양평동4가-24-1__프로젝트-일정-검토-회의"
+            f"__sha256-{HASH_A[:12]}.wav",
         )
         with patch(
             "audio_library.STANDARD_NAME_RE", Mock(match=Mock(return_value=None))
@@ -1553,7 +1563,7 @@ class AudioLibraryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".codec-carver"
-            standard = "2024-01-02_03-04-05__회의__sha256-aaaaaaaaaaaa.wav"
+            standard = f"2024-01-02_03-04-05__회의__sha256-{HASH_A[:12]}.wav"
             manifest = {
                 "schema_version": 1,
                 "root": str(root),
@@ -1975,12 +1985,13 @@ class AudioLibraryTests(unittest.TestCase):
             library = AudioLibrary(root, backend)
             staged = library.staging_dir / f"{TMK_HASH}.tmk"
             staged.parent.mkdir(parents=True, exist_ok=True)
-            staged.write_bytes(b"markers")
+            staged.write_bytes(TMK_BYTES)
             backend.stage.side_effect = [
                 {
                     "record": {
                         **records[0],
                         "sha256": TMK_HASH,
+                        "size_bytes": len(TMK_BYTES),
                         "tmk_marker_count": 2,
                         "tmk_last_marker_seconds": 600.0,
                     },
@@ -2025,12 +2036,13 @@ class AudioLibraryTests(unittest.TestCase):
                 library.hydrate_tmk_metadata(workers=0)
 
             resumed_staged = library.staging_dir / f"{HASH_A}.tmk"
-            resumed_staged.write_bytes(b"")
+            resumed_staged.write_bytes(AUDIO_A_BYTES)
             backend.stage.side_effect = None
             backend.stage.return_value = {
                 "record": {
                     **checkpoint["files"][2],
                     "sha256": HASH_A,
+                    "size_bytes": len(AUDIO_A_BYTES),
                     "tmk_marker_count": 0,
                     "tmk_last_marker_seconds": None,
                 },
@@ -2078,9 +2090,9 @@ class AudioLibraryTests(unittest.TestCase):
             backend = Mock()
             library = AudioLibrary(root, backend)
             staged = library.staging_dir / f"{TMK_HASH}.tmk"
-            staged.write_bytes(b"markers")
+            staged.write_bytes(TMK_BYTES)
             backend.stage.return_value = {
-                "record": stale,
+                "record": {**stale, "size_bytes": len(TMK_BYTES)},
                 "staged_path": str(staged),
             }
             with patch("audio_library.is_icloud_dataless", return_value=True):
@@ -2131,9 +2143,14 @@ class AudioLibraryTests(unittest.TestCase):
             library = AudioLibrary(root, backend)
             staged = library.staging_dir / f"{HASH_A}.wav"
             staged.parent.mkdir(parents=True, exist_ok=True)
-            staged.write_bytes(b"audio")
+            staged.write_bytes(AUDIO_A_BYTES)
             backend.stage.return_value = {
-                "record": {**audio, "sha256": HASH_A, "error": None},
+                "record": {
+                    **audio,
+                    "sha256": HASH_A,
+                    "size_bytes": len(AUDIO_A_BYTES),
+                    "error": None,
+                },
                 "staged_path": str(staged),
             }
             fake = Mock(accelerator="mlx", model="model")
@@ -2186,9 +2203,14 @@ class AudioLibraryTests(unittest.TestCase):
                     raise RuntimeError("prefetch failed")
                 staged = staging_dir / f"{HASH_A}.wav"
                 staged.parent.mkdir(parents=True, exist_ok=True)
-                staged.write_bytes(b"audio")
+                staged.write_bytes(AUDIO_A_BYTES)
                 return {
-                    "record": {**first, "sha256": HASH_A, "error": None},
+                    "record": {
+                        **first,
+                        "sha256": HASH_A,
+                        "size_bytes": len(AUDIO_A_BYTES),
+                        "error": None,
+                    },
                     "staged_path": str(staged),
                 }
 
@@ -2252,10 +2274,15 @@ class AudioLibraryTests(unittest.TestCase):
                     raise subprocess.TimeoutExpired(["stage", path], timeout_seconds)
                 staged = staging_dir / f"{HASH_A}.wav"
                 staged.parent.mkdir(parents=True, exist_ok=True)
-                staged.write_bytes(b"audio")
+                staged.write_bytes(AUDIO_A_BYTES)
                 record = next(item for item in records if item["path"] == path)
                 return {
-                    "record": {**record, "sha256": HASH_A, "error": None},
+                    "record": {
+                        **record,
+                        "sha256": HASH_A,
+                        "size_bytes": len(AUDIO_A_BYTES),
+                        "error": None,
+                    },
                     "staged_path": str(staged),
                 }
 
@@ -2322,10 +2349,16 @@ class AudioLibraryTests(unittest.TestCase):
                     sha256 = HASH_B
                 staged = staging_dir / f"{sha256}.wav"
                 staged.parent.mkdir(parents=True, exist_ok=True)
-                staged.write_bytes(b"audio")
+                content = AUDIO_A_BYTES if sha256 == HASH_A else AUDIO_B_BYTES
+                staged.write_bytes(content)
                 record = next(item for item in records if item["path"] == path)
                 return {
-                    "record": {**record, "sha256": sha256, "error": None},
+                    "record": {
+                        **record,
+                        "sha256": sha256,
+                        "size_bytes": len(content),
+                        "error": None,
+                    },
                     "staged_path": str(staged),
                 }
 
@@ -2399,10 +2432,16 @@ class AudioLibraryTests(unittest.TestCase):
                     active -= 1
                 staged = staging_dir / f"{sha256}.wav"
                 staged.parent.mkdir(parents=True, exist_ok=True)
-                staged.write_bytes(b"audio")
+                content = AUDIO_A_BYTES if sha256 == HASH_A else AUDIO_B_BYTES
+                staged.write_bytes(content)
                 record = next(item for item in records if item["path"] == path)
                 return {
-                    "record": {**record, "sha256": sha256, "error": None},
+                    "record": {
+                        **record,
+                        "sha256": sha256,
+                        "size_bytes": len(content),
+                        "error": None,
+                    },
                     "staged_path": str(staged),
                 }
 
@@ -2463,10 +2502,16 @@ class AudioLibraryTests(unittest.TestCase):
                     sha256 = HASH_B
                 staged = staging_dir / f"{sha256}.wav"
                 staged.parent.mkdir(parents=True, exist_ok=True)
-                staged.write_bytes(b"audio")
+                content = AUDIO_A_BYTES if sha256 == HASH_A else AUDIO_B_BYTES
+                staged.write_bytes(content)
                 record = next(item for item in records if item["path"] == path)
                 return {
-                    "record": {**record, "sha256": sha256, "error": None},
+                    "record": {
+                        **record,
+                        "sha256": sha256,
+                        "size_bytes": len(content),
+                        "error": None,
+                    },
                     "staged_path": str(staged),
                 }
 
@@ -2588,12 +2633,18 @@ class AudioLibraryTests(unittest.TestCase):
                 sha256 = hashlib.sha256(path.encode()).hexdigest()
                 staged = staging_dir / f"{sha256}.wav"
                 staged.parent.mkdir(parents=True, exist_ok=True)
-                staged.write_bytes(b"audio")
+                content = path.encode()
+                staged.write_bytes(content)
                 with lock:
                     active -= 1
                 record = next(item for item in records if item["path"] == path)
                 return {
-                    "record": {**record, "sha256": sha256, "error": None},
+                    "record": {
+                        **record,
+                        "sha256": sha256,
+                        "size_bytes": len(content),
+                        "error": None,
+                    },
                     "staged_path": str(staged),
                 }
 
@@ -2652,7 +2703,7 @@ class AudioLibraryTests(unittest.TestCase):
             )
             staged = library.staging_dir / f"{HASH_A}.wav"
             staged.parent.mkdir(parents=True, exist_ok=True)
-            staged.write_bytes(b"audio")
+            staged.write_bytes(AUDIO_A_BYTES)
             backend.stage.return_value = {
                 "record": {**remote, "sha256": HASH_A, "error": None},
                 "staged_path": str(staged),
@@ -2742,10 +2793,13 @@ class AudioLibraryTests(unittest.TestCase):
             atomic_json_write(state / "inventory.json", manifest)
             backend = Mock()
             library = AudioLibrary(root, backend)
+            staged = library.staging_dir / f"{HASH_A}.wav"
+            staged.write_bytes(AUDIO_A_BYTES)
             backend.stage.return_value = {
                 "record": {
                     **manifest["files"][0],
                     "sha256": HASH_A,
+                    "size_bytes": len(AUDIO_A_BYTES),
                     "materialized": False,
                     "error": None,
                 },
@@ -2898,9 +2952,13 @@ class AudioLibraryTests(unittest.TestCase):
             library = AudioLibrary(root, Mock())
             staged = library.staging_dir / f"{HASH_B}.wav"
             staged.parent.mkdir(parents=True, exist_ok=True)
-            staged.write_bytes(b"drift")
+            staged.write_bytes(AUDIO_B_BYTES)
             library.backend.stage.return_value = {
-                "record": {**record, "sha256": HASH_B},
+                "record": {
+                    **record,
+                    "sha256": HASH_B,
+                    "size_bytes": len(AUDIO_B_BYTES),
+                },
                 "staged_path": str(staged),
             }
             atomic_json_write(state / "inventory.json", manifest)
@@ -2917,9 +2975,13 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertFalse(staged.exists())
 
             staged = library.staging_dir / f"{HASH_A}.wav"
-            staged.write_bytes(b"audio")
+            staged.write_bytes(AUDIO_A_BYTES)
             library.backend.stage.return_value = {
-                "record": {**record, "sha256": HASH_A},
+                "record": {
+                    **record,
+                    "sha256": HASH_A,
+                    "size_bytes": len(AUDIO_A_BYTES),
+                },
                 "staged_path": str(staged),
             }
             fake = Mock(accelerator="mlx", model="model")
@@ -3305,9 +3367,14 @@ class CliTests(unittest.TestCase):
             library = AudioLibrary(root, Mock())
             staged = library.staging_dir / f"{HASH_A}.wav"
             staged.parent.mkdir(parents=True, exist_ok=True)
-            staged.write_bytes(b"audio")
+            staged.write_bytes(AUDIO_A_BYTES)
             library.backend.stage.return_value = {
-                "record": {**record, "sha256": HASH_A, "materialized": False},
+                "record": {
+                    **record,
+                    "sha256": HASH_A,
+                    "size_bytes": len(AUDIO_A_BYTES),
+                    "materialized": False,
+                },
                 "staged_path": str(staged),
             }
             library.backend.evict.side_effect = subprocess.TimeoutExpired(
@@ -3347,7 +3414,7 @@ class CliTests(unittest.TestCase):
                     "duplicate_groups": [],
                 },
             )
-            staged.write_bytes(b"audio")
+            staged.write_bytes(AUDIO_A_BYTES)
             library.backend.evict.side_effect = None
             library.backend.evict.return_value = {"evicted": False}
             with (
@@ -3658,10 +3725,124 @@ class CliTests(unittest.TestCase):
                 "staged_path": str(drifted),
                 "record": {"sha256": HASH_B},
             }
-            with self.assertRaisesRegex(ValueError, "SHA-256 changed"):
+            with self.assertRaisesRegex(ValueError, "staged SHA-256 does not match"):
                 library._stage_materialized_record(record)
             self.assertFalse(drifted.exists())
             self.assertFalse(record["sha256_verified"])
+
+            wrong_size = library.staging_dir / "wrong-size.wav"
+            wrong_size.write_bytes(AUDIO_A_BYTES)
+            backend.stage.return_value = {
+                "staged_path": str(wrong_size),
+                "record": {"sha256": HASH_A, "size_bytes": 1},
+            }
+            with self.assertRaisesRegex(ValueError, "size does not match"):
+                library._stage_materialized_record(record)
+            self.assertFalse(wrong_size.exists())
+
+            directory = library.staging_dir / "directory.wav"
+            directory.mkdir()
+            backend.stage.return_value = {
+                "staged_path": str(directory),
+                "record": {"sha256": HASH_A},
+            }
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                library._stage_materialized_record(record)
+
+            valid = library.staging_dir / "valid.wav"
+            valid.write_bytes(AUDIO_A_BYTES)
+            backend.stage.return_value = {
+                "staged_path": str(valid),
+                "record": {
+                    "sha256": HASH_A,
+                    "size_bytes": len(AUDIO_A_BYTES),
+                },
+            }
+            record["sha256"] = HASH_A
+            self.assertEqual(library._stage_materialized_record(record), valid)
+            remove_staged_file(library.staging_dir, valid)
+
+    def test_stream_transcribe_never_forwards_backend_escape_to_gpu(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            record = _record("remote.wav", "", materialized=False, tmk_path=None)
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [record],
+                    "duplicate_groups": [],
+                },
+            )
+            backend = Mock()
+            backend.stage.return_value = {
+                "staged_path": "/etc/passwd",
+                "record": {"sha256": HASH_A},
+            }
+            fake = Mock(accelerator="mlx", model="model")
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch("audio_library.is_icloud_dataless", return_value=True),
+            ):
+                summary = AudioLibrary(root, backend).stream_transcribe(
+                    evict_after=False
+                )
+            self.assertEqual(summary["failed"], 1)
+            self.assertIn("escaped private scratch", summary["failures"][0]["error"])
+            fake.transcribe.assert_not_called()
+
+    def test_staged_artifact_rejects_malformed_owner_and_hash_races(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            library = AudioLibrary(Path(tmp), Mock())
+            candidate = library.staging_dir / "candidate.wav"
+            stage = {
+                "staged_path": str(candidate),
+                "record": {
+                    "sha256": HASH_A,
+                    "size_bytes": len(AUDIO_A_BYTES),
+                },
+            }
+            with self.assertRaisesRegex(ValueError, "response must be"):
+                audio_library.verify_staged_artifact(library.staging_dir, [])
+            with self.assertRaisesRegex(ValueError, "record must be"):
+                audio_library.verify_staged_artifact(
+                    library.staging_dir,
+                    {"staged_path": str(candidate), "record": []},
+                )
+            with self.assertRaisesRegex(ValueError, "path must be"):
+                audio_library.verify_staged_artifact(
+                    library.staging_dir,
+                    {"staged_path": None, "record": {}},
+                )
+
+            candidate.write_bytes(AUDIO_A_BYTES)
+            user_id = os.geteuid()
+            with (
+                patch("audio_library.os.geteuid", side_effect=[user_id, user_id + 1]),
+                self.assertRaisesRegex(PermissionError, "not owned"),
+            ):
+                audio_library.verify_staged_artifact(library.staging_dir, stage)
+            self.assertFalse(candidate.exists())
+
+            candidate.write_bytes(AUDIO_A_BYTES)
+            real_fstat = os.fstat
+            calls = 0
+
+            def mutate_before_final_stat(descriptor):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    candidate.touch()
+                return real_fstat(descriptor)
+
+            with (
+                patch("audio_library.os.fstat", side_effect=mutate_before_final_stat),
+                self.assertRaisesRegex(ValueError, "changed while hashing"),
+            ):
+                audio_library.verify_staged_artifact(library.staging_dir, stage)
+            self.assertFalse(candidate.exists())
 
     def test_atomic_state_write_resists_post_validation_symlink_swap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

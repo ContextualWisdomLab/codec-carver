@@ -1127,6 +1127,329 @@ pub fn apply_plan(plan: &MutationPlan, execute: bool) -> Result<ApplyJournal> {
     let root = Path::new(&plan.root)
         .canonicalize()
         .with_context(|| format!("cannot resolve plan root {}", plan.root))?;
+    #[cfg(not(unix))]
+    {
+        let _ = (root, execute);
+        bail!("secure descriptor-relative mutations require a Unix platform");
+    }
+    #[cfg(unix)]
+    apply_plan_unix(plan, execute, &root)
+}
+
+#[cfg(unix)]
+fn open_locked_root(root: &Path) -> Result<File> {
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(root)
+        .with_context(|| format!("cannot securely open plan root {}", root.display()))?;
+    let result = unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("cannot lock plan root {}", root.display()));
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn component_name(component: &std::ffi::OsStr, path: &Path) -> Result<CString> {
+    CString::new(component.as_bytes())
+        .with_context(|| format!("path contains NUL: {}", path.display()))
+}
+
+#[cfg(unix)]
+fn open_child_directory(parent: &File, name: &CString, path: &Path) -> Result<File> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("cannot securely open mutation parent {}", path.display()));
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+#[cfg(unix)]
+fn mutation_parent(
+    root: &File,
+    relative_path: &Path,
+    create: bool,
+) -> Result<Option<(File, CString)>> {
+    validate_relative_path(&relative_path.to_string_lossy())?;
+    let final_component = relative_path
+        .file_name()
+        .expect("validated mutation paths have a final component");
+    let final_name = component_name(final_component, relative_path)?;
+    let mut directory = root.try_clone()?;
+    let parent = relative_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    for component in parent.components() {
+        let Component::Normal(value) = component else {
+            continue;
+        };
+        let name = component_name(value, relative_path)?;
+        match open_child_directory(&directory, &name, relative_path) {
+            Ok(opened) => directory = opened,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|source| source.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                if !create {
+                    return Ok(None);
+                }
+                let created = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
+                if created != 0 {
+                    let source = std::io::Error::last_os_error();
+                    if source.kind() != std::io::ErrorKind::AlreadyExists {
+                        return Err(source).with_context(|| {
+                            format!(
+                                "cannot securely create mutation parent {}",
+                                relative_path.display()
+                            )
+                        });
+                    }
+                }
+                directory = open_child_directory(&directory, &name, relative_path)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(Some((directory, final_name)))
+}
+
+#[cfg(unix)]
+fn entry_exists(parent: &File, name: &CString) -> Result<bool> {
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::NotFound {
+        Ok(false)
+    } else {
+        Err(error).context("cannot inspect descriptor-relative mutation entry")
+    }
+}
+
+#[cfg(unix)]
+fn open_mutation_source(root: &File, relative_path: &Path) -> Result<(File, File, CString)> {
+    let (parent, name) = mutation_parent(root, relative_path, false)?
+        .ok_or_else(|| anyhow!("source parent is missing: {}", relative_path.display()))?;
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "cannot securely open mutation source {}",
+                relative_path.display()
+            )
+        });
+    }
+    let source = unsafe { File::from_raw_fd(descriptor) };
+    if !source.metadata()?.is_file() {
+        bail!(
+            "mutation source is not a regular file: {}",
+            relative_path.display()
+        );
+    }
+    Ok((parent, source, name))
+}
+
+#[cfg(unix)]
+fn source_name_still_matches(parent: &File, source: &File, name: &CString) -> Result<()> {
+    let mut opened = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let mut current = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let opened_result = unsafe { libc::fstat(source.as_raw_fd(), opened.as_mut_ptr()) };
+    let current_result = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            current.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if opened_result != 0 || current_result != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("mutation source changed before descriptor-relative move");
+    }
+    let opened = unsafe { opened.assume_init() };
+    let current = unsafe { current.assume_init() };
+    if opened.st_dev != current.st_dev || opened.st_ino != current.st_ino {
+        bail!("mutation source changed before descriptor-relative move");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn rename_noreplace_at(
+    source_parent: &File,
+    source_name: &CString,
+    destination_parent: &File,
+    destination_name: &CString,
+) -> Result<()> {
+    let result = unsafe {
+        libc::renameatx_np(
+            source_parent.as_raw_fd(),
+            source_name.as_ptr(),
+            destination_parent.as_raw_fd(),
+            destination_name.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("descriptor-relative rename failed");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn rename_noreplace_at(
+    source_parent: &File,
+    source_name: &CString,
+    destination_parent: &File,
+    destination_name: &CString,
+) -> Result<()> {
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            source_parent.as_raw_fd(),
+            source_name.as_ptr(),
+            destination_parent.as_raw_fd(),
+            destination_name.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("descriptor-relative rename failed");
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn rename_noreplace_at(
+    source_parent: &File,
+    source_name: &CString,
+    destination_parent: &File,
+    destination_name: &CString,
+) -> Result<()> {
+    let linked = unsafe {
+        libc::linkat(
+            source_parent.as_raw_fd(),
+            source_name.as_ptr(),
+            destination_parent.as_raw_fd(),
+            destination_name.as_ptr(),
+            0,
+        )
+    };
+    if linked != 0 {
+        return Err(std::io::Error::last_os_error()).context("descriptor-relative link failed");
+    }
+    let unlinked = unsafe { libc::unlinkat(source_parent.as_raw_fd(), source_name.as_ptr(), 0) };
+    if unlinked != 0 {
+        let error = std::io::Error::last_os_error();
+        let _ =
+            unsafe { libc::unlinkat(destination_parent.as_raw_fd(), destination_name.as_ptr(), 0) };
+        return Err(error).context("descriptor-relative unlink failed");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_mutation_operation(root: &File, operation: &MutationOperation) -> Result<()> {
+    let expected_sha256 = operation.sha256.as_deref().ok_or_else(|| {
+        anyhow!(
+            "mutation source is not content-bound by SHA-256: {}",
+            operation.source
+        )
+    })?;
+    if expected_sha256.len() != 64
+        || !expected_sha256
+            .bytes()
+            .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
+    {
+        bail!("invalid mutation SHA-256 for {}", operation.source);
+    }
+    let (_parent, source, _name) = open_mutation_source(root, Path::new(&operation.source))?;
+    let actual_sha256 = hash_open_file(source, None)?;
+    if actual_sha256 != expected_sha256 {
+        bail!(
+            "mutation source SHA-256 changed for {}: expected {}, got {}",
+            operation.source,
+            expected_sha256,
+            actual_sha256
+        );
+    }
+    if let Some((parent, name)) = mutation_parent(root, Path::new(&operation.destination), false)?
+        && entry_exists(&parent, &name)?
+    {
+        bail!("destination already exists: {}", operation.destination);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn move_mutation_with<F>(root: &File, operation: &MutationOperation, before_rename: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let expected_sha256 = operation.sha256.as_deref().ok_or_else(|| {
+        anyhow!(
+            "mutation source is not content-bound by SHA-256: {}",
+            operation.source
+        )
+    })?;
+    let (source_parent, source, source_name) =
+        open_mutation_source(root, Path::new(&operation.source))?;
+    let actual_sha256 = hash_open_file(source.try_clone()?, None)?;
+    if actual_sha256 != expected_sha256 {
+        bail!(
+            "mutation source SHA-256 changed for {}: expected {}, got {}",
+            operation.source,
+            expected_sha256,
+            actual_sha256
+        );
+    }
+    let (destination_parent, destination_name) =
+        mutation_parent(root, Path::new(&operation.destination), true)?
+            .expect("creating a validated mutation parent always returns a descriptor");
+    before_rename()?;
+    source_name_still_matches(&source_parent, &source, &source_name)?;
+    rename_noreplace_at(
+        &source_parent,
+        &source_name,
+        &destination_parent,
+        &destination_name,
+    )
+}
+
+#[cfg(unix)]
+fn move_mutation(root: &File, operation: &MutationOperation) -> Result<()> {
+    move_mutation_with(root, operation, || Ok(()))
+}
+
+#[cfg(unix)]
+fn apply_plan_unix(plan: &MutationPlan, execute: bool, root: &Path) -> Result<ApplyJournal> {
+    let root_directory = open_locked_root(root)?;
     let mut destinations = HashSet::new();
     for operation in &plan.operations {
         validate_relative_path(&operation.source)?;
@@ -1137,60 +1460,27 @@ pub fn apply_plan(plan: &MutationPlan, execute: bool) -> Result<ApplyJournal> {
         if !destinations.insert(operation.destination.clone()) {
             bail!("duplicate destination in plan: {}", operation.destination);
         }
-        let source = root.join(&operation.source);
-        let destination = root.join(&operation.destination);
-        let expected_sha256 = operation.sha256.as_deref().ok_or_else(|| {
-            anyhow!(
-                "mutation source is not content-bound by SHA-256: {}",
-                operation.source
-            )
-        })?;
-        if expected_sha256.len() != 64
-            || !expected_sha256
-                .bytes()
-                .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
-        {
-            bail!("invalid mutation SHA-256 for {}", operation.source);
-        }
-        if !source.is_file() {
-            bail!("source is missing or not a file: {}", source.display());
-        }
-        let actual_sha256 = hash_file(&source, None)?;
-        if actual_sha256 != expected_sha256 {
-            bail!(
-                "mutation source SHA-256 changed for {}: expected {}, got {}",
-                operation.source,
-                expected_sha256,
-                actual_sha256
-            );
-        }
-        if destination.exists() {
-            bail!("destination already exists: {}", destination.display());
-        }
+        validate_mutation_operation(&root_directory, operation)?;
     }
 
     let mut completed = Vec::new();
     if execute {
         for operation in &plan.operations {
-            let source = root.join(&operation.source);
-            let destination = root.join(&operation.destination);
-            let parent = destination
-                .parent()
-                .expect("a path joined to a canonical root always has a parent");
-            fs::create_dir_all(parent)?;
-            if let Err(error) = fs::rename(&source, &destination) {
+            if let Err(error) = move_mutation(&root_directory, operation) {
                 for rollback in completed.iter().rev() {
                     let rollback: &MutationOperation = rollback;
-                    let _ = fs::rename(
-                        root.join(&rollback.destination),
-                        root.join(&rollback.source),
-                    );
+                    let reverse = MutationOperation {
+                        action: rollback.action,
+                        source: rollback.destination.clone(),
+                        destination: rollback.source.clone(),
+                        sha256: rollback.sha256.clone(),
+                    };
+                    let _ = move_mutation(&root_directory, &reverse);
                 }
-                return Err(anyhow!(error)).with_context(|| {
+                return Err(error).with_context(|| {
                     format!(
                         "failed to move {} to {}; completed operations were rolled back",
-                        source.display(),
-                        destination.display()
+                        operation.source, operation.destination
                     )
                 });
             }
@@ -2131,5 +2421,73 @@ mod tests {
         assert!(apply_plan(&parent_is_file, true).is_err());
         assert!(atomic_write(Path::new("/"), b"payload").is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descriptor_mutations_reject_symlinks_and_resist_parent_swaps() {
+        use std::os::unix::fs::symlink;
+
+        let base = temporary_directory("mutation-descriptors");
+        let root = base.join("library");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(root.join("source.wav"), b"source").unwrap();
+        fs::write(outside.join("outside.wav"), b"outside").unwrap();
+        let source_hash = format!("{:x}", Sha256::digest(b"source"));
+        let plan_for = |source: &str, destination: &str| MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![MutationOperation {
+                action: MutationAction::Rename,
+                source: source.to_string(),
+                destination: destination.to_string(),
+                sha256: Some(source_hash.clone()),
+            }],
+        };
+
+        symlink(&outside, root.join("linked-parent")).unwrap();
+        assert!(apply_plan(&plan_for("source.wav", "linked-parent/stolen.wav"), false).is_err());
+        assert!(apply_plan(&plan_for("source.wav", "linked-parent/stolen.wav"), true).is_err());
+        assert!(!outside.join("stolen.wav").exists());
+
+        symlink(outside.join("outside.wav"), root.join("linked-source.wav")).unwrap();
+        assert!(apply_plan(&plan_for("linked-source.wav", "safe.wav"), false).is_err());
+
+        fs::create_dir(root.join("race-parent")).unwrap();
+        let detached = root.join("detached-parent");
+        let operation = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "race-parent/result.wav".to_string(),
+            sha256: Some(source_hash),
+        };
+        let root_directory = open_locked_root(&root).unwrap();
+        move_mutation_with(&root_directory, &operation, || {
+            fs::rename(root.join("race-parent"), &detached)?;
+            symlink(&outside, root.join("race-parent"))?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(detached.join("result.wav")).unwrap(), b"source");
+        assert!(!outside.join("result.wav").exists());
+
+        fs::write(root.join("new-source.wav"), b"new").unwrap();
+        fs::write(detached.join("occupied.wav"), b"occupied").unwrap();
+        let occupied = MutationOperation {
+            action: MutationAction::Rename,
+            source: "new-source.wav".to_string(),
+            destination: "detached-parent/occupied.wav".to_string(),
+            sha256: Some(format!("{:x}", Sha256::digest(b"new"))),
+        };
+        assert!(move_mutation(&root_directory, &occupied).is_err());
+        assert_eq!(fs::read(root.join("new-source.wav")).unwrap(), b"new");
+        assert_eq!(
+            fs::read(detached.join("occupied.wav")).unwrap(),
+            b"occupied"
+        );
+        drop(root_directory);
+        fs::remove_dir_all(base).unwrap();
     }
 }

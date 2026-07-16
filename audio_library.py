@@ -2468,8 +2468,11 @@ class AudioLibrary:
                         self.staging_dir,
                         timeout_seconds=inspect_timeout_seconds,
                     )
-                    staged_path = Path(staged["staged_path"])
-                    inspected = staged["record"]
+                    staged_path, inspected = verify_staged_artifact(
+                        self.staging_dir,
+                        staged,
+                        expected_sha256=record.get("sha256"),
+                    )
                 else:
                     inspected = self.backend.inspect(
                         self.root,
@@ -2755,15 +2758,17 @@ class AudioLibrary:
                             self.staging_dir,
                             timeout_seconds=stage_stall_timeout_seconds,
                         )
-                    staged_audio = Path(staged["staged_path"])
-                    audio_input = staged_audio
-                    inspected = staged["record"]
-                    if known_sha256 and inspected.get("sha256") != known_sha256:
-                        record["sha256_verified"] = False
-                        raise ValueError(
-                            f"SHA-256 changed for {record['path']}: "
-                            f"expected {known_sha256}, got {inspected.get('sha256')}"
+                    try:
+                        staged_audio, inspected = verify_staged_artifact(
+                            self.staging_dir,
+                            staged,
+                            expected_sha256=known_sha256 or None,
                         )
+                    except Exception:
+                        if known_sha256:
+                            record["sha256_verified"] = False
+                        raise
+                    audio_input = staged_audio
                     record.update(inspected)
                     record.update(preserved_tmk)
                     record["sha256_verified"] = True
@@ -3291,29 +3296,16 @@ class AudioLibrary:
             self.staging_dir,
             timeout_seconds=timeout_seconds,
         )
-        staged_path = Path(staged["staged_path"]).absolute()
-        if staged_path.parent != self.staging_dir.absolute():
-            raise ValueError(
-                f"backend staged path escaped private scratch: {staged_path}"
-            )
         try:
-            metadata = os.stat(staged_path, follow_symlinks=False)
-            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-                raise ValueError(
-                    f"backend staged artifact is not regular: {staged_path}"
-                )
-            inspected = staged["record"]
-            actual = validate_sha256(inspected.get("sha256"), label="staged SHA-256")
             expected = validate_sha256(record.get("sha256"), label="record SHA-256")
-            if actual != expected:
-                record["sha256_verified"] = False
-                record["error"] = (
-                    f"SHA-256 changed for {record['path']}: expected {expected}, "
-                    f"got {actual}"
-                )
-                raise ValueError(record["error"])
+            staged_path, _inspected = verify_staged_artifact(
+                self.staging_dir,
+                staged,
+                expected_sha256=expected,
+            )
         except Exception:
-            remove_staged_file(self.staging_dir, staged_path)
+            record["sha256_verified"] = False
+            record["error"] = f"staged artifact validation failed for {record['path']}"
             raise
         return staged_path
 
@@ -3585,6 +3577,116 @@ def ensure_staging_capacity(staging_dir: Path, size_bytes: int) -> None:
         raise OSError(
             f"insufficient staging space: need {required} bytes, have {available} bytes"
         )
+
+
+def verify_staged_artifact(
+    staging_dir: Path,
+    staged: Any,
+    *,
+    expected_sha256: Any | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Rehash one no-follow scratch child before metadata or GPU consumption."""
+
+    if not isinstance(staged, dict):
+        raise ValueError("backend stage response must be a JSON object")
+    inspected = staged.get("record")
+    if not isinstance(inspected, dict):
+        raise ValueError("backend staged record must be a JSON object")
+    staged_value = staged.get("staged_path")
+    if not isinstance(staged_value, str) or not staged_value or "\x00" in staged_value:
+        raise ValueError("backend staged path must be a non-empty absolute path")
+
+    root = staging_dir.absolute()
+    candidate = Path(staged_value)
+    if not candidate.is_absolute() or candidate.parent != root:
+        raise ValueError(f"backend staged path escaped private scratch: {candidate}")
+
+    directory_fd = open_private_directory(root)
+    file_fd: int | None = None
+    try:
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        try:
+            file_fd = os.open(candidate.name, flags, dir_fd=directory_fd)
+        except OSError as exc:
+            raise ValueError(
+                f"backend staged artifact is not a regular file: {candidate}"
+            ) from exc
+        opened = os.fstat(file_fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError(
+                f"backend staged artifact is not a regular file: {candidate}"
+            )
+        if opened.st_uid != os.geteuid():
+            raise PermissionError(
+                f"backend staged artifact is not owned by this user: {candidate}"
+            )
+
+        digest = hashlib.sha256()
+        size_bytes = 0
+        while chunk := os.read(file_fd, 1024 * 1024):
+            digest.update(chunk)
+            size_bytes += len(chunk)
+        finished = os.fstat(file_fd)
+        stable_identity = (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_ctime_ns,
+        )
+        if stable_identity != (
+            finished.st_dev,
+            finished.st_ino,
+            finished.st_size,
+            finished.st_mtime_ns,
+            finished.st_ctime_ns,
+        ) or size_bytes != finished.st_size:
+            raise ValueError(f"backend staged artifact changed while hashing: {candidate}")
+
+        actual_sha256 = digest.hexdigest()
+        reported_sha256 = validate_sha256(
+            inspected.get("sha256"), label="staged SHA-256"
+        )
+        if reported_sha256 != actual_sha256:
+            raise ValueError(
+                "backend staged SHA-256 does not match staged bytes: "
+                f"reported {reported_sha256}, got {actual_sha256}"
+            )
+        reported_size = inspected.get("size_bytes")
+        if reported_size is not None and (
+            not isinstance(reported_size, int)
+            or isinstance(reported_size, bool)
+            or reported_size != size_bytes
+        ):
+            raise ValueError(
+                "backend staged size does not match staged bytes: "
+                f"reported {reported_size!r}, got {size_bytes}"
+            )
+        if expected_sha256 is not None:
+            expected = validate_sha256(expected_sha256, label="expected staged SHA-256")
+            if actual_sha256 != expected:
+                raise ValueError(
+                    f"SHA-256 changed for staged artifact: expected {expected}, "
+                    f"got {actual_sha256}"
+                )
+        verified = dict(inspected)
+        verified["sha256"] = actual_sha256
+        verified["size_bytes"] = size_bytes
+        return candidate, verified
+    except Exception:
+        try:
+            remove_staged_file(root, candidate)
+        except (OSError, ValueError):
+            pass
+        raise
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(directory_fd)
 
 
 def remove_staged_file(staging_dir: Path, staged_path: Path) -> None:
