@@ -784,7 +784,7 @@ fn copy_and_hash_staged_source(
     }
 
     #[cfg(not(target_os = "macos"))]
-    let _ = materialized;
+    let _ = (materialized, source);
     copy_and_hash_open_file(
         open_regular_beneath(root, relative_path)?,
         destination,
@@ -1143,7 +1143,17 @@ fn open_locked_root(root: &Path) -> Result<File> {
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(root)
         .with_context(|| format!("cannot securely open plan root {}", root.display()))?;
-    let result = unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX) };
+    lock_root_with(directory, root, |descriptor| unsafe {
+        libc::flock(descriptor, libc::LOCK_EX)
+    })
+}
+
+#[cfg(unix)]
+fn lock_root_with<F>(directory: File, root: &Path, lock: F) -> Result<File>
+where
+    F: FnOnce(libc::c_int) -> libc::c_int,
+{
+    let result = lock(directory.as_raw_fd());
     if result != 0 {
         return Err(std::io::Error::last_os_error())
             .with_context(|| format!("cannot lock plan root {}", root.display()));
@@ -1171,6 +1181,20 @@ fn open_child_directory(parent: &File, name: &CString, path: &Path) -> Result<Fi
             .with_context(|| format!("cannot securely open mutation parent {}", path.display()));
     }
     Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+#[cfg(unix)]
+fn create_child_directory(parent: &File, name: &CString, path: &Path) -> Result<()> {
+    let created = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
+    if created != 0 {
+        let source = std::io::Error::last_os_error();
+        if source.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(source).with_context(|| {
+                format!("cannot securely create mutation parent {}", path.display())
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1204,18 +1228,7 @@ fn mutation_parent(
                 if !create {
                     return Ok(None);
                 }
-                let created = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
-                if created != 0 {
-                    let source = std::io::Error::last_os_error();
-                    if source.kind() != std::io::ErrorKind::AlreadyExists {
-                        return Err(source).with_context(|| {
-                            format!(
-                                "cannot securely create mutation parent {}",
-                                relative_path.display()
-                            )
-                        });
-                    }
-                }
+                create_child_directory(&directory, &name, relative_path)?;
                 directory = open_child_directory(&directory, &name, relative_path)?;
             }
             Err(error) => return Err(error),
@@ -2487,6 +2500,75 @@ mod tests {
             fs::read(detached.join("occupied.wav")).unwrap(),
             b"occupied"
         );
+        drop(root_directory);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descriptor_mutation_failures_are_covered_and_fail_closed() {
+        let base = temporary_directory("mutation-descriptor-errors");
+        let root = base.join("library");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("source.wav"), b"source").unwrap();
+        fs::create_dir(root.join("source-directory.wav")).unwrap();
+        let root_directory = open_locked_root(&root).unwrap();
+
+        let unlocked = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&root)
+            .unwrap();
+        assert!(lock_root_with(unlocked, &root, |_| -1).is_err());
+
+        let created = CString::new("created").unwrap();
+        create_child_directory(&root_directory, &created, Path::new("created/child.wav")).unwrap();
+        create_child_directory(&root_directory, &created, Path::new("created/child.wav")).unwrap();
+        let regular_parent = File::open(root.join("source.wav")).unwrap();
+        let impossible = CString::new("child").unwrap();
+        assert!(
+            create_child_directory(&regular_parent, &impossible, Path::new("child/file.wav"))
+                .is_err()
+        );
+        assert!(entry_exists(&regular_parent, &impossible).is_err());
+        assert!(open_mutation_source(&root_directory, Path::new("source-directory.wav")).is_err());
+
+        let (source_parent, opened_source, source_name) =
+            open_mutation_source(&root_directory, Path::new("source.wav")).unwrap();
+        fs::rename(root.join("source.wav"), root.join("old-source.wav")).unwrap();
+        assert!(source_name_still_matches(&source_parent, &opened_source, &source_name).is_err());
+        fs::write(root.join("source.wav"), b"replacement").unwrap();
+        assert!(source_name_still_matches(&source_parent, &opened_source, &source_name).is_err());
+        drop(opened_source);
+        fs::remove_file(root.join("source.wav")).unwrap();
+        fs::rename(root.join("old-source.wav"), root.join("source.wav")).unwrap();
+
+        let hashless = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "hashless.wav".to_string(),
+            sha256: None,
+        };
+        assert!(move_mutation(&root_directory, &hashless).is_err());
+        let wrong_hash = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "wrong-hash.wav".to_string(),
+            sha256: Some("0".repeat(64)),
+        };
+        assert!(move_mutation(&root_directory, &wrong_hash).is_err());
+        let interrupted = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "interrupted/result.wav".to_string(),
+            sha256: Some(format!("{:x}", Sha256::digest(b"source"))),
+        };
+        assert!(
+            move_mutation_with(&root_directory, &interrupted, || bail!("synthetic race")).is_err()
+        );
+        assert!(root.join("source.wav").is_file());
+        assert!(!root.join("interrupted/result.wav").exists());
+
         drop(root_directory);
         fs::remove_dir_all(base).unwrap();
     }
