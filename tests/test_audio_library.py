@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 import wave
@@ -1277,6 +1278,218 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(backend.stage.call_count, 4)
             self.assertEqual(backend.evict.call_count, 2)
             self.assertFalse((library.staging_dir / f"{HASH_A}.wav").exists())
+
+    def test_stream_transcribe_overlaps_prefetch_with_gpu_transcription(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            records = [
+                _record(path, "", materialized=False, size_bytes=4, tmk_path=None)
+                for path in ("first.wav", "second.wav")
+            ]
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": records,
+                    "duplicate_groups": [],
+                },
+            )
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            second_started = threading.Event()
+            release_second = threading.Event()
+
+            def stage(_root, path, staging_dir, *, timeout_seconds):
+                self.assertEqual(timeout_seconds, 9)
+                if path == "first.wav":
+                    self.assertTrue(second_started.wait(timeout=2))
+                    sha256 = HASH_A
+                else:
+                    second_started.set()
+                    self.assertTrue(release_second.wait(timeout=2))
+                    sha256 = HASH_B
+                staged = staging_dir / f"{sha256}.wav"
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(b"audio")
+                record = next(item for item in records if item["path"] == path)
+                return {
+                    "record": {**record, "sha256": sha256, "error": None},
+                    "staged_path": str(staged),
+                }
+
+            backend.stage.side_effect = stage
+            fake = Mock(accelerator="mlx", model="model")
+
+            def transcribe(_audio_path):
+                self.assertTrue(second_started.is_set())
+                if not release_second.is_set():
+                    release_second.set()
+                return {"text": "overlap", "segments": [], "language": "ko"}
+
+            fake.transcribe.side_effect = transcribe
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch("audio_library.is_icloud_dataless", return_value=True),
+            ):
+                summary = library.stream_transcribe(
+                    prefetch_workers=2,
+                    prefetch_max_bytes=8,
+                    stage_stall_timeout_seconds=9,
+                    evict_after=False,
+                )
+            self.assertEqual(summary["completed"], 2)
+            self.assertEqual(summary["failed"], 0)
+            self.assertEqual(summary["prefetch_transcription_overlaps"], 1)
+            self.assertEqual(backend.stage.call_count, 2)
+
+    def test_stream_transcribe_bounds_unprefetched_serial_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            records = [
+                _record(
+                    "oversized.wav",
+                    "",
+                    materialized=False,
+                    size_bytes=10,
+                    tmk_path=None,
+                ),
+                _record(
+                    "small.wav", "", materialized=False, size_bytes=1, tmk_path=None
+                ),
+            ]
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": records,
+                    "duplicate_groups": [],
+                },
+            )
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            lock = threading.Lock()
+            active = 0
+            max_active = 0
+
+            def stage(_root, path, staging_dir, *, timeout_seconds):
+                nonlocal active, max_active
+                with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                if path == "small.wav":
+                    time.sleep(0.05)
+                    sha256 = HASH_B
+                else:
+                    sha256 = HASH_A
+                with lock:
+                    active -= 1
+                staged = staging_dir / f"{sha256}.wav"
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(b"audio")
+                record = next(item for item in records if item["path"] == path)
+                return {
+                    "record": {**record, "sha256": sha256, "error": None},
+                    "staged_path": str(staged),
+                }
+
+            backend.stage.side_effect = stage
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "bounded",
+                "segments": [],
+                "language": "ko",
+            }
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch("audio_library.is_icloud_dataless", return_value=True),
+            ):
+                summary = library.stream_transcribe(
+                    prefetch_workers=2,
+                    prefetch_max_bytes=1,
+                    stage_stall_timeout_seconds=9,
+                    evict_after=False,
+                )
+            self.assertEqual(summary["completed"], 2)
+            self.assertEqual(summary["failed"], 0)
+            self.assertEqual(summary["prefetched"], 1)
+            self.assertEqual(max_active, 1)
+
+    def test_stream_transcribe_defers_eviction_until_prefetch_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            records = [
+                _record(path, "", materialized=False, size_bytes=4, tmk_path=None)
+                for path in ("first.wav", "second.wav")
+            ]
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": records,
+                    "duplicate_groups": [],
+                },
+            )
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            second_started = threading.Event()
+            release_second = threading.Event()
+            second_finished = threading.Event()
+
+            def stage(_root, path, staging_dir, *, timeout_seconds):
+                if path == "first.wav":
+                    self.assertTrue(second_started.wait(timeout=2))
+                    sha256 = HASH_A
+                else:
+                    second_started.set()
+                    self.assertTrue(release_second.wait(timeout=2))
+                    time.sleep(0.05)
+                    second_finished.set()
+                    sha256 = HASH_B
+                staged = staging_dir / f"{sha256}.wav"
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(b"audio")
+                record = next(item for item in records if item["path"] == path)
+                return {
+                    "record": {**record, "sha256": sha256, "error": None},
+                    "staged_path": str(staged),
+                }
+
+            backend.stage.side_effect = stage
+
+            def evict(_root, _path):
+                self.assertTrue(second_finished.is_set())
+                return {"evicted": True}
+
+            backend.evict.side_effect = evict
+            fake = Mock(accelerator="mlx", model="model")
+
+            def transcribe(_audio_path):
+                release_second.set()
+                return {"text": "overlap", "segments": [], "language": "ko"}
+
+            fake.transcribe.side_effect = transcribe
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=[True, True, False, False],
+                ),
+            ):
+                summary = library.stream_transcribe(
+                    prefetch_workers=2,
+                    prefetch_max_bytes=8,
+                    stage_stall_timeout_seconds=9,
+                )
+            self.assertEqual(summary["completed"], 2)
+            self.assertEqual(summary["failed"], 0)
+            self.assertEqual(summary["eviction_failed"], 0)
+            self.assertEqual(backend.evict.call_count, 2)
 
     def test_stream_transcribe_stops_serial_fallback_after_canary_failure(
         self,

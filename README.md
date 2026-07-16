@@ -133,8 +133,8 @@ python3.12 -m venv .venv
 codec-carver-library /path/to/recordings inventory --threads 4
 codec-carver-library /path/to/recordings hydrate-tmk --workers 4
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
-# For a deliberately bounded small batch, overlap iCloud reads in Rust while
-# keeping GPU transcription, checkpoints, and native eviction serialized.
+# For a deliberately bounded small batch, pipeline iCloud reads in Rust with
+# ordered, single-model GPU transcription.
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
   --prefetch-workers 4 --prefetch-max-bytes 536870912
 # Add --word-timestamps only when word-level audit evidence is required.
@@ -151,17 +151,23 @@ remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
 that local stage, and Python atomically checkpoints before removing the stage.
 `--prefetch-workers` keeps a bounded rolling queue of Rust/iCloud staging calls
 full; `--prefetch-max-bytes` caps their combined logical size (512 MiB by
-default), and the Python loop still serializes GPU work, durable checkpoints,
-scratch removal, and native eviction. The no-progress stage timeout defaults to
-420 seconds because real iCloud placeholders can take more than two minutes to
+default). As soon as the next selected recording is staged, the ordered Python
+loop starts its single-model GPU transcription while later Rust staging futures
+continue in the same bounded pool. GPU work, durable checkpoints, scratch
+removal, and native eviction remain serialized. The run summary records the
+number of GPU calls that actually overlapped unfinished prefetch work as
+`prefetch_transcription_overlaps`. Native eviction is deferred while any bounded
+stage is still running so it cannot contend with FileProvider prefetch. The
+no-progress stage timeout defaults to 420 seconds because real iCloud
+placeholders can take more than two minutes to
 deliver their first byte; override it with `--stage-stall-timeout-seconds` when
 the provider has a different latency envelope. A parallel prefetch that reaches
-that timeout is retried once through the serial staging path because FileProvider
-can defer every concurrent request while accepting an immediate single request.
-If that serial canary also fails, later timeouts in the same batch skip the
-otherwise identical long retry; other failures are not retried. The run summary
-records fallback attempts, recoveries, and suppressions. Already local files
-stay local.
+that timeout is retried once through the serial staging path, after bounded
+parallel stages finish, because FileProvider can defer every concurrent request
+while accepting an immediate single request. If that serial canary also fails,
+later timeouts in the same batch skip the otherwise identical long retry; other
+failures are not retried. The run summary records fallback attempts, recoveries,
+and suppressions. Already local files stay local.
 Run `hydrate-tmk`
 first when iCloud holds Sony sidecars:
 it reads the tiny TMK files concurrently, checkpoints each SHA-256 and marker

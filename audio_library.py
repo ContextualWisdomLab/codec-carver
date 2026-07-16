@@ -20,7 +20,7 @@ import tempfile
 import time
 import wave
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -1126,7 +1126,7 @@ class AudioLibrary:
             records = records[:max_files]
         transcriber = GpuTranscriber(config)
         transcript_dir = self.state_dir / "transcripts"
-        prefetched: dict[str, dict[str, Any] | Exception] = {}
+        prefetch_futures: dict[str, Future[dict[str, Any]]] = {}
         prefetch_bytes = 0
         candidates: list[dict[str, Any]] = []
         if prefetch_workers > 1:
@@ -1146,36 +1146,70 @@ class AudioLibrary:
                 prefetch_bytes += size_bytes
             if candidates:
                 ensure_staging_capacity(self.staging_dir, prefetch_bytes)
-                with ThreadPoolExecutor(
+                executor = ThreadPoolExecutor(
                     max_workers=min(prefetch_workers, len(candidates))
-                ) as executor:
-                    futures = {
-                        executor.submit(
+                )
+                try:
+                    prefetch_futures = {
+                        record["path"]: executor.submit(
                             self.backend.stage,
                             self.root,
                             record["path"],
                             self.staging_dir,
                             timeout_seconds=stage_stall_timeout_seconds,
-                        ): record["path"]
+                        )
                         for record in candidates
                     }
-                    for future in as_completed(futures):
-                        path = futures[future]
-                        try:
-                            prefetched[path] = future.result()
-                        except Exception as exc:
-                            prefetched[path] = exc
+                finally:
+                    # Futures keep running after shutdown(wait=False). Retaining them
+                    # lets the ordered GPU loop consume the first ready recording
+                    # while the bounded worker pool continues staging later files.
+                    executor.shutdown(wait=False)
         prefetch_fallback_attempted = prefetch_fallback_recovered = 0
         prefetch_fallback_suppressed = 0
         prefetch_fallback_allowed = True
+        prefetch_transcription_overlaps = 0
         completed = cached = failed = 0
         failures = []
         eviction_failures = []
+        deferred_evictions: list[dict[str, Any]] = []
+
+        def await_pending_prefetches() -> None:
+            """Drain the bounded pool before any out-of-pool serial stage."""
+
+            for pending in prefetch_futures.values():
+                try:
+                    pending.result()
+                except Exception:
+                    pass
+
+        def evict_materialized(record: dict[str, Any]) -> None:
+            """Release local blocks without changing a durable transcript outcome."""
+
+            try:
+                eviction = self.backend.evict(self.root, record["path"])
+                if not eviction.get("evicted", False):
+                    raise RuntimeError(
+                        "native iCloud eviction returned without confirmation"
+                    )
+            except Exception as exc:
+                record["materialized"] = not is_icloud_dataless(
+                    self.root / record["path"]
+                )
+                if record["materialized"]:
+                    record["eviction_error"] = str(exc)
+                    eviction_failures.append(
+                        {"path": record["path"], "error": str(exc)}
+                    )
+            else:
+                record["materialized"] = False
+                record.pop("eviction_error", None)
+
         for index, record in enumerate(records, start=1):
             audio_path = self.root / record["path"]
             audio_input = audio_path
             staged_audio: Path | None = None
-            was_dataless = record["path"] in prefetched or is_icloud_dataless(
+            was_dataless = record["path"] in prefetch_futures or is_icloud_dataless(
                 audio_path
             )
             status = "failed"
@@ -1216,12 +1250,22 @@ class AudioLibrary:
                         ),
                         "tmk_error": record.get("tmk_error"),
                     }
-                    staged = prefetched.pop(record["path"], None)
+                    prefetch_future = prefetch_futures.pop(record["path"], None)
+                    staged: dict[str, Any] | Exception | None = None
+                    if prefetch_future is not None:
+                        try:
+                            staged = prefetch_future.result()
+                        except Exception as exc:
+                            staged = exc
                     if isinstance(staged, subprocess.TimeoutExpired):
                         if not prefetch_fallback_allowed:
                             prefetch_fallback_suppressed += 1
                             raise staged
                         prefetch_fallback_attempted += 1
+                        # Preserve the existing serial fallback contract: no extra
+                        # FileProvider stage starts while bounded prefetch work is
+                        # still running. Successful futures can still overlap GPU.
+                        await_pending_prefetches()
                         ensure_staging_capacity(
                             self.staging_dir, int(record.get("size_bytes", 0))
                         )
@@ -1239,6 +1283,7 @@ class AudioLibrary:
                     elif isinstance(staged, Exception):
                         raise staged
                     if staged is None:
+                        await_pending_prefetches()
                         ensure_staging_capacity(
                             self.staging_dir, int(record.get("size_bytes", 0))
                         )
@@ -1282,6 +1327,8 @@ class AudioLibrary:
                     cached += 1
                     status = "cached"
                 else:
+                    if any(not pending.done() for pending in prefetch_futures.values()):
+                        prefetch_transcription_overlaps += 1
                     result = transcriber.transcribe(audio_input)
                     result.update(
                         {
@@ -1313,29 +1360,18 @@ class AudioLibrary:
                 if staged_audio is not None:
                     remove_staged_file(self.staging_dir, staged_audio)
                 if evict_after and was_dataless and record.get("materialized"):
-                    try:
-                        eviction = self.backend.evict(self.root, record["path"])
-                        if not eviction.get("evicted", False):
-                            raise RuntimeError(
-                                "native iCloud eviction returned without confirmation"
-                            )
-                    # Optional cleanup must not lose a durable transcription checkpoint.
-                    except Exception as exc:
-                        record["materialized"] = not is_icloud_dataless(
-                            self.root / record["path"]
-                        )
-                        if record["materialized"]:
-                            record["eviction_error"] = str(exc)
-                            eviction_failures.append(
-                                {"path": record["path"], "error": str(exc)}
-                            )
+                    if any(not pending.done() for pending in prefetch_futures.values()):
+                        deferred_evictions.append(record)
                     else:
-                        record["materialized"] = False
-                        record.pop("eviction_error", None)
+                        evict_materialized(record)
                 rebuild_manifest_summary(manifest)
                 atomic_json_write(self.state_dir / "inventory.json", manifest)
             if progress:
                 progress(index, len(records), record["path"], status)
+        for record in deferred_evictions:
+            evict_materialized(record)
+            rebuild_manifest_summary(manifest)
+            atomic_json_write(self.state_dir / "inventory.json", manifest)
         summary = {
             "schema_version": 1,
             "mode": "icloud_streaming",
@@ -1347,6 +1383,7 @@ class AudioLibrary:
             "prefetch_fallback_attempted": prefetch_fallback_attempted,
             "prefetch_fallback_recovered": prefetch_fallback_recovered,
             "prefetch_fallback_suppressed": prefetch_fallback_suppressed,
+            "prefetch_transcription_overlaps": prefetch_transcription_overlaps,
             "recordings_selected": len(records),
             "completed": completed,
             "cached": cached,
