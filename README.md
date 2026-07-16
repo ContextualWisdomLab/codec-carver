@@ -132,6 +132,8 @@ python3.12 -m venv .venv
 
 codec-carver-library /path/to/recordings inventory --threads 4
 codec-carver-library /path/to/recordings hydrate-tmk --workers 4
+codec-carver-library /path/to/recordings hydrate-tmk \
+  --workers 1 --path 'FOLDER01/231101_0917.tmk'
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
 # For a deliberately bounded small batch, pipeline iCloud reads in Rust with
 # ordered, single-model GPU transcription.
@@ -161,14 +163,18 @@ introduce an arbitrary executable.
 
 `describe` loads the pinned 4-bit
 `mlx-community/gemma-4-e2b-it-4bit` revision once per batch, samples up to 48
-Whisper segments across the full recording, and caches a validated two-to-six
-topic description in the SHA-keyed transcript sidecar. The model identifier and
-revision are allowlisted, tokenizer remote code is disabled, transcript prompt
-data is control-delimiter escaped JSON, and every output term must be present in
-the transcript or composed entirely from transcript terms. Planning consumes
-this grounded semantic description when present and retains the deterministic
-extractor as a failure-safe fallback. Existing SHA-bound standard names remain
-stable.
+Whisper segments across the full recording, and first extracts one central idea,
+outcome, confidence level, and cited segment IDs. A separate title pass must
+express that context instead of listing frequent keywords; low-confidence or
+generic-only titles are deferred. The final title and its audit context are
+cached together in the SHA-keyed transcript sidecar, and evidence selection is
+rescored against both the thesis and outcome. The model identifier and revision
+are allowlisted, tokenizer remote code is disabled, transcript prompt data is
+control-delimiter escaped JSON, and title concepts must be supported by the
+transcript or its validated contextual analysis. Old keyword-only caches are not
+silently upgraded. Planning consumes this evidence-backed description when
+present and retains the deterministic extractor as a failure-safe fallback.
+Existing SHA-bound standard names remain stable.
 
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
@@ -198,7 +204,9 @@ it reads the tiny TMK files concurrently, checkpoints each SHA-256 and marker
 summary, and backfills any existing transcript sidecars. A later dataless flag
 does not cause the same TMK to be downloaded again. Four workers and a 60-second
 per-file timeout are the defaults because higher iCloud File Provider concurrency
-can delay every placeholder; rerunning resumes only unresolved sidecars.
+can delay every placeholder; rerunning resumes only unresolved sidecars. Repeat
+`--path` to verify only the TMKs paired with the bounded audio batch instead of
+waking every iCloud placeholder.
 `stream-transcribe` never blocks an audio recording on an unresolved TMK: it uses
 hydrated markers when present and records `tmk_error` evidence otherwise.
 On macOS, Rust requests every dataless item through Foundation's supported
@@ -243,12 +251,12 @@ Transcripts are keyed by the full SHA-256 under
 accept only canonical 64-hex digest filenames. Exact copies are inferred only
 once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized
-filenames. For long meetings, filename descriptions come from a deterministic
-corpus-central phrase rather than only the opening segments: per-segment topic
-frequency, Korean particle normalization, and repetition/stock-phrase filters
-keep the name compact and representative without another model call. Once a
-name has a valid recording timestamp, known location, and matching SHA prefix,
-later extractor improvements preserve it instead of renaming the library again.
+filenames. For long meetings, the optional Gemma phase records the central idea,
+outcome, confidence, and directly supporting segment IDs before it creates the
+filename title. Generic keyword bundles are rejected, while the deterministic
+corpus-central phrase remains the no-model failure-safe. Once a name has a valid
+recording timestamp, known location, and matching SHA prefix, later extractor
+improvements preserve it instead of renaming the library again.
 Duplicate files move to the recoverable
 `.codec-carver/quarantine/exact-duplicates/` tree; no irreversible deletion is
 performed by default. Inventory, TMK, transcript, and mutation paths are

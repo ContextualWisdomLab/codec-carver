@@ -63,10 +63,10 @@ preferred interface for recording curation.
   only an unverified hint until current bytes are staged and hashed.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
-- Long-transcript descriptions use deterministic extractive topic density over
-  all trusted segments, with per-segment term counting, Korean particle
-  normalization, and ubiquitous/repeated phrase suppression. This avoids an
-  opening-segment bias without adding a second inference model.
+- Long-transcript descriptions can use a pinned local Gemma model to extract a
+  central idea, outcome, confidence, and cited transcript segments before a
+  second pass forms the title. Generic keyword lists and low-confidence analyses
+  are rejected; deterministic extractive topic density remains the failure-safe.
 - A name already satisfying the timestamp, known-location, extension, and
   SHA-prefix contract is stable across rescans. Description extractor upgrades
   therefore affect only previously unstandardized recordings.
@@ -130,12 +130,16 @@ word probability below 0.25 remains in the JSON evidence with a
 `low_confidence` flag but is excluded from usable text and filename descriptions.
 
 The optional `describe` phase treats transcript text as escaped JSON data,
-selects an information-rich segment from each of at most 48 time buckets, uses
-greedy generation, and accepts only two-to-six portable topic tokens grounded
-in the transcript. The only accepted model identifier and immutable Hub
-revision are compiled in, tokenizer `trust_remote_code` is forced off, and the
-validation version is stored beside the generated description. No Ollama
-server is used and transcript text is not sent to a hosted inference API.
+selects an information-rich segment from each of at most 48 time buckets, and
+uses greedy generation. It first requires a central idea, outcome, confidence,
+and valid segment IDs, then runs a separate title pass so tools and frequent
+nouns do not displace the recording's actual purpose. A deterministic scorer
+selects the strongest thesis and outcome evidence, generic-only titles and low
+confidence are rejected, and the complete audit context is stored beside the
+title. The only accepted model identifier and immutable Hub revision are
+compiled in, tokenizer `trust_remote_code` is forced off, and old validation
+versions are regenerated rather than relabeled. No Ollama server is used and
+transcript text is not sent to a hosted inference API.
 
 ### Rust backend
 
