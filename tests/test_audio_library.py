@@ -339,8 +339,17 @@ class NamingTests(unittest.TestCase):
         )
 
         fake_mlx_vlm = types.ModuleType("mlx_vlm")
+        fake_models = types.ModuleType("mlx_vlm.models")
+        fake_gemma4_package = types.ModuleType("mlx_vlm.models.gemma4")
+        fake_gemma4 = types.ModuleType("mlx_vlm.models.gemma4.gemma4")
         fake_prompt_utils = types.ModuleType("mlx_vlm.prompt_utils")
         fake_utils = types.ModuleType("mlx_vlm.utils")
+
+        class FakeGemma4Model:
+            def sanitize(self, weights):
+                return weights
+
+        fake_gemma4.Model = FakeGemma4Model
         processor = Mock()
         load = Mock(return_value=("model", processor))
         load_config = Mock(return_value={"model_type": "gemma4"})
@@ -356,6 +365,9 @@ class NamingTests(unittest.TestCase):
             sys.modules,
             {
                 "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.models": fake_models,
+                "mlx_vlm.models.gemma4": fake_gemma4_package,
+                "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
                 "mlx_vlm.prompt_utils": fake_prompt_utils,
                 "mlx_vlm.utils": fake_utils,
             },
@@ -385,6 +397,9 @@ class NamingTests(unittest.TestCase):
             sys.modules,
             {
                 "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.models": fake_models,
+                "mlx_vlm.models.gemma4": fake_gemma4_package,
+                "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
                 "mlx_vlm.prompt_utils": fake_prompt_utils,
                 "mlx_vlm.utils": fake_utils,
             },
@@ -409,6 +424,88 @@ class NamingTests(unittest.TestCase):
             self.assertRaises(audio_library.SemanticDescriptionUnavailableError),
         ):
             GemmaDescriptionGenerator()
+
+    def test_gemma4_mlx_weight_layout_compatibility(self) -> None:
+        class FakeArray:
+            def __init__(self, shape):
+                self.shape = shape
+                self.ndim = len(shape)
+
+            def transpose(self, *axes):
+                return FakeArray(tuple(self.shape[index] for index in axes))
+
+        class FakeGemma4Model:
+            def __init__(self, audio_config=True):
+                config = types.SimpleNamespace(subsampling_conv_channels=[128])
+                self.config = types.SimpleNamespace(
+                    audio_config=config if audio_config else None
+                )
+
+            def sanitize(self, weights):
+                sanitized = {}
+                for key, value in weights.items():
+                    normalized = (
+                        key[len("model.") :] if key.startswith("model.") else key
+                    )
+                    if (
+                        "subsample_conv_projection" in normalized
+                        and "conv.weight" in normalized
+                        and value.ndim == 4
+                    ):
+                        value = value.transpose(0, 2, 3, 1)
+                    if "depthwise_conv1d.weight" in normalized and value.ndim == 3:
+                        value = value.transpose(0, 2, 1)
+                    sanitized[key] = value
+                return sanitized
+
+        fake_gemma4 = types.ModuleType("mlx_vlm.models.gemma4.gemma4")
+        fake_gemma4.Model = FakeGemma4Model
+        modules = {
+            "mlx_vlm": types.ModuleType("mlx_vlm"),
+            "mlx_vlm.models": types.ModuleType("mlx_vlm.models"),
+            "mlx_vlm.models.gemma4": types.ModuleType("mlx_vlm.models.gemma4"),
+            "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
+        }
+        conv = "audio_tower.subsample_conv_projection"
+        with patch.dict(sys.modules, modules):
+            audio_library.install_gemma4_mlx_weight_layout_compatibility()
+            patched = FakeGemma4Model.sanitize
+            audio_library.install_gemma4_mlx_weight_layout_compatibility()
+            self.assertIs(FakeGemma4Model.sanitize, patched)
+            result = FakeGemma4Model().sanitize(
+                {
+                    f"model.{conv}.layer0.conv.weight": FakeArray((128, 3, 3, 1)),
+                    f"{conv}.layer1.conv.weight": FakeArray((32, 3, 3, 128)),
+                    f"other.{conv}.layer1.conv.weight": FakeArray((32, 128, 3, 3)),
+                    f"{conv}.layer1.other.weight": FakeArray((32, 3, 3, 128)),
+                    f"{conv}.layer2.conv.weight": FakeArray((32, 3, 3, 64)),
+                    f"alt.{conv}.layer0.conv.weight": FakeArray((128, 3, 1)),
+                    "audio_tower.depthwise_conv1d.weight": FakeArray((128, 3, 1)),
+                    "other.depthwise_conv1d.weight": FakeArray((128, 1, 3)),
+                    "unrelated.weight": FakeArray((4, 4)),
+                }
+            )
+            without_config = FakeGemma4Model(audio_config=False).sanitize(
+                {f"{conv}.layer0.conv.weight": FakeArray((128, 3, 3, 1))}
+            )
+        self.assertEqual(
+            result[f"model.{conv}.layer0.conv.weight"].shape, (128, 3, 3, 1)
+        )
+        self.assertEqual(result[f"{conv}.layer1.conv.weight"].shape, (32, 3, 3, 128))
+        self.assertEqual(
+            result[f"other.{conv}.layer1.conv.weight"].shape, (32, 3, 3, 128)
+        )
+        self.assertEqual(result[f"{conv}.layer1.other.weight"].shape, (32, 3, 3, 128))
+        self.assertEqual(result[f"{conv}.layer2.conv.weight"].shape, (32, 3, 64, 3))
+        self.assertEqual(result[f"alt.{conv}.layer0.conv.weight"].shape, (128, 3, 1))
+        self.assertEqual(
+            result["audio_tower.depthwise_conv1d.weight"].shape, (128, 3, 1)
+        )
+        self.assertEqual(result["other.depthwise_conv1d.weight"].shape, (128, 3, 1))
+        self.assertEqual(result["unrelated.weight"].shape, (4, 4))
+        self.assertEqual(
+            without_config[f"{conv}.layer0.conv.weight"].shape, (128, 3, 1, 3)
+        )
 
     def test_sanitize_and_standard_filename(self) -> None:
         self.assertEqual(sanitize_component(" a / b ::: ", limit=20), "a-b")
@@ -2697,7 +2794,9 @@ class CliTests(unittest.TestCase):
             output = directory / "state.json"
             with (
                 patch("audio_library.secrets.token_hex", return_value="cleanup"),
-                patch("audio_library.os.fdopen", side_effect=RuntimeError("write failed")),
+                patch(
+                    "audio_library.os.fdopen", side_effect=RuntimeError("write failed")
+                ),
                 self.assertRaisesRegex(RuntimeError, "write failed"),
             ):
                 atomic_json_write(output, {"safe": True})
@@ -2705,7 +2804,9 @@ class CliTests(unittest.TestCase):
 
             with (
                 patch("audio_library.secrets.token_hex", return_value="missing"),
-                patch("audio_library.os.fdopen", side_effect=RuntimeError("write failed")),
+                patch(
+                    "audio_library.os.fdopen", side_effect=RuntimeError("write failed")
+                ),
                 patch("audio_library.os.unlink", side_effect=FileNotFoundError),
                 self.assertRaisesRegex(RuntimeError, "write failed"),
             ):

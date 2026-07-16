@@ -877,6 +877,52 @@ def validate_semantic_description(
     return normalized
 
 
+def install_gemma4_mlx_weight_layout_compatibility() -> None:
+    """Backport the upstream Gemma 4 audio-weight layout fix to MLX-VLM 0.6.4."""
+
+    from mlx_vlm.models.gemma4.gemma4 import (  # type: ignore[import-not-found]
+        Model as Gemma4Model,
+    )
+
+    marker = "_codec_carver_audio_layout_compatibility"
+    if getattr(Gemma4Model, marker, False):
+        return
+    original_sanitize = Gemma4Model.sanitize
+
+    def sanitize_compatible(self: Any, weights: dict[str, Any]) -> dict[str, Any]:
+        """Undo MLX-layout tensors before the 0.6.4 sanitizer transposes them."""
+
+        audio_config = getattr(getattr(self, "config", None), "audio_config", None)
+        prepared = {}
+        for key, original_value in weights.items():
+            value = original_value
+            normalized = key[len("model.") :] if key.startswith("model.") else key
+            if (
+                audio_config is not None
+                and "subsample_conv_projection" in normalized
+                and "conv.weight" in normalized
+                and value.ndim == 4
+            ):
+                expected_input = None
+                if ".layer0." in normalized:
+                    expected_input = 1
+                elif ".layer1." in normalized:
+                    expected_input = audio_config.subsampling_conv_channels[0]
+                if expected_input is not None and value.shape[-1] == expected_input:
+                    value = value.transpose(0, 3, 1, 2)
+            elif (
+                "depthwise_conv1d.weight" in normalized
+                and value.ndim == 3
+                and value.shape[-1] == 1
+            ):
+                value = value.transpose(0, 2, 1)
+            prepared[key] = value
+        return original_sanitize(self, prepared)
+
+    Gemma4Model.sanitize = sanitize_compatible
+    setattr(Gemma4Model, marker, True)
+
+
 class GemmaDescriptionGenerator:
     """Persistent Ollama-free Gemma 4 generator backed by MLX-VLM."""
 
@@ -898,6 +944,7 @@ class GemmaDescriptionGenerator:
                 "Gemma description generation is unavailable; install the "
                 "`describe-mlx` extra"
             ) from exc
+        install_gemma4_mlx_weight_layout_compatibility()
         self.model_id = model
         self.revision = revision
         self.model, self.processor = load(model, revision=revision)
@@ -923,6 +970,7 @@ class GemmaDescriptionGenerator:
             "생성형AI\n\n"
             f"<TRANSCRIPT>\n{excerpt}\n</TRANSCRIPT>"
         )
+
         def generate_one(current_prompt: str, max_tokens: int) -> str:
             """Render one text-only prompt and return its untrusted output."""
 
@@ -1120,24 +1168,30 @@ def open_private_directory(path: Path) -> int:
     nofollow = getattr(os, "O_NOFOLLOW", None)
     directory = getattr(os, "O_DIRECTORY", None)
     if nofollow is None or directory is None:  # pragma: no cover - unsupported OS
-        raise RuntimeError("secure directory descriptors require O_NOFOLLOW and O_DIRECTORY")
+        raise RuntimeError(
+            "secure directory descriptors require O_NOFOLLOW and O_DIRECTORY"
+        )
     flags = os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
         if path.is_symlink():
-            raise ValueError(f"private directory must not be a symlink: {path}") from exc
+            raise ValueError(
+                f"private directory must not be a symlink: {path}"
+            ) from exc
         raise
     try:
         opened = os.fstat(descriptor)
         current = os.stat(path, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(current.st_mode)
-            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+        if not stat.S_ISDIR(current.st_mode) or (opened.st_dev, opened.st_ino) != (
+            current.st_dev,
+            current.st_ino,
         ):
             raise ValueError(f"private directory changed while opening: {path}")
         if opened.st_uid != os.geteuid():
-            raise PermissionError(f"private directory is not owned by this user: {path}")
+            raise PermissionError(
+                f"private directory is not owned by this user: {path}"
+            )
         # Directories need the search bit; 0o700 is the least owner-only usable mode.
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
         os.fchmod(descriptor, 0o700)
@@ -1826,7 +1880,9 @@ class AudioLibrary:
                 valid_cache = False
                 if same_generation:
                     try:
-                        validate_semantic_description(transcript["filename_description"])
+                        validate_semantic_description(
+                            transcript["filename_description"]
+                        )
                         valid_cache = True
                     except ValueError:
                         for key in tuple(transcript):
