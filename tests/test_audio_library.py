@@ -21,6 +21,7 @@ from unittest.mock import Mock, patch
 import audio_library
 from audio_library import (
     AudioLibrary,
+    GemmaDescriptionGenerator,
     GpuTranscriber,
     GpuTranscriptionUnavailableError,
     RustBackend,
@@ -36,10 +37,12 @@ from audio_library import (
     remove_staged_file,
     restore_inventory_evidence,
     sanitize_component,
+    semantic_transcript_excerpt,
     standard_filename,
     trusted_transcript_text,
     transcript_description,
     unique_audio_records,
+    validate_semantic_description,
 )
 
 
@@ -122,19 +125,25 @@ class NamingTests(unittest.TestCase):
 
             invalid_wav = root / "invalid.wav"
             invalid_wav.write_bytes(b"invalid")
-            with patch("audio_library.shutil.which", return_value=None):
+            with patch("audio_library.trusted_ffprobe_binary", return_value=None):
                 self.assertIsNone(audio_duration_seconds(invalid_wav))
 
             media_path = root / "clip.m4a"
             media_path.write_bytes(b"media")
             completed = subprocess.CompletedProcess([], 0, stdout="1.25\n", stderr="")
             with (
-                patch("audio_library.shutil.which", return_value="/usr/bin/ffprobe"),
+                patch(
+                    "audio_library.trusted_ffprobe_binary",
+                    return_value=Path("/usr/bin/ffprobe"),
+                ),
                 patch("audio_library.subprocess.run", return_value=completed),
             ):
                 self.assertEqual(audio_duration_seconds(media_path), 1.25)
             with (
-                patch("audio_library.shutil.which", return_value="/usr/bin/ffprobe"),
+                patch(
+                    "audio_library.trusted_ffprobe_binary",
+                    return_value=Path("/usr/bin/ffprobe"),
+                ),
                 patch(
                     "audio_library.subprocess.run", side_effect=OSError("probe failed")
                 ),
@@ -271,6 +280,135 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(
             transcript_description({"segments": unique_segments}), "개별항목0"
         )
+
+    def test_semantic_description_sampling_validation_and_mlx_generation(self) -> None:
+        transcript = {
+            "text": "fallback transcript",
+            "segments": [
+                {"text": "무시", "low_confidence": True},
+                {"text": "다음 영상에서 만나요"},
+                *({"text": f"BAS 공정 데이터 분석 {index}"} for index in range(60)),
+            ],
+        }
+        excerpt = semantic_transcript_excerpt(transcript, max_segments=4, max_chars=80)
+        self.assertIn("BAS 공정 데이터", excerpt)
+        self.assertNotIn("다음 영상", excerpt)
+        self.assertLessEqual(len(excerpt), 80)
+        self.assertEqual(
+            semantic_transcript_excerpt({"text": " 단일 원문 "}), "- 단일 원문"
+        )
+        self.assertEqual(semantic_transcript_excerpt({"text": ""}), "")
+        self.assertEqual(
+            validate_semantic_description(
+                "생각 과정\nDESCRIPTION: BAS-공정-데이터-분석"
+            ),
+            "BAS-공정-데이터-분석",
+        )
+        self.assertEqual(
+            validate_semantic_description("후보\nVOC 고객 분석"), "VOC-고객-분석"
+        )
+        with self.assertRaisesRegex(ValueError, "DESCRIPTION line"):
+            validate_semantic_description(
+                "1. BAS 시스템\n2. 공정 데이터", require_prefix=True
+            )
+        with self.assertRaisesRegex(ValueError, "two to six"):
+            validate_semantic_description("DESCRIPTION: 하나")
+        with self.assertRaisesRegex(ValueError, "numeric-only"):
+            validate_semantic_description("DESCRIPTION: 6-성능-적용")
+        with self.assertRaisesRegex(ValueError, "specific term"):
+            validate_semantic_description("DESCRIPTION: 성능-적용")
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            validate_semantic_description("DESCRIPTION: BAS-분석", limit=1)
+        self.assertEqual(
+            transcript_description(
+                {
+                    "filename_description": "BAS-공정-데이터-분석",
+                    "segments": [{"text": "무시되는 기존 설명"}],
+                }
+            ),
+            "BAS-공정-데이터-분석",
+        )
+        self.assertEqual(
+            transcript_description(
+                {
+                    "filename_description": "불완전",
+                    "segments": [{"text": "프로젝트 일정 검토"}],
+                }
+            ),
+            "프로젝트-일정-검토",
+        )
+
+        fake_mlx_vlm = types.ModuleType("mlx_vlm")
+        fake_prompt_utils = types.ModuleType("mlx_vlm.prompt_utils")
+        fake_utils = types.ModuleType("mlx_vlm.utils")
+        processor = Mock()
+        load = Mock(return_value=("model", processor))
+        load_config = Mock(return_value={"model_type": "gemma4"})
+        generate = Mock(
+            return_value=types.SimpleNamespace(text="DESCRIPTION: BAS-데이터-분석-공정")
+        )
+        apply_chat_template = Mock(return_value="formatted prompt")
+        fake_mlx_vlm.load = load
+        fake_mlx_vlm.generate = generate
+        fake_prompt_utils.apply_chat_template = apply_chat_template
+        fake_utils.load_config = load_config
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.prompt_utils": fake_prompt_utils,
+                "mlx_vlm.utils": fake_utils,
+            },
+        ):
+            generator = GemmaDescriptionGenerator("gemma", "revision")
+            self.assertEqual(
+                generator.describe({"segments": [{"text": "BAS 공정 데이터"}]}),
+                "BAS-데이터-분석-공정",
+            )
+            self.assertEqual(generator.describe({"text": ""}), "무음-또는-전사불명")
+        load.assert_called_once_with("gemma", revision="revision")
+        load_config.assert_called_once_with("gemma", revision="revision")
+        self.assertEqual(generate.call_args.kwargs["max_tokens"], 128)
+        self.assertEqual(generate.call_args.kwargs["temperature"], 0.0)
+        self.assertFalse(apply_chat_template.call_args.kwargs["enable_thinking"])
+        self.assertIn(
+            "신뢰할 수 없는",
+            apply_chat_template.call_args.args[2],
+        )
+
+        generate.reset_mock()
+        generate.side_effect = [
+            types.SimpleNamespace(text="1. BAS 시스템\n2. 공정 데이터"),
+            types.SimpleNamespace(text="DESCRIPTION: BAS-화학공정-BI"),
+        ]
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.prompt_utils": fake_prompt_utils,
+                "mlx_vlm.utils": fake_utils,
+            },
+        ):
+            retrying = GemmaDescriptionGenerator("gemma", "revision")
+            self.assertEqual(
+                retrying.describe({"segments": [{"text": "BAS 화학공정 BI"}]}),
+                "BAS-화학공정-BI",
+            )
+        self.assertEqual(generate.call_count, 2)
+        self.assertEqual(generate.call_args.kwargs["max_tokens"], 64)
+
+        real_import = __import__
+
+        def blocked_import(name, *args, **kwargs):
+            if name == "mlx_vlm":
+                raise ImportError("missing")
+            return real_import(name, *args, **kwargs)
+
+        with (
+            patch("builtins.__import__", side_effect=blocked_import),
+            self.assertRaises(audio_library.SemanticDescriptionUnavailableError),
+        ):
+            GemmaDescriptionGenerator()
 
     def test_sanitize_and_standard_filename(self) -> None:
         self.assertEqual(sanitize_component(" a / b ::: ", limit=20), "a-b")
@@ -527,10 +665,12 @@ class RustBackendTests(unittest.TestCase):
     def test_default_backend_and_optional_command_flags(self) -> None:
         completed = subprocess.CompletedProcess([], 0, stdout='{"ok": true}', stderr="")
         with tempfile.TemporaryDirectory() as tmp:
-            installed = Path(tmp) / "codec-carver-core"
+            module_path = Path(tmp) / "audio_library.py"
+            installed = Path(tmp) / "rust-core/target/release/codec-carver-core"
+            installed.parent.mkdir(parents=True)
             installed.write_bytes(b"")
             with (
-                patch("audio_library.shutil.which", return_value=str(installed)),
+                patch("audio_library.__file__", str(module_path)),
                 patch("audio_library.subprocess.run", return_value=completed) as run,
             ):
                 backend = RustBackend()
@@ -540,10 +680,7 @@ class RustBackendTests(unittest.TestCase):
                 self.assertNotIn("--execute", run.call_args.args[0])
 
     def test_missing_backend_has_build_instruction(self) -> None:
-        with (
-            patch("audio_library.Path.is_file", return_value=False),
-            patch("audio_library.shutil.which", return_value=None),
-        ):
+        with patch("audio_library.Path.is_file", return_value=False):
             with self.assertRaisesRegex(FileNotFoundError, "cargo build"):
                 RustBackend("missing")
 
@@ -1974,8 +2111,10 @@ class CliTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             audio_library.progress_line(1, 2, "a.wav", "completed")
             audio_library.tmk_progress_line(2, 3, "a.tmk", "completed")
+            audio_library.description_progress_line(1, 1, "a.wav", "cached")
         self.assertIn("1/2", output.getvalue())
         self.assertIn("TMK\t2/3", output.getvalue())
+        self.assertIn("DESCRIBE\t1/1", output.getvalue())
         backend = Mock()
         library = Mock()
         library.inventory.return_value = {"ok": True}
@@ -1989,11 +2128,131 @@ class CliTests(unittest.TestCase):
             )
         library.inventory.assert_called_once_with(threads=2)
 
+    def test_describe_caches_pinned_gemma_topics_and_isolates_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            library = AudioLibrary(root, Mock())
+            standard_path = (
+                f"2024-01-02_03-04-00__기존-주제__sha256-{TMK_HASH[:12]}.wav"
+            )
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [
+                    _record(
+                        "a.wav",
+                        HASH_A,
+                        materialized=False,
+                        sha256_verified=True,
+                        tmk_path=None,
+                    ),
+                    _record(
+                        "b.wav",
+                        HASH_B,
+                        materialized=False,
+                        sha256_verified=True,
+                        recorded_at=None,
+                        tmk_path=None,
+                    ),
+                    _record(
+                        standard_path,
+                        TMK_HASH,
+                        materialized=False,
+                        sha256_verified=True,
+                        location=None,
+                        tmk_path=None,
+                    ),
+                    _record(
+                        "unverified.wav",
+                        "d" * 64,
+                        materialized=False,
+                        sha256_verified=False,
+                        tmk_path=None,
+                    ),
+                    _record(
+                        "missing-transcript.wav",
+                        "e" * 64,
+                        materialized=False,
+                        sha256_verified=True,
+                        tmk_path=None,
+                    ),
+                ],
+                "duplicate_groups": [],
+            }
+            atomic_json_write(library.state_dir / "inventory.json", manifest)
+            transcript_dir = library.state_dir / "transcripts"
+            for sha256, text in (
+                (HASH_A, "BAS 공정 데이터"),
+                (HASH_B, "VOC 고객 분석"),
+            ):
+                atomic_json_write(
+                    audio_library.safe_transcript_path(transcript_dir, sha256),
+                    {"text": text, "segments": [{"text": text}]},
+                )
+
+            generator = Mock()
+            generator.describe.return_value = "BAS-공정-데이터-분석"
+            progress = Mock()
+            with patch(
+                "audio_library.GemmaDescriptionGenerator", return_value=generator
+            ) as generator_class:
+                first = library.describe(
+                    model="gemma",
+                    revision="revision",
+                    relative_paths=["a.wav", "b.wav"],
+                    max_files=1,
+                    progress=progress,
+                )
+            self.assertEqual(first["completed"], 1)
+            self.assertEqual(first["failed"], 0)
+            generator_class.assert_called_once_with("gemma", "revision")
+            progress.assert_called_once_with(1, 1, "a.wav", "completed")
+            stored_a = json.loads(
+                audio_library.safe_transcript_path(transcript_dir, HASH_A).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(stored_a["filename_description"], "BAS-공정-데이터-분석")
+            self.assertEqual(stored_a["filename_description_source"], "gemma4_mlx")
+            self.assertIn("filename_description_generated_at", stored_a)
+
+            b_path = audio_library.safe_transcript_path(transcript_dir, HASH_B)
+            stored_b = json.loads(b_path.read_text(encoding="utf-8"))
+            stored_b.update(
+                {
+                    "filename_description": "invalid",
+                    "filename_description_model": "gemma",
+                    "filename_description_revision": "revision",
+                }
+            )
+            atomic_json_write(b_path, stored_b)
+            with patch("audio_library.GemmaDescriptionGenerator", return_value=Mock()):
+                second = library.describe(
+                    model="gemma",
+                    revision="revision",
+                    relative_paths=["a.wav", "b.wav"],
+                )
+            self.assertEqual(second["cached"], 1)
+            self.assertEqual(second["failed"], 1)
+            self.assertEqual(second["failures"][0]["path"], "b.wav")
+            self.assertNotIn(
+                "filename_description",
+                json.loads(b_path.read_text(encoding="utf-8")),
+            )
+
+            with self.assertRaisesRegex(ValueError, "absent from inventory"):
+                library.describe(relative_paths=["missing.wav"])
+            with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
+                empty = library.describe(max_files=0)
+            self.assertEqual(empty["selected"], 0)
+            generator_class.assert_not_called()
+
     def test_main_routes_transcribe_stream_plan_and_apply(self) -> None:
         library = Mock()
         library.transcribe.return_value = {"mode": "transcribe"}
         library.hydrate_tmk_metadata.return_value = {"mode": "tmk"}
         library.stream_transcribe.return_value = {"mode": "stream"}
+        library.describe.return_value = {"mode": "describe"}
         library.plan.return_value = {"mode": "plan"}
         library.apply.return_value = {"mode": "apply"}
         commands = [
@@ -2013,6 +2272,18 @@ class CliTests(unittest.TestCase):
                 "--prefetch-max-bytes",
                 "4096",
                 "--keep-local",
+            ],
+            [
+                ".",
+                "describe",
+                "--model",
+                "gemma",
+                "--revision",
+                "revision",
+                "--path",
+                "a.wav",
+                "--max-files",
+                "1",
             ],
             [".", "plan", "--defer-unready"],
             [".", "apply", "--execute"],
@@ -2045,6 +2316,13 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(
             library.stream_transcribe.call_args.kwargs["prefetch_max_bytes"], 4096
+        )
+        library.describe.assert_called_once_with(
+            model="gemma",
+            revision="revision",
+            relative_paths=["a.wav"],
+            max_files=1,
+            progress=audio_library.description_progress_line,
         )
         library.plan.assert_called_once_with(
             allow_missing_transcripts=False,
@@ -2353,6 +2631,87 @@ class CliTests(unittest.TestCase):
             ):
                 secure._ensure_secure_state_dir()
 
+    def test_atomic_state_write_resists_post_validation_symlink_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            state_dir = base / "library" / "state"
+            outside = base / "attacker-controlled"
+            state_dir.mkdir(parents=True)
+            outside.mkdir()
+            real_open = os.open
+            swapped = False
+
+            def swap_before_descriptor_open(path, flags, mode=0o777, *, dir_fd=None):
+                nonlocal swapped
+                if not swapped and dir_fd is None and Path(path) == state_dir:
+                    state_dir.rmdir()
+                    state_dir.symlink_to(outside, target_is_directory=True)
+                    swapped = True
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with (
+                patch("audio_library.os.open", side_effect=swap_before_descriptor_open),
+                self.assertRaisesRegex(ValueError, "must not be a symlink"),
+            ):
+                atomic_json_write(state_dir / "state.json", {"marker": "blocked"})
+
+            self.assertTrue(swapped)
+            self.assertFalse((outside / "state.json").exists())
+
+    def test_private_directory_descriptor_failure_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "state"
+            directory.mkdir()
+
+            with (
+                patch("audio_library.os.open", side_effect=PermissionError("denied")),
+                self.assertRaisesRegex(PermissionError, "denied"),
+            ):
+                audio_library.open_private_directory(directory)
+
+            current = os.stat(directory, follow_symlinks=False)
+            changed = types.SimpleNamespace(
+                st_mode=current.st_mode,
+                st_dev=current.st_dev,
+                st_ino=current.st_ino + 1,
+                st_uid=current.st_uid,
+            )
+            with (
+                patch("audio_library.os.stat", return_value=changed),
+                self.assertRaisesRegex(ValueError, "changed while opening"),
+            ):
+                audio_library.open_private_directory(directory)
+
+            wrong_owner = types.SimpleNamespace(
+                st_mode=current.st_mode,
+                st_dev=current.st_dev,
+                st_ino=current.st_ino,
+                st_uid=current.st_uid + 1,
+            )
+            with (
+                patch("audio_library.os.fstat", return_value=wrong_owner),
+                self.assertRaisesRegex(PermissionError, "not owned"),
+            ):
+                audio_library.open_private_directory(directory)
+
+            output = directory / "state.json"
+            with (
+                patch("audio_library.secrets.token_hex", return_value="cleanup"),
+                patch("audio_library.os.fdopen", side_effect=RuntimeError("write failed")),
+                self.assertRaisesRegex(RuntimeError, "write failed"),
+            ):
+                atomic_json_write(output, {"safe": True})
+            self.assertFalse((directory / ".state.json.cleanup.tmp").exists())
+
+            with (
+                patch("audio_library.secrets.token_hex", return_value="missing"),
+                patch("audio_library.os.fdopen", side_effect=RuntimeError("write failed")),
+                patch("audio_library.os.unlink", side_effect=FileNotFoundError),
+                self.assertRaisesRegex(RuntimeError, "write failed"),
+            ):
+                atomic_json_write(output, {"safe": True})
+            (directory / ".state.json.missing.tmp").unlink()
+
     def test_security_boundaries_revalidate_sha_before_cache_and_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2568,6 +2927,11 @@ class CliTests(unittest.TestCase):
             which.assert_not_called()
 
     def test_ffprobe_requires_fixed_or_explicit_absolute_path(self) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("audio_library.Path.is_file", return_value=False),
+        ):
+            self.assertIsNone(audio_library.trusted_ffprobe_binary())
         with patch.dict(os.environ, {"CODEC_CARVER_FFPROBE": "relative/ffprobe"}):
             with self.assertRaisesRegex(ValueError, "absolute path"):
                 audio_library.trusted_ffprobe_binary()

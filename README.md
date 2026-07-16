@@ -128,7 +128,7 @@ used and GPU mode does not fall back to CPU.
 ```bash
 cargo build --release --manifest-path rust-core/Cargo.toml
 python3.12 -m venv .venv
-.venv/bin/pip install -e ".[transcribe-mlx]"  # Apple Silicon / Metal
+.venv/bin/pip install -e ".[transcribe-mlx,describe-mlx]"  # Apple Silicon / Metal
 
 codec-carver-library /path/to/recordings inventory --threads 4
 codec-carver-library /path/to/recordings hydrate-tmk --workers 4
@@ -138,6 +138,11 @@ codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
   --prefetch-workers 4 --prefetch-max-bytes 536870912
 # Add --word-timestamps only when word-level audit evidence is required.
+# Summarize verified transcripts into filename topics with pinned Gemma 4 on
+# Metal. This calls MLX-VLM directly; no Ollama server or transcript upload is
+# involved. Repeat --path to keep the description batch bounded.
+codec-carver-library /path/to/recordings describe \
+  --path "recording-a.m4a" --path "recording-b.wav"
 codec-carver-library /path/to/recordings plan
 # When iCloud has not supplied every source, mutate only fully ready recordings
 # and preserve the unresolved paths as explicit deferred evidence.
@@ -150,6 +155,13 @@ The library backend is loaded only from an explicit `--backend-binary` or the
 repository's own release/debug build; it is never selected from ambient
 `PATH`. Duration probing likewise uses fixed system `ffprobe` locations, or an
 operator-supplied absolute `CODEC_CARVER_FFPROBE` path.
+
+`describe` loads the pinned 4-bit
+`mlx-community/gemma-4-e2b-it-4bit` revision once per batch, samples up to 48
+Whisper segments across the full recording, and caches a validated two-to-six
+topic description in the SHA-keyed transcript sidecar. Planning consumes this
+semantic description when present and retains the deterministic extractor as a
+failure-safe fallback. Existing SHA-bound standard names remain stable.
 
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes

@@ -97,11 +97,18 @@ preferred interface for recording curation.
 ### Python API
 
 `audio_library.AudioLibrary` owns model selection, persistent GPU model use,
-transcript sidecars, deterministic description extraction, iCloud streaming
-checkpoints, parallel one-time TMK hydration, and mutation-plan generation.
+transcript sidecars, semantic and deterministic description extraction, iCloud
+streaming checkpoints, parallel one-time TMK hydration, and mutation-plan
+generation.
 
 - Apple Silicon: `mlx-whisper` on the Metal GPU, defaulting to
   `mlx-community/whisper-large-v3-turbo-q4`.
+- Apple Silicon filename topics: `mlx-vlm` with the pinned 4-bit Gemma 4 E2B
+  instruct model. It runs after transcription as a separate batch so Whisper
+  and Gemma do not need to occupy unified memory simultaneously.
+  The runtime is pinned to upstream commit
+  `94e06ec3b381f6ea92da54c8580c8ca1ecf4e1fb`, after its fix for loading
+  already-converted Gemma 4 audio weights without transposing them twice.
 - NVIDIA: `faster-whisper` on CUDA with FP16 compute.
 
 MLX Whisper caches the loaded model within the process, so the library API keeps
@@ -115,6 +122,13 @@ below 0.5 seconds skip model inference and receive a durable quality flag. When
 word timestamps are enabled, an ultra-short segment below 0.5 seconds with mean
 word probability below 0.25 remains in the JSON evidence with a
 `low_confidence` flag but is excluded from usable text and filename descriptions.
+
+The optional `describe` phase treats transcript text as untrusted prompt data,
+selects an information-rich segment from each of at most 48 time buckets, uses
+greedy generation, and accepts only two-to-six portable topic tokens. The model
+identifier and immutable Hub revision are stored beside the generated
+description. No Ollama server is used and transcript text is not sent to a
+hosted inference API.
 
 ### Rust backend
 
@@ -183,3 +197,7 @@ scratch deletion accepts only direct regular-file children.
   implementation and software citation: <https://github.com/ml-explore/mlx>.
 - Apple MLX Examples, *Speech recognition with Whisper in MLX*:
   <https://github.com/ml-explore/mlx-examples/tree/main/whisper>.
+- Google AI for Developers, *Gemma models overview*:
+  <https://ai.google.dev/gemma/docs>.
+- MLX Community, pinned Gemma 4 E2B 4-bit model:
+  <https://huggingface.co/mlx-community/gemma-4-e2b-it-4bit>.
