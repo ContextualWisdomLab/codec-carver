@@ -264,6 +264,54 @@ class NamingTests(unittest.TestCase):
             audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
             audio_library.transcript_quality_flags(stock_background),
         )
+        single_stock = {"segments": [{"text": "다음 영상에서 만나요."}]}
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(single_stock),
+        )
+        self.assertEqual(audio_library.semantic_transcript_excerpt(single_stock), "")
+        courtesy_only = {"segments": [{"text": "감사합니다."}]}
+        self.assertIn(
+            audio_library.INSUFFICIENT_CONTEXT_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(courtesy_only),
+        )
+        sparse_transcript = {
+            "duration_seconds": 120.0,
+            "segments": [{"text": "전주"}, {"text": "경제시장"}],
+        }
+        self.assertIn(
+            audio_library.INSUFFICIENT_CONTEXT_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(sparse_transcript),
+        )
+        short_fragment = {
+            "duration_seconds": 3.0,
+            "segments": [{"text": "HDMI 이쪽에는 전원"}],
+        }
+        self.assertIn(
+            audio_library.INSUFFICIENT_CONTEXT_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(short_fragment),
+        )
+        repeated_chunk = {
+            "duration_seconds": 89.0,
+            "segments": [{"text": "전해지는 곳곳곳곳곳곳곳곳입니다"}],
+        }
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(repeated_chunk),
+        )
+        long_stock_fragment = {
+            "duration_seconds": 145.0,
+            "segments": [
+                {"text": "4층입니다"},
+                {"text": "문이 열립니다"},
+                {"text": "다음 영상에서 만나요"},
+            ],
+        }
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(long_stock_fragment),
+        )
+        self.assertEqual(transcript_description(courtesy_only), "짧은발화-맥락불명")
         diluted_stock_background = {
             "segments": [
                 *[{"text": "다음 영상에서 만나요."} for _ in range(13)],
@@ -395,7 +443,7 @@ class NamingTests(unittest.TestCase):
                     "segments": [{"text": "다음 영상에서 만나요."}],
                 }
             ),
-            "무음-또는-전사불명",
+            "배경음-전사불명",
         )
         self.assertEqual(
             transcript_description(
@@ -405,7 +453,7 @@ class NamingTests(unittest.TestCase):
                     "segments": [{"text": "감사합니다."}],
                 }
             ),
-            "무음-또는-전사불명",
+            "짧은발화-맥락불명",
         )
         self.assertEqual(
             transcript_description(
@@ -4071,6 +4119,13 @@ class CliTests(unittest.TestCase):
                         tmk_path=None,
                     ),
                     _record(
+                        "silence.wav",
+                        "9" * 64,
+                        materialized=False,
+                        sha256_verified=True,
+                        tmk_path=None,
+                    ),
+                    _record(
                         "unverified.wav",
                         "d" * 64,
                         materialized=False,
@@ -4123,6 +4178,15 @@ class CliTests(unittest.TestCase):
                     "sha256": "d" * 64,
                     "text": "BAS 공정 데이터",
                     "segments": [{"text": "BAS 공정 데이터"}],
+                },
+            )
+            atomic_json_write(
+                audio_library.safe_transcript_path(transcript_dir, "9" * 64),
+                {
+                    "sha256": "9" * 64,
+                    "text": "",
+                    "segments": [],
+                    "quality_flags": ["too_short_for_reliable_speech"],
                 },
             )
 
@@ -4354,6 +4418,21 @@ class CliTests(unittest.TestCase):
                 cached_background = library.describe(relative_paths=["background.wav"])
             self.assertEqual(cached_background["cached"], 1)
             generator_class.assert_not_called()
+
+            with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
+                silence = library.describe(relative_paths=["silence.wav"])
+            self.assertEqual(silence["completed"], 1)
+            self.assertEqual(silence["failed"], 0)
+            generator_class.assert_not_called()
+            silence_path = audio_library.safe_transcript_path(transcript_dir, "9" * 64)
+            stored_silence = json.loads(silence_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                stored_silence["filename_description"], "무음-또는-전사불명"
+            )
+            self.assertEqual(
+                stored_silence["filename_description_validation"],
+                audio_library.QUALITY_FLAG_DESCRIPTION_VALIDATION,
+            )
 
             with self.assertRaisesRegex(ValueError, "absent from inventory"):
                 library.describe(relative_paths=["missing.wav"])

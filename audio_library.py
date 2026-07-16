@@ -80,6 +80,7 @@ EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
     {"no_speech_detected", "too_short_for_reliable_speech"}
 )
 REPETITIVE_OR_BACKGROUND_AUDIO_FLAG = "repetitive_or_background_audio"
+INSUFFICIENT_CONTEXT_AUDIO_FLAG = "insufficient_context_for_filename"
 QUALITY_FLAG_DESCRIPTION_VALIDATION = "quality_flag_title_v1"
 MANUAL_DESCRIPTION_SOURCE = "manual_transcript_context_review"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -97,6 +98,10 @@ STOCK_HALLUCINATION_RE = re.compile(
     r"(?:다음-(?:영상|비디오)에서-만나요|이-시각-세계였습니다|"
     r"시청해-주셔서-감사합니다|이곳은-이곳에서|다음-주에-만나요)"
 )
+CONTEXTLESS_COURTESY_RE = re.compile(
+    r"^\s*(?:감사합니다|고맙습니다|안녕하세요|네|예)[.!?\s]*$"
+)
+REPEATED_KOREAN_CHUNK_RE = re.compile(r"([가-힣]{1,2})\1{4,}")
 REPEATED_ACKNOWLEDGEMENTS = frozenset({"네", "네네", "넵", "예", "예예", "응", "응응"})
 DESCRIPTION_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]+")
 KOREAN_TERM_RE = re.compile(r"^[가-힣]+$")
@@ -1350,7 +1355,9 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
     segment_texts = [
         str(segment.get("text", "")).strip()
         for segment in transcript.get("segments", [])
-        if isinstance(segment, dict) and str(segment.get("text", "")).strip()
+        if isinstance(segment, dict)
+        and not segment.get("low_confidence")
+        and str(segment.get("text", "")).strip()
     ]
     if not segment_texts:
         fallback = str(transcript.get("text", "")).strip()
@@ -1390,9 +1397,18 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
         key=lambda item: item[1],
         default=("", 0),
     )
+    duration = transcript.get("duration_seconds")
+    has_duration = isinstance(duration, (int, float)) and duration >= 0
+    duration_seconds = float(duration) if has_duration else 0.0
     background_or_repetition = (
         stock_count >= 2
         and stock_count * 8 >= len(segment_texts)
+        or stock_count >= 1
+        and stock_count == len(segment_texts)
+        or stock_count >= 1
+        and duration_seconds >= 30.0
+        and len(lexical_tokens) < 20
+        or any(REPEATED_KOREAN_CHUNK_RE.search(value) for value in segment_texts)
         or len(lexical_tokens) >= 12
         and dominant_token_count * 3 >= len(lexical_tokens)
         and len(token_counts) * 4 <= len(lexical_tokens)
@@ -1410,6 +1426,17 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
     )
     if background_or_repetition and REPETITIVE_OR_BACKGROUND_AUDIO_FLAG not in flags:
         flags.append(REPETITIVE_OR_BACKGROUND_AUDIO_FLAG)
+    insufficient_context = (
+        len(segment_texts) == 1
+        and CONTEXTLESS_COURTESY_RE.fullmatch(segment_texts[0]) is not None
+        or len(segment_texts) == 1
+        and ((has_duration and duration_seconds < 10.0) or len(lexical_tokens) < 2)
+        or duration_seconds >= 30.0
+        and len(segment_texts) <= 2
+        and len(lexical_tokens) < 10
+    )
+    if insufficient_context and INSUFFICIENT_CONTEXT_AUDIO_FLAG not in flags:
+        flags.append(INSUFFICIENT_CONTEXT_AUDIO_FLAG)
     return flags
 
 
@@ -1513,7 +1540,12 @@ def semantic_transcript_excerpt(
         )
     ]
     if not values:
-        values = [flatten_semantic_evidence_text(transcript.get("text", ""))]
+        fallback = flatten_semantic_evidence_text(transcript.get("text", ""))
+        values = (
+            []
+            if STOCK_HALLUCINATION_RE.search(sanitize_component(fallback, limit=256))
+            else [fallback]
+        )
     values = [
         value
         for value in values
@@ -2698,8 +2730,11 @@ class GemmaDescriptionGenerator:
 def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> str:
     """Derive a deterministic, transcript-central filename description."""
 
-    if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in transcript_quality_flags(transcript):
+    quality_flags = transcript_quality_flags(transcript)
+    if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags:
         return "배경음-전사불명"
+    if INSUFFICIENT_CONTEXT_AUDIO_FLAG in quality_flags:
+        return "짧은발화-맥락불명"
     semantic = transcript.get("filename_description")
     if isinstance(semantic, str):
         try:
@@ -3952,9 +3987,25 @@ class AudioLibrary:
                 validate_transcript_record_identity(record, loaded_transcript)
                 transcript = loaded_transcript
                 quality_flags = transcript_quality_flags(transcript)
-                if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags:
+                repetitive_background = (
+                    REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags
+                )
+                explained_empty = any(
+                    flag in EXPLAINED_EMPTY_TRANSCRIPT_FLAGS for flag in quality_flags
+                )
+                insufficient_context = INSUFFICIENT_CONTEXT_AUDIO_FLAG in quality_flags
+                if repetitive_background or explained_empty or insufficient_context:
+                    quality_title = (
+                        "배경음-전사불명"
+                        if repetitive_background
+                        else (
+                            "무음-또는-전사불명"
+                            if explained_empty
+                            else "짧은발화-맥락불명"
+                        )
+                    )
                     quality_cache = (
-                        transcript.get("filename_description") == "배경음-전사불명"
+                        transcript.get("filename_description") == quality_title
                         and transcript.get("filename_description_validation")
                         == QUALITY_FLAG_DESCRIPTION_VALIDATION
                     )
@@ -3966,11 +4017,19 @@ class AudioLibrary:
                             if key.startswith("filename_description"):
                                 transcript.pop(key)
                         transcript["quality_flags"] = quality_flags
-                        transcript["filename_description"] = "배경음-전사불명"
+                        transcript["filename_description"] = quality_title
                         transcript["filename_description_context"] = {
                             "central_idea": (
                                 "반복되거나 배경 매체로 추정되는 발화만 있어 중심 사상을 "
                                 "신뢰할 수 없습니다."
+                                if repetitive_background
+                                else (
+                                    "녹음이 너무 짧거나 발화가 없어 중심 사상을 신뢰할 수 "
+                                    "없습니다."
+                                    if explained_empty
+                                    else "발화가 인사말뿐이거나 녹음 길이에 비해 너무 적어 "
+                                    "중심 사상을 신뢰할 수 없습니다."
+                                )
                             ),
                             "outcome": "자동 제목 보류",
                             "evidence_segment_ids": [],
