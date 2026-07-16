@@ -17,7 +17,7 @@ import types
 import unittest
 import wave
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import audio_library
 from audio_library import (
@@ -242,6 +242,55 @@ class NamingTests(unittest.TestCase):
         self.assertIn(
             ("구현", "구현"), audio_library.description_terms("기능을 구현하자는")
         )
+        self.assertEqual(audio_library.transcript_quality_flags(None), [])
+        self.assertEqual(audio_library.transcript_quality_flags({}), [])
+        self.assertEqual(
+            audio_library.transcript_quality_flags(
+                {"quality_flags": ["existing", "", 7], "text": ""}
+            ),
+            ["existing"],
+        )
+        repeated_background = {
+            "text": "반복 배경 안내입니다 " * 3,
+            "segments": [{"text": "반복 배경 안내입니다"}] * 3,
+        }
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(repeated_background),
+        )
+        self.assertEqual(transcript_description(repeated_background), "배경음-전사불명")
+        stock_background = {"segments": [{"text": "다음 영상에서 만나요."}] * 2}
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(stock_background),
+        )
+        dominant_background = {"text": "도움말 " * 20 + "종료 안내"}
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(dominant_background),
+        )
+        intra_segment_background = {
+            "segments": [
+                {"text": "지구의 주제는 " * 12},
+                {"text": "결제 내용은 확인되지 않았습니다"},
+                {"text": "다음 영상에서 만나요"},
+            ]
+        }
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(intra_segment_background),
+        )
+        normal_transcript = {
+            "segments": [
+                {"text": "배포 오류를 확인합니다"},
+                {"text": "로그를 분석합니다"},
+                {"text": "수정 일정을 결정합니다"},
+            ]
+        }
+        self.assertNotIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(normal_transcript),
+        )
         self.assertFalse(audio_library.transcript_cache_is_usable(None))
         self.assertFalse(audio_library.transcript_cache_is_usable({"text": ""}))
         self.assertFalse(
@@ -327,7 +376,7 @@ class NamingTests(unittest.TestCase):
                     ],
                 }
             ),
-            "무음-또는-전사불명",
+            "배경음-전사불명",
         )
 
         long_segments = [{"text": f"도입 잡음 문장 {index}"} for index in range(12)] + [
@@ -1815,6 +1864,36 @@ class GpuTranscriberTests(unittest.TestCase):
                 Path("silent.wav")
             )
         self.assertEqual(result["quality_flags"], ["no_speech_detected"])
+
+    def test_mlx_marks_repetitive_background_output(self) -> None:
+        package, _, whisper = self._mlx_modules()
+        whisper.transcribe.return_value = {
+            "text": "반복 배경 안내입니다 " * 3,
+            "segments": [
+                {"start": index, "end": index + 1, "text": "반복 배경 안내입니다"}
+                for index in range(3)
+            ],
+            "language": "ko",
+        }
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=3.0),
+            patch("audio_library.decode_audio_for_mlx", return_value=object()),
+        ):
+            result = GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(
+                Path("background.wav")
+            )
+        self.assertEqual(
+            result["quality_flags"],
+            [audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG],
+        )
 
     def test_descriptor_bound_mlx_input_is_revalidated(self) -> None:
         package, _, whisper = self._mlx_modules()
@@ -3719,6 +3798,13 @@ class CliTests(unittest.TestCase):
                         tmk_path=None,
                     ),
                     _record(
+                        "background.wav",
+                        "f" * 64,
+                        materialized=False,
+                        sha256_verified=True,
+                        tmk_path=None,
+                    ),
+                    _record(
                         "unverified.wav",
                         "d" * 64,
                         materialized=False,
@@ -3746,6 +3832,25 @@ class CliTests(unittest.TestCase):
                     audio_library.safe_transcript_path(transcript_dir, sha256),
                     {"text": text, "segments": [{"text": text}]},
                 )
+            initial_b_path = audio_library.safe_transcript_path(transcript_dir, HASH_B)
+            initial_b = json.loads(initial_b_path.read_text(encoding="utf-8"))
+            initial_b.update(
+                {
+                    "filename_description_status": "deferred",
+                    "filename_description_error": "stale failure",
+                    "filename_description_attempted_at": "2024-01-01T00:00:00+00:00",
+                }
+            )
+            atomic_json_write(initial_b_path, initial_b)
+            atomic_json_write(
+                audio_library.safe_transcript_path(transcript_dir, "f" * 64),
+                {
+                    "text": "반복 배경 안내입니다 " * 3,
+                    "segments": [{"text": "반복 배경 안내입니다"}] * 3,
+                    "quality_flags": [],
+                    "filename_description_status": "deferred",
+                },
+            )
 
             generator = Mock()
             generated_result = audio_library.SemanticDescriptionResult(
@@ -3764,16 +3869,22 @@ class CliTests(unittest.TestCase):
                     model=audio_library.DEFAULT_GEMMA_DESCRIPTION_MODEL,
                     revision=audio_library.DEFAULT_GEMMA_DESCRIPTION_REVISION,
                     relative_paths=["a.wav", "b.wav"],
-                    max_files=1,
+                    max_files=2,
                     progress=progress,
                 )
-            self.assertEqual(first["completed"], 1)
+            self.assertEqual(first["completed"], 2)
             self.assertEqual(first["failed"], 0)
             generator_class.assert_called_once_with(
                 audio_library.DEFAULT_GEMMA_DESCRIPTION_MODEL,
                 audio_library.DEFAULT_GEMMA_DESCRIPTION_REVISION,
             )
-            progress.assert_called_once_with(1, 1, "a.wav", "completed")
+            self.assertEqual(
+                progress.call_args_list,
+                [
+                    call(1, 2, "a.wav", "completed"),
+                    call(2, 2, "b.wav", "completed"),
+                ],
+            )
             stored_a = json.loads(
                 audio_library.safe_transcript_path(transcript_dir, HASH_A).read_text(
                     encoding="utf-8"
@@ -3845,6 +3956,13 @@ class CliTests(unittest.TestCase):
             self.assertEqual(third["cached"], 1)
 
             stored_a.pop("filename_description_validation")
+            stored_a.update(
+                {
+                    "filename_description_status": "deferred",
+                    "filename_description_error": "stale failure",
+                    "filename_description_attempted_at": "2024-01-01T00:00:00+00:00",
+                }
+            )
             atomic_json_write(
                 audio_library.safe_transcript_path(transcript_dir, HASH_A), stored_a
             )
@@ -3857,6 +3975,14 @@ class CliTests(unittest.TestCase):
                 regenerated = library.describe(relative_paths=["a.wav"])
             self.assertEqual(regenerated["completed"], 1)
             self.assertEqual(regenerated["cached"], 0)
+            regenerated_a = json.loads(
+                audio_library.safe_transcript_path(transcript_dir, HASH_A).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertNotIn("filename_description_status", regenerated_a)
+            self.assertNotIn("filename_description_error", regenerated_a)
+            self.assertNotIn("filename_description_attempted_at", regenerated_a)
 
             standard_generator = Mock()
             standard_generator.analyze.return_value = generated_result
@@ -3868,6 +3994,35 @@ class CliTests(unittest.TestCase):
             self.assertEqual(refreshed_standard["selected"], 1)
             self.assertEqual(refreshed_standard["completed"], 1)
             standard_generator.analyze.assert_called_once()
+
+            with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
+                background = library.describe(relative_paths=["background.wav"])
+            self.assertEqual(background["completed"], 1)
+            self.assertEqual(background["failed"], 0)
+            generator_class.assert_not_called()
+            background_path = audio_library.safe_transcript_path(
+                transcript_dir, "f" * 64
+            )
+            stored_background = json.loads(background_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                stored_background["filename_description"], "배경음-전사불명"
+            )
+            self.assertEqual(
+                stored_background["filename_description_validation"],
+                audio_library.QUALITY_FLAG_DESCRIPTION_VALIDATION,
+            )
+            self.assertEqual(
+                stored_background["filename_description_source"],
+                "transcript_quality_gate",
+            )
+            self.assertIn(
+                audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+                stored_background["quality_flags"],
+            )
+            with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
+                cached_background = library.describe(relative_paths=["background.wav"])
+            self.assertEqual(cached_background["cached"], 1)
+            generator_class.assert_not_called()
 
             with self.assertRaisesRegex(ValueError, "absent from inventory"):
                 library.describe(relative_paths=["missing.wav"])

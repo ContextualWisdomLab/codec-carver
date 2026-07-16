@@ -70,6 +70,8 @@ MIN_TRANSCRIBABLE_SECONDS = 0.5
 EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
     {"no_speech_detected", "too_short_for_reliable_speech"}
 )
+REPETITIVE_OR_BACKGROUND_AUDIO_FLAG = "repetitive_or_background_audio"
+QUALITY_FLAG_DESCRIPTION_VALIDATION = "quality_flag_title_v1"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 STANDARD_NAME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:__[^/]+)*__sha256-[0-9a-f]{12}$"
@@ -1041,7 +1043,9 @@ class GpuTranscriber:
             language = getattr(info, "language", None)
         if isinstance(audio_source, VerifiedStagedArtifact):
             audio_source.verify_unchanged()
-        quality_flags = [] if text or segments else ["no_speech_detected"]
+        quality_flags = transcript_quality_flags({"text": text, "segments": segments})
+        if not text and not any(segment.get("text") for segment in segments):
+            quality_flags.append("no_speech_detected")
         return {
             "text": text,
             "segments": segments,
@@ -1265,6 +1269,82 @@ def trusted_transcript_text(
     if trusted:
         return " ".join(trusted)
     return "" if segments else fallback.strip()
+
+
+def transcript_quality_flags(transcript: Any) -> list[str]:
+    """Explain transcript-shaped output dominated by background or repetition."""
+
+    if not isinstance(transcript, dict):
+        return []
+    existing = transcript.get("quality_flags")
+    flags = (
+        list(
+            dict.fromkeys(
+                str(flag) for flag in existing if isinstance(flag, str) and flag
+            )
+        )
+        if isinstance(existing, list)
+        else []
+    )
+    segment_texts = [
+        str(segment.get("text", "")).strip()
+        for segment in transcript.get("segments", [])
+        if isinstance(segment, dict) and str(segment.get("text", "")).strip()
+    ]
+    if not segment_texts:
+        fallback = str(transcript.get("text", "")).strip()
+        segment_texts = [fallback] if fallback else []
+    if not segment_texts:
+        return flags
+
+    normalized_segments = [
+        sanitize_component(value, limit=512) for value in segment_texts
+    ]
+    stock_count = sum(
+        bool(STOCK_HALLUCINATION_RE.search(value)) for value in normalized_segments
+    )
+    token_groups = [
+        [token.casefold() for token in DESCRIPTION_TOKEN_RE.findall(value)]
+        for value in segment_texts
+    ]
+    lexical_tokens = [
+        token
+        for tokens in token_groups
+        for token in tokens
+        if not token.isdecimal() and token not in DESCRIPTION_STOPWORDS
+    ]
+    token_counts = Counter(lexical_tokens)
+    dominant_token_count = max(token_counts.values(), default=0)
+    segment_bigrams = [
+        list(zip(tokens, tokens[1:], strict=False)) for tokens in token_groups
+    ]
+    bigrams = [pair for pairs in segment_bigrams for pair in pairs]
+    dominant_bigram_count = max(Counter(bigrams).values(), default=0)
+    dominant_intra_segment_bigram_count = max(
+        (max(Counter(pairs).values(), default=0) for pairs in segment_bigrams),
+        default=0,
+    )
+    repeated_segment_count = max(Counter(normalized_segments).values(), default=0)
+    background_or_repetition = (
+        stock_count >= 2
+        and stock_count * 5 >= len(segment_texts)
+        or len(lexical_tokens) >= 12
+        and dominant_token_count * 3 >= len(lexical_tokens)
+        and len(token_counts) * 4 <= len(lexical_tokens)
+        or len(bigrams) >= 10
+        and dominant_bigram_count >= 5
+        and dominant_bigram_count * 5 >= len(bigrams)
+        and len(token_counts) * 4 <= len(lexical_tokens)
+        or len(bigrams) >= 10
+        and dominant_intra_segment_bigram_count >= 5
+        and dominant_bigram_count * 5 >= len(bigrams)
+        or len(segment_texts) >= 3
+        and repeated_segment_count >= 3
+        and repeated_segment_count * 3 >= len(segment_texts)
+    )
+    if background_or_repetition and REPETITIVE_OR_BACKGROUND_AUDIO_FLAG not in flags:
+        flags.append(REPETITIVE_OR_BACKGROUND_AUDIO_FLAG)
+    return flags
 
 
 def description_terms(value: str) -> list[tuple[str, str]]:
@@ -2349,6 +2429,8 @@ class GemmaDescriptionGenerator:
 def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> str:
     """Derive a deterministic, transcript-central filename description."""
 
+    if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in transcript_quality_flags(transcript):
+        return "배경음-전사불명"
     semantic = transcript.get("filename_description")
     if isinstance(semantic, str):
         try:
@@ -3499,7 +3581,7 @@ class AudioLibrary:
         )
         if max_files is not None:
             records = records[:max_files]
-        generator = GemmaDescriptionGenerator(model, revision) if records else None
+        generator: GemmaDescriptionGenerator | None = None
         completed = cached = failed = 0
         failures = []
         for index, (record, transcript_path, transcript_text) in enumerate(
@@ -3512,74 +3594,114 @@ class AudioLibrary:
                 if not isinstance(loaded_transcript, dict):
                     raise ValueError("transcript sidecar must be a JSON object")
                 transcript = loaded_transcript
-                same_generation = (
-                    transcript.get("filename_description_model") == model
-                    and transcript.get("filename_description_revision") == revision
-                    and isinstance(transcript.get("filename_description"), str)
-                )
-                valid_cache = False
-                if same_generation:
-                    try:
-                        excerpt = semantic_transcript_excerpt(transcript)
-                        context = transcript.get("filename_description_context")
-                        if transcript.get(
-                            "filename_description_validation"
-                        ) != SEMANTIC_DESCRIPTION_VALIDATION or not isinstance(
-                            context, dict
-                        ):
-                            raise ValueError(
-                                "cached title lacks current context evidence"
-                            )
-                        cached_context = validate_contextual_description(
-                            title=transcript["filename_description"],
-                            central_idea=str(context.get("central_idea", "")),
-                            outcome=str(context.get("outcome", "")),
-                            evidence_segment_ids=context.get(
-                                "evidence_segment_ids", ()
-                            ),
-                            confidence=str(context.get("confidence", "")),
-                            grounding_text=excerpt,
-                        )
-                        validate_contextual_title_specificity(
-                            cached_context.title, outcome=cached_context.outcome
-                        )
-                        valid_cache = True
-                    except ValueError:
+                quality_flags = transcript_quality_flags(transcript)
+                if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags:
+                    quality_cache = (
+                        transcript.get("filename_description") == "배경음-전사불명"
+                        and transcript.get("filename_description_validation")
+                        == QUALITY_FLAG_DESCRIPTION_VALIDATION
+                    )
+                    if quality_cache:
+                        cached += 1
+                        status = "cached"
+                    else:
                         for key in tuple(transcript):
                             if key.startswith("filename_description"):
                                 transcript.pop(key)
+                        transcript["quality_flags"] = quality_flags
+                        transcript["filename_description"] = "배경음-전사불명"
+                        transcript["filename_description_context"] = {
+                            "central_idea": (
+                                "반복되거나 배경 매체로 추정되는 발화만 있어 중심 사상을 "
+                                "신뢰할 수 없습니다."
+                            ),
+                            "outcome": "자동 제목 보류",
+                            "evidence_segment_ids": [],
+                            "confidence": "low",
+                        }
+                        transcript["filename_description_source"] = (
+                            "transcript_quality_gate"
+                        )
+                        transcript["filename_description_validation"] = (
+                            QUALITY_FLAG_DESCRIPTION_VALIDATION
+                        )
+                        transcript["filename_description_generated_at"] = (
+                            datetime.now().astimezone().isoformat()
+                        )
                         atomic_json_write(transcript_path, transcript)
-                if valid_cache:
-                    cached += 1
-                    status = "cached"
+                        completed += 1
+                        status = "completed"
                 else:
-                    assert generator is not None
-                    result = generator.analyze(transcript)
-                    for key in (
-                        "filename_description_status",
-                        "filename_description_error",
-                        "filename_description_attempted_at",
-                    ):
-                        transcript.pop(key, None)
-                    transcript["filename_description"] = result.title
-                    transcript["filename_description_context"] = {
-                        "central_idea": result.central_idea,
-                        "outcome": result.outcome,
-                        "evidence_segment_ids": list(result.evidence_segment_ids),
-                        "confidence": result.confidence,
-                    }
-                    transcript["filename_description_source"] = "gemma4_mlx"
-                    transcript["filename_description_model"] = model
-                    transcript["filename_description_revision"] = revision
-                    transcript["filename_description_validation"] = (
-                        SEMANTIC_DESCRIPTION_VALIDATION
+                    same_generation = (
+                        transcript.get("filename_description_model") == model
+                        and transcript.get("filename_description_revision") == revision
+                        and isinstance(transcript.get("filename_description"), str)
                     )
-                    transcript["filename_description_generated_at"] = (
-                        datetime.now().astimezone().isoformat()
-                    )
-                    atomic_json_write(transcript_path, transcript)
-                    completed += 1
-                    status = "completed"
+                    valid_cache = False
+                    if same_generation:
+                        try:
+                            excerpt = semantic_transcript_excerpt(transcript)
+                            context = transcript.get("filename_description_context")
+                            if transcript.get(
+                                "filename_description_validation"
+                            ) != SEMANTIC_DESCRIPTION_VALIDATION or not isinstance(
+                                context, dict
+                            ):
+                                raise ValueError(
+                                    "cached title lacks current context evidence"
+                                )
+                            cached_context = validate_contextual_description(
+                                title=transcript["filename_description"],
+                                central_idea=str(context.get("central_idea", "")),
+                                outcome=str(context.get("outcome", "")),
+                                evidence_segment_ids=context.get(
+                                    "evidence_segment_ids", ()
+                                ),
+                                confidence=str(context.get("confidence", "")),
+                                grounding_text=excerpt,
+                            )
+                            validate_contextual_title_specificity(
+                                cached_context.title, outcome=cached_context.outcome
+                            )
+                            valid_cache = True
+                        except ValueError:
+                            for key in tuple(transcript):
+                                if key.startswith("filename_description"):
+                                    transcript.pop(key)
+                            atomic_json_write(transcript_path, transcript)
+                    if valid_cache:
+                        cached += 1
+                        status = "cached"
+                    else:
+                        if generator is None:
+                            generator = GemmaDescriptionGenerator(model, revision)
+                        result = generator.analyze(transcript)
+                        for key in tuple(transcript):
+                            if key in (
+                                "filename_description_status",
+                                "filename_description_error",
+                                "filename_description_attempted_at",
+                            ):
+                                transcript.pop(key)
+                        transcript["filename_description"] = result.title
+                        transcript["filename_description_context"] = {
+                            "central_idea": result.central_idea,
+                            "outcome": result.outcome,
+                            "evidence_segment_ids": list(result.evidence_segment_ids),
+                            "confidence": result.confidence,
+                        }
+                        transcript["filename_description_source"] = "gemma4_mlx"
+                        transcript["filename_description_model"] = model
+                        transcript["filename_description_revision"] = revision
+                        transcript["filename_description_validation"] = (
+                            SEMANTIC_DESCRIPTION_VALIDATION
+                        )
+                        transcript["filename_description_generated_at"] = (
+                            datetime.now().astimezone().isoformat()
+                        )
+                        atomic_json_write(transcript_path, transcript)
+                        completed += 1
+                        status = "completed"
             except Exception as exc:
                 failed += 1
                 failures.append({"path": record["path"], "error": str(exc)})
