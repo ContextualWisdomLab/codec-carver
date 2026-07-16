@@ -1829,6 +1829,13 @@ mod tests {
             sha256: None,
         };
         assert!(apply_plan(&make_plan(1, vec![hashless]), false).is_err());
+        let invalid_hash = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "invalid-hash.wav".to_string(),
+            sha256: Some("not-a-sha256".to_string()),
+        };
+        assert!(apply_plan(&make_plan(1, vec![invalid_hash]), false).is_err());
         let wrong_hash = MutationOperation {
             action: MutationAction::Rename,
             source: "source.wav".to_string(),
