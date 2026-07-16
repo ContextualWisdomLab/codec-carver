@@ -238,6 +238,7 @@ class NamingTests(unittest.TestCase):
         }
         self.assertIn("프로젝트-예산-검토", transcript_description(transcript))
         self.assertEqual(transcript_description({"text": ""}), "무음-또는-전사불명")
+        self.assertIn(("VOC", "voc"), audio_library.description_terms("VOC들을"))
         self.assertFalse(audio_library.transcript_cache_is_usable(None))
         self.assertFalse(audio_library.transcript_cache_is_usable({"text": ""}))
         self.assertFalse(

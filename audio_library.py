@@ -159,6 +159,7 @@ DESCRIPTION_PARTICLE_SUFFIXES = (
     "과",
     "로",
     "만",
+    "들",
 )
 DESCRIPTION_STOPWORDS = frozenset(
     {
