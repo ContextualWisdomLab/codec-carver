@@ -1113,6 +1113,12 @@ def audio_duration_seconds(
     if not ffprobe:
         return None
     try:
+        media_input = str(audio_path)
+        inherited_fds: tuple[int, ...] = ()
+        if artifact is not None:
+            descriptor = artifact.rewind().fileno()
+            media_input = f"/dev/fd/{descriptor}"
+            inherited_fds = (descriptor,)
         command = [
             str(ffprobe),
             "-v",
@@ -1121,7 +1127,7 @@ def audio_duration_seconds(
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
-            "pipe:0" if artifact is not None else str(audio_path),
+            media_input,
         ]
         completed = subprocess.run(
             command,
@@ -1131,7 +1137,7 @@ def audio_duration_seconds(
             shell=False,
             timeout=60,
             env=trusted_child_environment(),
-            stdin=artifact.rewind() if artifact is not None else None,
+            pass_fds=inherited_fds,
         )
         return float(completed.stdout.strip())
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -1153,12 +1159,18 @@ def decode_audio_for_mlx(
             "MLX GPU transcription requires ffmpeg at an approved system path"
         )
     try:
+        media_input = str(audio_path)
+        inherited_fds: tuple[int, ...] = ()
+        if artifact is not None:
+            descriptor = artifact.rewind().fileno()
+            media_input = f"/dev/fd/{descriptor}"
+            inherited_fds = (descriptor,)
         completed = subprocess.run(
             [
                 str(ffmpeg),
                 "-nostdin",
                 "-i",
-                "pipe:0" if artifact is not None else str(audio_path),
+                media_input,
                 "-threads",
                 "0",
                 "-f",
@@ -1176,11 +1188,13 @@ def decode_audio_for_mlx(
             shell=False,
             timeout=14_400,
             env=trusted_child_environment(),
-            stdin=artifact.rewind() if artifact is not None else None,
+            pass_fds=inherited_fds,
         )
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"approved ffmpeg failed to decode audio: {detail}") from exc
+    if not completed.stdout:
+        raise RuntimeError("approved ffmpeg decoded zero audio samples")
     import mlx.core as mx  # type: ignore[import-not-found]
     import numpy as np  # type: ignore[import-not-found]
 

@@ -193,6 +193,38 @@ class NamingTests(unittest.TestCase):
             ):
                 self.assertIsNone(audio_duration_seconds(media_path))
 
+    def test_audio_duration_uses_seekable_verified_descriptor(self) -> None:
+        handle = tempfile.TemporaryFile("w+b")
+        handle.write(b"seekable-media")
+        metadata = os.fstat(handle.fileno())
+        artifact = audio_library.VerifiedStagedArtifact(
+            path=Path("detached.m4a"),
+            record={"sha256": HASH_A},
+            handle=handle,
+            identity=(
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+                metadata.st_nlink,
+            ),
+        )
+        completed = subprocess.CompletedProcess([], 0, stdout="1.25\n", stderr="")
+        with (
+            patch(
+                "audio_library.trusted_ffprobe_binary",
+                return_value=Path("/usr/bin/ffprobe"),
+            ),
+            patch("audio_library.subprocess.run", return_value=completed) as run,
+        ):
+            self.assertEqual(audio_duration_seconds(artifact), 1.25)
+        descriptor = handle.fileno()
+        self.assertEqual(run.call_args.args[0][-1], f"/dev/fd/{descriptor}")
+        self.assertEqual(run.call_args.kwargs["pass_fds"], (descriptor,))
+        self.assertNotIn("stdin", run.call_args.kwargs)
+        handle.close()
+
     def test_segment_and_description_normalization(self) -> None:
         self.assertEqual(
             normalize_segment({"start": "1", "end": 2, "text": " hello "}),
@@ -1822,6 +1854,40 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertNotIn("DYLD_INSERT_LIBRARIES", environment)
         numpy.frombuffer.assert_called_once_with(b"\0\0", numpy.int16)
 
+        handle = tempfile.TemporaryFile("w+b")
+        handle.write(b"seekable-media")
+        metadata = os.fstat(handle.fileno())
+        artifact = audio_library.VerifiedStagedArtifact(
+            path=Path("detached.m4a"),
+            record={"sha256": HASH_A},
+            handle=handle,
+            identity=(
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+                metadata.st_nlink,
+            ),
+        )
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": core, "numpy": numpy},
+            ),
+            patch(
+                "audio_library.trusted_ffmpeg_binary",
+                return_value=Path("/usr/bin/ffmpeg"),
+            ),
+            patch("audio_library.subprocess.run", return_value=completed) as run,
+        ):
+            self.assertEqual(audio_library.decode_audio_for_mlx(artifact), "decoded")
+        descriptor = handle.fileno()
+        self.assertEqual(run.call_args.args[0][3], f"/dev/fd/{descriptor}")
+        self.assertEqual(run.call_args.kwargs["pass_fds"], (descriptor,))
+        self.assertNotIn("stdin", run.call_args.kwargs)
+        handle.close()
+
         with patch("audio_library.trusted_ffmpeg_binary", return_value=None):
             with self.assertRaisesRegex(
                 GpuTranscriptionUnavailableError, "approved system path"
@@ -1835,6 +1901,17 @@ class GpuTranscriberTests(unittest.TestCase):
             ),
             patch("audio_library.subprocess.run", side_effect=failed),
             self.assertRaisesRegex(RuntimeError, "decode failed"),
+        ):
+            audio_library.decode_audio_for_mlx(Path("recording.wav"))
+
+        empty = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
+        with (
+            patch(
+                "audio_library.trusted_ffmpeg_binary",
+                return_value=Path("/usr/bin/ffmpeg"),
+            ),
+            patch("audio_library.subprocess.run", return_value=empty),
+            self.assertRaisesRegex(RuntimeError, "zero audio samples"),
         ):
             audio_library.decode_audio_for_mlx(Path("recording.wav"))
 
