@@ -32,6 +32,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Iterable
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no descriptor path API
+    fcntl = None  # type: ignore[assignment]
+
 
 DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo-q4"
 DEFAULT_MLX_MODEL_REVISION = "660c343bbf4e52ac257f0b7d952e5388e6f93bef"
@@ -66,12 +71,15 @@ DEFAULT_PREFETCH_MAX_BYTES = 512 * 1024 * 1024
 DEFAULT_STAGE_STALL_TIMEOUT_SECONDS = 420
 STAGE_TOTAL_TIMEOUT_MULTIPLIER = 4
 MACOS_SF_DATALESS = 0x40000000
+MACOS_F_GETPATH = 50
+MACOS_PATH_MAX = 1024
 MIN_TRANSCRIBABLE_SECONDS = 0.5
 EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
     {"no_speech_detected", "too_short_for_reliable_speech"}
 )
 REPETITIVE_OR_BACKGROUND_AUDIO_FLAG = "repetitive_or_background_audio"
 QUALITY_FLAG_DESCRIPTION_VALIDATION = "quality_flag_title_v1"
+MANUAL_DESCRIPTION_SOURCE = "manual_transcript_context_review"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 STANDARD_NAME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:__[^/]+)*__sha256-[0-9a-f]{12}$"
@@ -2607,6 +2615,87 @@ def normalized_private_absolute_path(path: Path) -> Path:
     return absolute
 
 
+def is_macos_file_provider_path(path: Path) -> bool:
+    """Return whether *path* is inside the current user's iCloud container root."""
+
+    if platform.system() != "Darwin":
+        return False
+    mobile_documents = normalized_private_absolute_path(
+        Path.home() / "Library" / "Mobile Documents"
+    )
+    return path.is_relative_to(mobile_documents)
+
+
+def open_macos_file_provider_private_directory(path: Path, flags: int) -> int:
+    """Open an iCloud private directory from a verified direct-path anchor."""
+
+    if fcntl is None:  # pragma: no cover - guarded by the Darwin path predicate
+        raise RuntimeError("macOS descriptor path verification requires fcntl")
+    missing_components: list[str] = []
+    anchor = path
+    while True:
+        try:
+            descriptor = os.open(anchor, flags)
+            break
+        except FileNotFoundError:
+            if anchor.parent == anchor or not is_macos_file_provider_path(
+                anchor.parent
+            ):
+                raise
+            missing_components.append(anchor.name)
+            anchor = anchor.parent
+        except OSError as exc:
+            if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                raise ValueError(
+                    f"private directory anchor is not a real directory: {anchor}"
+                ) from exc
+            raise
+
+    try:
+        opened_path_bytes = fcntl.fcntl(
+            descriptor,
+            MACOS_F_GETPATH,
+            b"\0" * MACOS_PATH_MAX,
+        )
+        opened_path = Path(opened_path_bytes.split(b"\0", 1)[0].decode("utf-8"))
+        if opened_path != anchor:
+            raise ValueError(
+                "private directory anchor resolved through an unexpected path: "
+                f"{anchor} -> {opened_path}"
+            )
+
+        for component in reversed(missing_components):
+            try:
+                os.mkdir(component, 0o700, dir_fd=descriptor)
+            except FileExistsError:
+                pass
+            try:
+                child_fd = os.open(component, flags, dir_fd=descriptor)
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                    raise ValueError(
+                        "private directory component is not a real directory: "
+                        f"{component}"
+                    ) from exc
+                raise
+            os.close(descriptor)
+            descriptor = child_fd
+
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(f"private directory is not a directory: {path}")
+        if metadata.st_uid != os.geteuid():
+            raise PermissionError(
+                f"private directory is not owned by this user: {path}"
+            )
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        os.fchmod(descriptor, 0o700)
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
 def open_private_directory(path: Path) -> int:
     """Create and open a private directory without following any path component."""
 
@@ -2621,7 +2710,7 @@ def open_private_directory(path: Path) -> int:
     if absolute.anchor != "/" or not components:
         raise ValueError(f"private directory must be a non-root absolute path: {path}")
     flags = os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open("/", flags)
+    descriptor: int | None = os.open("/", flags)
     try:
         for index, component in enumerate(components):
             try:
@@ -2629,6 +2718,7 @@ def open_private_directory(path: Path) -> int:
             except FileExistsError:
                 pass
             try:
+                assert descriptor is not None
                 child_fd = os.open(component, flags, dir_fd=descriptor)
             except OSError as exc:
                 if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
@@ -2636,6 +2726,10 @@ def open_private_directory(path: Path) -> int:
                         "private directory component is not a real directory: "
                         f"{component}"
                     ) from exc
+                if exc.errno == errno.EPERM and is_macos_file_provider_path(absolute):
+                    os.close(descriptor)
+                    descriptor = None
+                    return open_macos_file_provider_private_directory(absolute, flags)
                 raise
             try:
                 metadata = os.fstat(child_fd)
@@ -2653,11 +2747,14 @@ def open_private_directory(path: Path) -> int:
             except Exception:
                 os.close(child_fd)
                 raise
+            assert descriptor is not None
             os.close(descriptor)
             descriptor = child_fd
+        assert descriptor is not None
         return descriptor
     except Exception:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
         raise
 
 
@@ -3632,11 +3729,18 @@ class AudioLibrary:
                         completed += 1
                         status = "completed"
                 else:
-                    same_generation = (
-                        transcript.get("filename_description_model") == model
-                        and transcript.get("filename_description_revision") == revision
-                        and isinstance(transcript.get("filename_description"), str)
+                    manual_review = (
+                        transcript.get("filename_description_source")
+                        == MANUAL_DESCRIPTION_SOURCE
                     )
+                    same_generation = (
+                        manual_review
+                        or (
+                            transcript.get("filename_description_model") == model
+                            and transcript.get("filename_description_revision")
+                            == revision
+                        )
+                    ) and isinstance(transcript.get("filename_description"), str)
                     valid_cache = False
                     if same_generation:
                         try:

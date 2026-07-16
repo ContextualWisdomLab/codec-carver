@@ -3955,6 +3955,26 @@ class CliTests(unittest.TestCase):
                 )
             self.assertEqual(third["cached"], 1)
 
+            manual_a = json.loads(
+                audio_library.safe_transcript_path(transcript_dir, HASH_A).read_text(
+                    encoding="utf-8"
+                )
+            )
+            manual_a.update(
+                {
+                    "filename_description_source": audio_library.MANUAL_DESCRIPTION_SOURCE,
+                    "filename_description_model": "manual-transcript-review",
+                    "filename_description_revision": "manual-review-1",
+                }
+            )
+            atomic_json_write(
+                audio_library.safe_transcript_path(transcript_dir, HASH_A), manual_a
+            )
+            with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
+                manual_cached = library.describe(relative_paths=["a.wav"])
+            self.assertEqual(manual_cached["cached"], 1)
+            generator_class.assert_not_called()
+
             stored_a.pop("filename_description_validation")
             stored_a.update(
                 {
@@ -5036,6 +5056,208 @@ class CliTests(unittest.TestCase):
             self.assertFalse((outside / "state.json").exists())
             self.assertFalse((moved_library / "state" / "state.json").exists())
 
+    def test_private_directory_uses_verified_file_provider_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = audio_library.normalized_private_absolute_path(Path(tmp))
+            target = base / "state" / "transcripts"
+            first_component = target.parts[1]
+            real_open = os.open
+
+            def deny_parent_traversal(path, flags, mode=0o777, *, dir_fd=None):
+                if dir_fd is not None and path == first_component:
+                    raise PermissionError(errno.EPERM, "File Provider traversal denied")
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with (
+                patch("audio_library.os.open", side_effect=deny_parent_traversal),
+                patch("audio_library.is_macos_file_provider_path", return_value=True),
+                patch.object(
+                    audio_library.fcntl,
+                    "fcntl",
+                    return_value=os.fsencode(base) + b"\0",
+                ),
+            ):
+                descriptor = audio_library.open_private_directory(target)
+            try:
+                self.assertTrue(
+                    audio_library.stat.S_ISDIR(os.fstat(descriptor).st_mode)
+                )
+                self.assertEqual(
+                    audio_library.stat.S_IMODE(os.fstat(descriptor).st_mode), 0o700
+                )
+            finally:
+                os.close(descriptor)
+            self.assertTrue(target.is_dir())
+
+            existing = base / "existing"
+            existing.mkdir()
+            with (
+                patch("audio_library.os.open", side_effect=deny_parent_traversal),
+                patch("audio_library.is_macos_file_provider_path", return_value=True),
+                patch.object(
+                    audio_library.fcntl,
+                    "fcntl",
+                    return_value=b"/attacker-controlled\0",
+                ),
+                self.assertRaisesRegex(ValueError, "unexpected path"),
+            ):
+                audio_library.open_private_directory(existing)
+
+    def test_file_provider_anchor_rejects_unsafe_and_racy_paths(self) -> None:
+        flags = (
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = audio_library.normalized_private_absolute_path(Path(tmp))
+            home = base / "home"
+            mobile_documents = home / "Library" / "Mobile Documents"
+            with patch("audio_library.platform.system", return_value="Linux"):
+                self.assertFalse(audio_library.is_macos_file_provider_path(base))
+            with (
+                patch("audio_library.platform.system", return_value="Darwin"),
+                patch("audio_library.Path.home", return_value=home),
+            ):
+                self.assertTrue(
+                    audio_library.is_macos_file_provider_path(
+                        mobile_documents / "library"
+                    )
+                )
+                self.assertFalse(audio_library.is_macos_file_provider_path(base))
+
+            with (
+                patch(
+                    "audio_library.os.open",
+                    side_effect=OSError(errno.ELOOP, "linked anchor"),
+                ),
+                self.assertRaisesRegex(ValueError, "anchor is not a real directory"),
+            ):
+                audio_library.open_macos_file_provider_private_directory(base, flags)
+            with (
+                patch(
+                    "audio_library.os.open",
+                    side_effect=OSError(errno.EIO, "anchor I/O failure"),
+                ),
+                self.assertRaisesRegex(OSError, "anchor I/O failure"),
+            ):
+                audio_library.open_macos_file_provider_private_directory(base, flags)
+            with (
+                patch("audio_library.os.open", side_effect=FileNotFoundError()),
+                patch("audio_library.is_macos_file_provider_path", return_value=True),
+                self.assertRaises(FileNotFoundError),
+            ):
+                audio_library.open_macos_file_provider_private_directory(
+                    Path("/"), flags
+                )
+            with (
+                patch("audio_library.os.open", side_effect=FileNotFoundError()),
+                patch("audio_library.is_macos_file_provider_path", return_value=False),
+                self.assertRaises(FileNotFoundError),
+            ):
+                audio_library.open_macos_file_provider_private_directory(
+                    base / "outside", flags
+                )
+
+            real_open = os.open
+            real_mkdir = os.mkdir
+            raced = base / "raced"
+            direct_attempted = False
+
+            def open_raced(path, open_flags, mode=0o777, *, dir_fd=None):
+                nonlocal direct_attempted
+                if dir_fd is None and Path(path) == raced and not direct_attempted:
+                    direct_attempted = True
+                    raise FileNotFoundError(path)
+                return real_open(path, open_flags, mode, dir_fd=dir_fd)
+
+            def create_then_report_race(path, mode=0o777, *, dir_fd=None):
+                real_mkdir(path, mode, dir_fd=dir_fd)
+                raise FileExistsError(path)
+
+            with (
+                patch("audio_library.os.open", side_effect=open_raced),
+                patch("audio_library.os.mkdir", side_effect=create_then_report_race),
+                patch("audio_library.is_macos_file_provider_path", return_value=True),
+                patch.object(
+                    audio_library.fcntl,
+                    "fcntl",
+                    return_value=os.fsencode(base) + b"\0",
+                ),
+            ):
+                descriptor = audio_library.open_macos_file_provider_private_directory(
+                    raced, flags
+                )
+            os.close(descriptor)
+            self.assertTrue(raced.is_dir())
+
+            for name, error, expected in (
+                ("linked-child", OSError(errno.ELOOP, "linked child"), ValueError),
+                ("broken-child", OSError(errno.EIO, "child I/O failure"), OSError),
+            ):
+                target = base / name
+
+                def fail_child_open(path, open_flags, mode=0o777, *, dir_fd=None):
+                    if dir_fd is None and Path(path) == target:
+                        raise FileNotFoundError(path)
+                    if dir_fd is not None and path == name:
+                        raise error
+                    return real_open(path, open_flags, mode, dir_fd=dir_fd)
+
+                with (
+                    patch("audio_library.os.open", side_effect=fail_child_open),
+                    patch(
+                        "audio_library.is_macos_file_provider_path", return_value=True
+                    ),
+                    patch.object(
+                        audio_library.fcntl,
+                        "fcntl",
+                        return_value=os.fsencode(base) + b"\0",
+                    ),
+                    self.assertRaises(expected),
+                ):
+                    audio_library.open_macos_file_provider_private_directory(
+                        target, flags
+                    )
+
+            existing = base / "metadata-check"
+            existing.mkdir()
+            with (
+                patch.object(
+                    audio_library.fcntl,
+                    "fcntl",
+                    return_value=os.fsencode(existing) + b"\0",
+                ),
+                patch(
+                    "audio_library.os.fstat",
+                    return_value=types.SimpleNamespace(
+                        st_mode=audio_library.stat.S_IFREG,
+                        st_uid=os.geteuid(),
+                    ),
+                ),
+                self.assertRaisesRegex(ValueError, "is not a directory"),
+            ):
+                audio_library.open_macos_file_provider_private_directory(
+                    existing, flags
+                )
+            current = os.stat(existing, follow_symlinks=False)
+            with (
+                patch.object(
+                    audio_library.fcntl,
+                    "fcntl",
+                    return_value=os.fsencode(existing) + b"\0",
+                ),
+                patch(
+                    "audio_library.os.fstat",
+                    return_value=types.SimpleNamespace(
+                        st_mode=current.st_mode,
+                        st_uid=os.geteuid() + 1,
+                    ),
+                ),
+                self.assertRaisesRegex(PermissionError, "not owned"),
+            ):
+                audio_library.open_macos_file_provider_private_directory(
+                    existing, flags
+                )
+
     def test_private_directory_descriptor_failure_cleanup(self) -> None:
         with (
             patch("audio_library.tempfile.gettempdir", return_value="/tmp-alias"),
@@ -5049,8 +5271,8 @@ class CliTests(unittest.TestCase):
                 ),
                 Path("/private/tmp-alias/private-state"),
             )
-        with self.assertRaisesRegex(ValueError, "non-root absolute path"):
-            audio_library.open_private_directory(Path("/"))
+            with self.assertRaisesRegex(ValueError, "non-root absolute path"):
+                audio_library.open_private_directory(Path("/"))
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp) / "state"
             directory.mkdir()
