@@ -304,6 +304,23 @@ class NamingTests(unittest.TestCase):
             audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
             audio_library.transcript_quality_flags(sparse_stock_phrases),
         )
+        acknowledgement_heavy_dialogue = {
+            "segments": [
+                {"text": "네."},
+                {"text": "폐채기."},
+                {"text": "네."},
+                {"text": "우리 지금 비용도 많이 나온 것 같아요."},
+                {"text": "네네."},
+                {"text": "그거 일단 더 안 나오게 좀 스톱해주세요."},
+                {"text": "네."},
+                {"text": "내일 얘기합시다."},
+                {"text": "네."},
+            ]
+        }
+        self.assertNotIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(acknowledgement_heavy_dialogue),
+        )
         dominant_background = {"text": "도움말 " * 20 + "종료 안내"}
         self.assertIn(
             audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,

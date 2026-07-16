@@ -97,6 +97,9 @@ STOCK_HALLUCINATION_RE = re.compile(
     r"(?:다음-(?:영상|비디오)에서-만나요|이-시각-세계였습니다|"
     r"시청해-주셔서-감사합니다|이곳은-이곳에서|다음-주에-만나요)"
 )
+REPEATED_ACKNOWLEDGEMENTS = frozenset(
+    {"네", "네네", "넵", "예", "예예", "응", "응응"}
+)
 DESCRIPTION_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]+")
 KOREAN_TERM_RE = re.compile(r"^[가-힣]+$")
 SEMANTIC_GENERIC_TOKENS = frozenset(
@@ -1334,7 +1337,11 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
         (max(Counter(pairs).values(), default=0) for pairs in segment_bigrams),
         default=0,
     )
-    repeated_segment_count = max(Counter(normalized_segments).values(), default=0)
+    repeated_segment, repeated_segment_count = max(
+        Counter(normalized_segments).items(),
+        key=lambda item: item[1],
+        default=("", 0),
+    )
     background_or_repetition = (
         stock_count >= 2
         and stock_count * 8 >= len(segment_texts)
@@ -1351,6 +1358,7 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
         or len(segment_texts) >= 3
         and repeated_segment_count >= 3
         and repeated_segment_count * 3 >= len(segment_texts)
+        and repeated_segment.casefold() not in REPEATED_ACKNOWLEDGEMENTS
     )
     if background_or_repetition and REPETITIVE_OR_BACKGROUND_AUDIO_FLAG not in flags:
         flags.append(REPETITIVE_OR_BACKGROUND_AUDIO_FLAG)
