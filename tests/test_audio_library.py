@@ -58,6 +58,8 @@ def _record(path: str, sha256: str, **updates):
         "extension": "wav",
         "size_bytes": 10,
         "sha256": sha256,
+        "sha256_verified": bool(sha256),
+        "sha256_source": "content" if sha256 else None,
         "recorded_at": "2024-01-02T03:04:00+09:00",
         "time_source": "compact_filename",
         "location": "양평동4가 24-1",
@@ -78,6 +80,27 @@ def _test_backend(binary: Path) -> RustBackend:
     binary.chmod(0o700)
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
     return RustBackend(binary, expected_sha256=digest)
+
+
+def _configure_private_stage(
+    library: AudioLibrary, backend: Mock, sha256_by_path: dict[str, str]
+) -> None:
+    """Return a fresh private staged artifact for orchestration-focused tests."""
+
+    sequence = iter(range(10_000))
+
+    def stage(_root, relative_path, staging_dir, *, timeout_seconds):
+        del timeout_seconds
+        staged_path = Path(staging_dir) / (
+            f"unit-{next(sequence)}{Path(relative_path).suffix}"
+        )
+        staged_path.write_bytes(b"private staged audio")
+        return {
+            "staged_path": str(staged_path),
+            "record": {"sha256": sha256_by_path[relative_path]},
+        }
+
+    backend.stage.side_effect = stage
 
 
 def _manifest(root: Path):
@@ -459,6 +482,38 @@ class NamingTests(unittest.TestCase):
                 "DESCRIPTION: 설비데이터-통합추진",
                 grounding_text="[S001] 설비 데이터\n[S002] 통합 추진",
             )
+        with self.assertRaisesRegex(ValueError, "absent transcript segments"):
+            audio_library.parse_contextual_description(
+                "CENTRAL_IDEA: 설비 데이터 통합을 우선 추진해야 합니다.\n"
+                "OUTCOME: 통합 추진으로 결정했습니다.\n"
+                "EVIDENCE: S999\n"
+                "CONFIDENCE: high\n"
+                "DESCRIPTION: 설비데이터-통합추진",
+                grounding_text=(
+                    "[S001] 설비 데이터 통합 추진 중 S999 문자열을 언급했습니다."
+                ),
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "central idea contains terms absent from cited transcript evidence",
+        ):
+            audio_library.validate_contextual_description(
+                title="설비데이터-통합추진",
+                central_idea="랜섬웨어 삭제를 결정했습니다.",
+                outcome="설비 데이터 통합 추진",
+                evidence_segment_ids=("S001",),
+                confidence="high",
+                grounding_text="[S001] 설비 데이터 통합 추진",
+            )
+        with self.assertRaisesRegex(ValueError, "lacks transcript-specific terms"):
+            audio_library.validate_contextual_description(
+                title="설비데이터-통합추진",
+                central_idea="핵심 문제를 확인합니다.",
+                outcome="설비 데이터 통합 추진",
+                evidence_segment_ids=("S001",),
+                confidence="high",
+                grounding_text="[S001] 설비 데이터 통합 추진",
+            )
         with self.assertRaisesRegex(ValueError, "absent from the transcript"):
             validate_semantic_description(
                 "DESCRIPTION: 운영서버-삭제", grounding_text="BAS 공정 데이터"
@@ -487,7 +542,7 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(
             transcript_description(
                 {
-                    "filename_description": ("설비데이터통합-경영의사결정지연해결"),
+                    "filename_description": ("설비데이터통합-경영의사결정지연"),
                     "filename_description_validation": (
                         audio_library.SEMANTIC_DESCRIPTION_VALIDATION
                     ),
@@ -505,7 +560,7 @@ class NamingTests(unittest.TestCase):
                     ],
                 }
             ),
-            "설비데이터통합-경영의사결정지연해결",
+            "설비데이터통합-경영의사결정지연",
         )
         self.assertEqual(
             transcript_description(
@@ -884,18 +939,16 @@ class RustBackendTests(unittest.TestCase):
 
             with patch("audio_library.subprocess.run", return_value=completed) as run:
                 self.assertEqual(
-                    backend.inventory(
-                        Path(tmp), Path(tmp) / "inventory.json", threads=3
-                    ),
+                    backend.inventory(Path(tmp), threads=3),
                     {"ok": True},
                 )
                 command = run.call_args.args[0]
                 self.assertIn("--threads", command)
                 self.assertFalse(run.call_args.kwargs["shell"])
-                backend.apply(
-                    Path(tmp) / "plan.json", Path(tmp) / "journal.json", execute=True
-                )
+                backend.apply(Path(tmp) / "plan.json", execute=True)
                 self.assertIn("--execute", run.call_args.args[0])
+                self.assertNotIn("--output", command)
+                self.assertNotIn("--journal", run.call_args.args[0])
                 backend.inspect(Path(tmp), "a.wav", timeout_seconds=12)
                 self.assertEqual(run.call_args.kwargs["timeout"], 12)
                 backend.evict(Path(tmp), "a.wav", timeout_seconds=8)
@@ -1062,9 +1115,9 @@ class RustBackendTests(unittest.TestCase):
                 patch("audio_library.subprocess.run", return_value=completed) as run,
             ):
                 backend = RustBackend()
-                backend.inventory(Path("."), Path("inventory.json"))
+                backend.inventory(Path("."))
                 self.assertNotIn("--threads", run.call_args.args[0])
-                backend.apply(Path("plan.json"), Path("journal.json"), execute=False)
+                backend.apply(Path("plan.json"), execute=False)
                 self.assertNotIn("--execute", run.call_args.args[0])
 
     def test_missing_backend_has_build_instruction(self) -> None:
@@ -1107,7 +1160,7 @@ class RustBackendTests(unittest.TestCase):
             backend = RustBackend(binary, expected_sha256=digest)
             binary.write_bytes(b"replaced")
             with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
-                backend.inventory(root, root / "inventory.json")
+                backend.inventory(root)
 
 
 class GpuTranscriberTests(unittest.TestCase):
@@ -1377,6 +1430,23 @@ class AudioLibraryTests(unittest.TestCase):
             manifest["files"][1]["location"] = None
             self.assertEqual(restore_inventory_evidence(manifest, state), 0)
 
+    def test_inventory_marks_backend_hashes_as_current_content_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            backend = Mock()
+            backend.inventory.return_value = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [
+                    _record("record.wav", HASH_A, sha256_verified=False),
+                    _record("placeholder.wav", "", materialized=False),
+                ],
+                "duplicate_groups": [],
+            }
+            manifest = AudioLibrary(root, backend).inventory()
+            self.assertTrue(manifest["files"][0]["sha256_verified"])
+            self.assertEqual(manifest["files"][0]["sha256_source"], "content")
+
     def test_plan_quarantines_duplicates_and_renames_tmk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1398,7 +1468,9 @@ class AudioLibraryTests(unittest.TestCase):
                     state / "transcripts" / f"{sha}.json",
                     {"text": text, "segments": [{"text": text}]},
                 )
-            plan = AudioLibrary(root, Mock()).plan()
+            library = AudioLibrary(root, Mock())
+            with patch.object(library, "_record_ready_for_mutation", return_value=True):
+                plan = library.plan()
             actions = [(item["action"], item["source"]) for item in plan["operations"]]
             self.assertIn(("quarantine", "copies/duplicate.wav"), actions)
             self.assertIn(("quarantine", "copies/duplicate.tmk"), actions)
@@ -1413,11 +1485,12 @@ class AudioLibraryTests(unittest.TestCase):
                 root / ".codec-carver" / "inventory.json", _manifest(root)
             )
             library = AudioLibrary(root, Mock())
-            with self.assertRaisesRegex(ValueError, "transcripts are missing"):
-                library.plan()
-            plan = library.plan(allow_missing_transcripts=True)
-            self.assertTrue(plan["operations"])
-            deferred = library.plan(defer_unready=True)
+            with patch.object(library, "_record_ready_for_mutation", return_value=True):
+                with self.assertRaisesRegex(ValueError, "transcripts are missing"):
+                    library.plan()
+                plan = library.plan(allow_missing_transcripts=True)
+                self.assertTrue(plan["operations"])
+                deferred = library.plan(defer_unready=True)
             self.assertEqual(
                 deferred["deferred_paths"], ["canonical.wav", "second.wav"]
             )
@@ -1543,9 +1616,15 @@ class AudioLibraryTests(unittest.TestCase):
             ]
             backend = Mock()
             backend.inspect.side_effect = [manifest["files"][0], manifest["files"][2]]
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(
+                library,
+                backend,
+                {"canonical.wav": HASH_A, "second.wav": HASH_B},
+            )
             progress = Mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, backend).transcribe(progress=progress)
+                summary = library.transcribe(progress=progress)
             self.assertEqual(summary["completed"], 1)
             self.assertEqual(summary["failed"], 1)
             self.assertTrue((state / "transcripts" / f"{HASH_A}.json").is_file())
@@ -1555,6 +1634,17 @@ class AudioLibraryTests(unittest.TestCase):
             )
             self.assertEqual((state / "transcripts").stat().st_mode & 0o777, 0o700)
             self.assertEqual(progress.call_count, 2)
+            self.assertTrue(
+                all(
+                    call.args[0].parent == library.staging_dir
+                    for call in fake.transcribe.call_args_list
+                )
+            )
+            self.assertTrue(
+                all(
+                    not call.args[0].exists() for call in fake.transcribe.call_args_list
+                )
+            )
 
     def test_transcribe_honors_cache_and_max_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1567,12 +1657,12 @@ class AudioLibraryTests(unittest.TestCase):
             (root / "canonical.wav").write_bytes(b"one")
             backend = Mock()
             backend.inspect.return_value = _manifest(root)["files"][0]
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {"canonical.wav": HASH_A})
             fake = Mock(accelerator="mlx", model="model")
             progress = Mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, backend).transcribe(
-                    max_files=1, progress=progress
-                )
+                summary = library.transcribe(max_files=1, progress=progress)
             self.assertEqual(summary["cached"], 1)
             progress.assert_called_once()
             fake.transcribe.assert_not_called()
@@ -1584,12 +1674,12 @@ class AudioLibraryTests(unittest.TestCase):
                 "language": "ko",
             }
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, backend).transcribe(max_files=1)
+                summary = library.transcribe(max_files=1)
             self.assertEqual(summary["completed"], 1)
 
             fake.reset_mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, backend).transcribe(max_files=1)
+                summary = library.transcribe(max_files=1)
             self.assertEqual(summary["cached"], 1)
             fake.transcribe.assert_not_called()
 
@@ -2473,12 +2563,12 @@ class AudioLibraryTests(unittest.TestCase):
             (root / "second.wav").write_bytes(b"audio")
             backend = Mock()
             backend.inspect.return_value = manifest["files"][0]
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {"second.wav": HASH_B})
             fake = Mock(accelerator="mlx", model="model")
             fake.transcribe.side_effect = RuntimeError("bad audio")
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, backend).stream_transcribe(
-                    max_files=1, evict_after=False
-                )
+                summary = library.stream_transcribe(max_files=1, evict_after=False)
             self.assertEqual(summary["failed"], 1)
             self.assertIn("bad audio", summary["failures"][0]["error"])
 
@@ -2487,9 +2577,7 @@ class AudioLibraryTests(unittest.TestCase):
             )
             fake.reset_mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, backend).stream_transcribe(
-                    max_files=1, evict_after=False
-                )
+                summary = library.stream_transcribe(max_files=1, evict_after=False)
             self.assertEqual(summary["cached"], 1)
             fake.transcribe.assert_not_called()
 
@@ -2548,6 +2636,8 @@ class AudioLibraryTests(unittest.TestCase):
             )
             backend = Mock()
             backend.inspect.return_value = {**audio, "sha256": HASH_A}
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {"local.wav": HASH_A})
             fake = Mock(accelerator="mlx", model="model")
             fake.transcribe.return_value = {
                 "text": "로컬 회의",
@@ -2555,14 +2645,14 @@ class AudioLibraryTests(unittest.TestCase):
                 "language": "ko",
             }
             with patch("audio_library.GpuTranscriber", return_value=fake):
-                summary = AudioLibrary(root, backend).stream_transcribe()
+                summary = library.stream_transcribe()
             self.assertEqual(summary["completed"], 1)
             backend.inspect.assert_called_once()
             transcript = json.loads(
                 (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
             )
             self.assertIn("run hydrate-tmk", transcript["tmk_error"])
-            backend.stage.assert_not_called()
+            backend.stage.assert_called_once()
 
     def test_stream_transcribe_rejects_hash_drift_and_evicts_materialized_source(
         self,
@@ -2727,8 +2817,8 @@ class CliTests(unittest.TestCase):
             generator = Mock()
             generated_result = audio_library.SemanticDescriptionResult(
                 title="BAS-공정-데이터",
-                central_idea="BAS 공정 데이터를 검토하는 것이 핵심입니다.",
-                outcome="공정 데이터 검토를 진행합니다.",
+                central_idea="BAS 공정 데이터 검토",
+                outcome="공정 데이터 검토 진행",
                 evidence_segment_ids=("S001",),
                 confidence="high",
             )
@@ -3241,6 +3331,103 @@ class CliTests(unittest.TestCase):
             ):
                 secure._ensure_secure_state_dir()
 
+    def test_private_state_names_never_follow_final_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "library"
+            root.mkdir()
+            outside = base / "outside.json"
+            outside.write_text("sentinel", encoding="utf-8")
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            inventory = library.state_dir / "inventory.json"
+            inventory.symlink_to(outside)
+
+            with self.assertRaises(OSError):
+                library.inventory()
+            backend.inventory.assert_not_called()
+            self.assertEqual(outside.read_text(encoding="utf-8"), "sentinel")
+
+            inventory.unlink()
+            journal = library.state_dir / "mutation-journal.json"
+            journal.symlink_to(outside)
+            atomic_json_write(journal, {"executed": False})
+            self.assertFalse(journal.is_symlink())
+            self.assertEqual(outside.read_text(encoding="utf-8"), "sentinel")
+            self.assertEqual(json.loads(journal.read_text())["executed"], False)
+
+    def test_malformed_backend_journal_is_quarantined_and_recoverable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [],
+                "duplicate_groups": [],
+            }
+            journal = state / "mutation-journal.json"
+            audio_library.atomic_text_write(journal, "{malformed")
+
+            self.assertEqual(restore_inventory_evidence(manifest, state), 0)
+            self.assertFalse(journal.exists())
+            quarantined = list(
+                (state / "recovery" / "malformed-journals").glob("*.json")
+            )
+            self.assertEqual(len(quarantined), 1)
+            self.assertEqual(quarantined[0].read_text(encoding="utf-8"), "{malformed")
+            self.assertEqual(
+                manifest["state_recovery_events"][0]["path"],
+                "mutation-journal.json",
+            )
+            for payload in (
+                "[]",
+                '{"executed": "yes"}',
+                '{"completed": [1]}',
+            ):
+                audio_library.atomic_text_write(journal, payload)
+                self.assertEqual(restore_inventory_evidence(manifest, state), 0)
+            self.assertEqual(
+                len(list((state / "recovery" / "malformed-journals").glob("*.json"))),
+                4,
+            )
+
+    def test_gpu_stage_rejects_escape_and_symlink_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            outside = root / "outside.wav"
+            outside.write_bytes(b"outside secret")
+            record = _record("record.wav", HASH_A, tmk_path=None)
+            backend.stage.return_value = {
+                "staged_path": str(outside),
+                "record": {"sha256": HASH_A},
+            }
+            with self.assertRaisesRegex(ValueError, "escaped private scratch"):
+                library._stage_materialized_record(record)
+
+            linked = library.staging_dir / "linked.wav"
+            linked.symlink_to(outside)
+            backend.stage.return_value = {
+                "staged_path": str(linked),
+                "record": {"sha256": HASH_A},
+            }
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                library._stage_materialized_record(record)
+            self.assertEqual(outside.read_bytes(), b"outside secret")
+
+            drifted = library.staging_dir / "drifted.wav"
+            drifted.write_bytes(b"drifted")
+            backend.stage.return_value = {
+                "staged_path": str(drifted),
+                "record": {"sha256": HASH_B},
+            }
+            with self.assertRaisesRegex(ValueError, "SHA-256 changed"):
+                library._stage_materialized_record(record)
+            self.assertFalse(drifted.exists())
+            self.assertFalse(record["sha256_verified"])
+
     def test_atomic_state_write_resists_post_validation_symlink_swap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -3326,6 +3513,56 @@ class CliTests(unittest.TestCase):
                 atomic_json_write(output, {"safe": True})
             (directory / ".state.json.missing.tmp").unlink()
 
+            private_file = directory / "private.json"
+            private_file.write_text("{}", encoding="utf-8")
+            with (
+                patch("audio_library.stat.S_ISREG", return_value=False),
+                self.assertRaisesRegex(ValueError, "not a regular file"),
+            ):
+                audio_library.read_private_text(private_file)
+
+            real_fstat = os.fstat
+
+            def wrong_file_owner(descriptor):
+                metadata = real_fstat(descriptor)
+                if audio_library.stat.S_ISREG(metadata.st_mode):
+                    return types.SimpleNamespace(
+                        st_mode=metadata.st_mode,
+                        st_uid=metadata.st_uid + 1,
+                    )
+                return metadata
+
+            with (
+                patch("audio_library.os.fstat", side_effect=wrong_file_owner),
+                self.assertRaisesRegex(PermissionError, "not owned"),
+            ):
+                audio_library.read_private_text(private_file)
+
+            with (
+                patch(
+                    "audio_library.os.fdopen", side_effect=RuntimeError("read failed")
+                ),
+                self.assertRaisesRegex(RuntimeError, "read failed"),
+            ):
+                audio_library.read_private_text(private_file)
+
+            malformed = directory / "malformed.json"
+            malformed.write_text("{", encoding="utf-8")
+            real_stat = os.stat
+
+            def swap_to_non_regular(path, *args, **kwargs):
+                if path == malformed.name and kwargs.get("dir_fd") is not None:
+                    return types.SimpleNamespace(st_mode=audio_library.stat.S_IFDIR)
+                return real_stat(path, *args, **kwargs)
+
+            with (
+                patch("audio_library.os.stat", side_effect=swap_to_non_regular),
+                self.assertRaisesRegex(ValueError, "not a regular file"),
+            ):
+                audio_library.quarantine_malformed_private_file(
+                    malformed, directory / "quarantine"
+                )
+
     def test_security_boundaries_revalidate_sha_before_cache_and_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3407,6 +3644,21 @@ class CliTests(unittest.TestCase):
             plan = library.plan(defer_unready=True)
             self.assertEqual(plan["operations"], [])
             self.assertEqual(plan["deferred_paths"], ["canonical.wav", "duplicate.wav"])
+
+    def test_security_boundaries_defer_audio_without_any_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [_record("unhashed.wav", "", tmk_path=None)],
+                "duplicate_groups": [],
+            }
+            atomic_json_write(state / "inventory.json", manifest)
+            plan = AudioLibrary(root, Mock()).plan(defer_unready=True)
+            self.assertEqual(plan["operations"], [])
+            self.assertEqual(plan["deferred_paths"], ["unhashed.wav"])
 
     def test_security_boundaries_defer_hashless_tmk_pairs_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

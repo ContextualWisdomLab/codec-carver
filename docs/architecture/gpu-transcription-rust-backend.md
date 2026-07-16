@@ -58,15 +58,19 @@ preferred interface for recording curation.
   untouched source path instead of fabricating a transcript description.
 - Rust parses standardized timestamps and optional location components
   idempotently. Python archives prior inventories. An executed mutation journal
-  restores verified SHA-256 identity because Rust checked the source before the
-  move; a matching transcript sidecar or unchanged prior path and byte size is
-  only an unverified hint until current bytes are staged and hashed.
+  restores SHA-256 identity continuity because Rust checked the source before
+  the move, but that restored value is still an unverified hint until current
+  bytes are opened and hashed again. The same rule applies to a matching
+  transcript sidecar or unchanged prior path and byte size.
 - Standard names use
   `YYYY-MM-DD_HH-MM-SS__location?__transcript-description__sha256-12.ext`.
 - Long-transcript descriptions can use a pinned local Gemma model to extract a
   central idea, outcome, confidence, and cited transcript segments before a
   second pass forms the title. Generic keyword lists and low-confidence analyses
-  are rejected; deterministic extractive topic density remains the failure-safe.
+  are rejected. Evidence IDs must be anchored transcript labels, every claim
+  term must occur in the cited segments, and every title term must be composed
+  from transcript terms rather than model-authored claims. Deterministic
+  extractive topic density remains the failure-safe.
 - A name already satisfying the timestamp, known-location, extension, and
   SHA-prefix contract is stable across rescans. Description extractor upgrades
   therefore affect only previously unstandardized recordings.
@@ -91,6 +95,13 @@ preferred interface for recording curation.
   directory must be real directories rather than symlinks.
 - Scratch cleanup unlinks a direct regular-file child relative to a no-follow
   directory descriptor, avoiding pathname containment check/use races.
+- Rust opens every materialized audio path component with no-follow descriptors
+  and the GPU consumes only a private copy hashed from that opened descriptor.
+  Symlink swaps cannot redirect the GPU read after validation.
+- Rust returns inventory and apply results over stdout. Python owns all durable
+  state commits through descriptor-relative atomic replacement, never follows a
+  final-name symlink, and recoverably quarantines partial or schema-invalid
+  mutation journals instead of blocking future inventory runs.
 - The Rust executable comes only from an integrity-pinned explicit path or a
   repository build and is checked for owner, mode, symlink, and SHA-256 drift.
   `ffprobe` comes only from fixed approved system roots;
@@ -136,7 +147,10 @@ and valid segment IDs, then runs a separate title pass so tools and frequent
 nouns do not displace the recording's actual purpose. A deterministic scorer
 selects the strongest thesis and outcome evidence, generic-only titles and low
 confidence are rejected, and the complete audit context is stored beside the
-title. The only accepted model identifier and immutable Hub revision are
+title. Only anchored `[S###]` lines establish segment identity. Central-idea and
+outcome terms are checked against those cited lines, while title terms are
+checked directly against the transcript; model-authored analysis cannot become
+its own grounding source. The only accepted model identifier and immutable Hub revision are
 compiled in, tokenizer `trust_remote_code` is forced off, and old validation
 versions are regenerated rather than relabeled. No Ollama server is used and
 transcript text is not sent to a hosted inference API. A failed semantic
@@ -152,8 +166,10 @@ command supports local single-file inspection. The `stage` command handles an
 iCloud placeholder in one coordinated pass: Foundation materializes it while
 Rust writes local system scratch and calculates SHA-256 concurrently, verifies
 any existing staged content, and returns the scratch path plus the original file
-record. The `evict` command releases local iCloud blocks with Foundation rather
-than a shell utility. A changed known hash stops transcription.
+record. Already-local sources are opened component by component with `openat`,
+`O_NOFOLLOW`, and directory descriptors before that same single-pass
+copy-and-hash. The `evict` command releases local iCloud blocks with Foundation
+rather than a shell utility. A changed known hash stops transcription.
 
 ## Evidence precedence
 
@@ -183,12 +199,17 @@ The library root contains a generated, excluded state directory:
 ├── transcripts/<sha256>.txt
 ├── mutation-plan.json
 ├── mutation-journal.json
+├── recovery/malformed-journals/*.json
 └── quarantine/exact-duplicates/<sha256>/...
 ```
 
 Transcripts are keyed by full SHA-256 so a renamed recording or duplicate copy
 does not trigger a second inference run. The directory is `0700` and every
 sidecar is `0600` because transcripts can contain sensitive conversations.
+Inventory and mutation backends return JSON to Python over stdout; only Python
+persists these files with descriptor-relative atomic replacement. A malformed
+journal is preserved in the recovery tree with a digest-bearing name and a
+`state_recovery_events` entry before inventory continues.
 
 Large audio scratch is outside the iCloud library in an unpredictable,
 owner-only directory created directly under the resolved operating-system

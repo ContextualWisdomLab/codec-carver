@@ -190,6 +190,7 @@ dependencies = [
  "block2",
  "chrono",
  "clap",
+ "libc",
  "objc2-foundation",
  "rayon",
  "regex",

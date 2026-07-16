@@ -239,8 +239,35 @@ DESCRIPTION_STOPWORDS = frozenset(
 )
 DESCRIPTION_DISPLAY_STOPWORDS = frozenset({"결론적", "관해서", "내가", "되게"})
 SEMANTIC_DESCRIPTION_RE = re.compile(r"^[0-9A-Za-z가-힣]+(?:-[0-9A-Za-z가-힣]+){1,5}$")
-SEMANTIC_DESCRIPTION_VALIDATION = "context_evidence_title_v3"
+SEMANTIC_DESCRIPTION_VALIDATION = "context_evidence_title_v4"
 SEMANTIC_EVIDENCE_ID_RE = re.compile(r"\bS\d{3}\b")
+SEMANTIC_EVIDENCE_LABEL_RE = re.compile(r"^\[(S\d{3})\]\s+(.+)$", re.MULTILINE)
+CONTEXT_CLAIM_RELATION_PREFIXES = (
+    "결정",
+    "검토",
+    "대상",
+    "발생",
+    "문제",
+    "미결",
+    "보류",
+    "상태",
+    "완료",
+    "주장",
+    "중심",
+    "진행",
+    "추진",
+    "판단",
+    "필요",
+    "해결",
+    "확인",
+    "핵심",
+    "합니다",
+    "했습니다",
+    "해야",
+)
+CONTEXT_CLAIM_CONNECTIVES = frozenset(
+    {"것이", "그리고", "기반", "대한", "통해", "우선", "위한", "이후", "및"}
+)
 
 
 class GpuTranscriptionUnavailableError(RuntimeError):
@@ -377,18 +404,14 @@ class RustBackend:
         assert self.binary is not None and self.binary_sha256 is not None
         trusted_executable(self.binary, expected_sha256=self.binary_sha256)
 
-    def inventory(
-        self, root: Path, output: Path, *, threads: int | None = None
-    ) -> dict[str, Any]:
-        """Create a SHA-256/TMK inventory in one Rust backend invocation."""
+    def inventory(self, root: Path, *, threads: int | None = None) -> dict[str, Any]:
+        """Return an inventory on stdout so Python owns atomic state persistence."""
 
         command = [
             str(self.binary),
             "inventory",
             "--root",
             str(root),
-            "--output",
-            str(output),
         ]
         if threads is not None:
             command.extend(["--threads", str(threads)])
@@ -568,16 +591,14 @@ class RustBackend:
             for partial in staging_dir.glob(pattern):
                 remove_staged_file(staging_dir, partial)
 
-    def apply(self, plan: Path, journal: Path, *, execute: bool) -> dict[str, Any]:
-        """Validate or execute an auditable mutation plan in Rust."""
+    def apply(self, plan: Path, *, execute: bool) -> dict[str, Any]:
+        """Return the mutation journal on stdout for an atomic Python commit."""
 
         command = [
             str(self.binary),
             "apply",
             "--plan",
             str(plan),
-            "--journal",
-            str(journal),
         ]
         if execute:
             command.append("--execute")
@@ -971,6 +992,55 @@ def semantic_transcript_excerpt(
     return "\n".join(lines)
 
 
+def contextual_evidence_segments(grounding_text: str) -> dict[str, str]:
+    """Parse only anchored transcript labels, never S-like tokens inside speech."""
+
+    return dict(SEMANTIC_EVIDENCE_LABEL_RE.findall(grounding_text))
+
+
+def validate_context_claim(
+    claim: str,
+    *,
+    label: str,
+    selected_ids: tuple[str, ...],
+    segments: dict[str, str],
+) -> None:
+    """Require each source-specific claim term to occur in its cited segments."""
+
+    evidence_terms = {
+        key
+        for evidence_id in selected_ids
+        for _display, key in description_terms(segments[evidence_id])
+    }
+    claim_terms = [
+        (display, key)
+        for display, key in description_terms(claim)
+        if key not in CONTEXT_CLAIM_CONNECTIVES
+        and not key.startswith(CONTEXT_CLAIM_RELATION_PREFIXES)
+    ]
+    if not claim_terms:
+        raise ValueError(f"{label} lacks transcript-specific terms")
+
+    def grounded(key: str) -> bool:
+        """Allow exact terms and conservative Korean inflection prefixes."""
+
+        return any(
+            key == evidence
+            or (
+                min(len(key), len(evidence)) >= 2
+                and (key.startswith(evidence) or evidence.startswith(key))
+            )
+            for evidence in evidence_terms
+        )
+
+    ungrounded = [display for display, key in claim_terms if not grounded(key)]
+    if ungrounded:
+        raise ValueError(
+            f"{label} contains terms absent from cited transcript evidence: "
+            + ", ".join(ungrounded)
+        )
+
+
 def validate_contextual_description(
     *,
     title: str,
@@ -992,9 +1062,8 @@ def validate_contextual_description(
     normalized_confidence = confidence.strip().casefold()
     if normalized_confidence not in {"high", "medium"}:
         raise ValueError("context confidence is too low for an automatic filename")
-    available_ids = tuple(
-        dict.fromkeys(SEMANTIC_EVIDENCE_ID_RE.findall(grounding_text))
-    )
+    segments = contextual_evidence_segments(grounding_text)
+    available_ids = tuple(segments)
     selected_ids = tuple(
         dict.fromkeys(
             evidence_id.strip().upper() for evidence_id in evidence_segment_ids
@@ -1011,12 +1080,23 @@ def validate_contextual_description(
             "context evidence references absent transcript segments: "
             + ", ".join(invalid_ids)
         )
-    title_grounding = "\n".join((grounding_text, normalized_idea, normalized_outcome))
+    validate_context_claim(
+        normalized_idea,
+        label="central idea",
+        selected_ids=selected_ids,
+        segments=segments,
+    )
+    validate_context_claim(
+        normalized_outcome,
+        label="outcome",
+        selected_ids=selected_ids,
+        segments=segments,
+    )
     validated_title = validate_semantic_description(
         title,
         limit=limit,
         require_prefix=False,
-        grounding_text=title_grounding,
+        grounding_text=grounding_text,
     )
     return SemanticDescriptionResult(
         title=validated_title,
@@ -1076,9 +1156,7 @@ def select_context_evidence(
 ) -> tuple[str, ...]:
     """Choose transcript segments that directly cover the thesis and outcome."""
 
-    segments = dict(
-        re.findall(r"^\[(S\d{3})\]\s*(.+)$", grounding_text, flags=re.MULTILINE)
-    )
+    segments = contextual_evidence_segments(grounding_text)
     original_ids = tuple(dict.fromkeys(model_evidence_segment_ids))
     if not segments:
         return original_ids
@@ -1453,7 +1531,7 @@ class GemmaDescriptionGenerator:
                 "transcript_excerpt": excerpt,
             }
         )
-        title_grounding = "\n".join((excerpt, analysis.central_idea, analysis.outcome))
+        title_grounding = excerpt
         title_prompt = (
             "아래 분석과 녹취 근거를 대조해 대화의 중심 사상이 드러나는 파일명 "
             "제목을 확정하세요. 주제 명사만 나열하지 말고, 핵심 문제·주장·결정·"
@@ -1487,7 +1565,7 @@ class GemmaDescriptionGenerator:
                     "allowed_terms": ",".join(
                         dict.fromkeys(
                             key
-                            for _display, key in description_terms(title_grounding)
+                            for _display, key in description_terms(excerpt)
                             if not key.startswith("s00")
                         )
                     )[:2_000],
@@ -1498,7 +1576,7 @@ class GemmaDescriptionGenerator:
                 "아래 제목은 중심 사상을 구별하지 못해 거부되었습니다. 일반 명사 "
                 "나열을 반복하지 말고, 녹취의 구체적 문제·원인·주장 중 하나를 "
                 "결정·목적과 결합한 제목으로 고치세요. 모든 단어는 원문에 있거나 "
-                "검증된 중심 사상·결론에 있어야 합니다. 합성어는 allowed_terms에 "
+                "녹취 원문에 있어야 합니다. 합성어는 allowed_terms에 "
                 "있는 단어만 이어 붙이세요. validation_error에 나온 단어를 그대로 "
                 "반복하지 마세요. 출력은 한 줄만 허용됩니다.\n"
                 "DESCRIPTION: 구체적인중심문제-대상과결정\n"
@@ -1774,6 +1852,7 @@ def atomic_text_replace(path: Path, value: str) -> None:
             dst_dir_fd=directory_fd,
         )
         temporary_exists = False
+        os.fsync(directory_fd)
     finally:
         if temporary_exists:
             try:
@@ -1794,6 +1873,56 @@ def atomic_text_write(path: Path, value: str) -> None:
     """Persist sensitive transcript text with owner-only permissions."""
 
     atomic_text_replace(path, value)
+
+
+def read_private_text(path: Path) -> str:
+    """Read one owner-owned regular state file without following its final name."""
+
+    directory_fd = open_private_directory(path.parent)
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(path.name, flags, dir_fd=directory_fd)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"private state is not a regular file: {path}")
+        if metadata.st_uid != os.geteuid():
+            raise PermissionError(f"private state is not owned by this user: {path}")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = None
+            return handle.read()
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(directory_fd)
+
+
+def quarantine_malformed_private_file(path: Path, quarantine_dir: Path) -> Path:
+    """Move malformed regular state aside by directory descriptors for recovery."""
+
+    payload = read_private_text(path).encode("utf-8")
+    source_fd = open_private_directory(path.parent)
+    quarantine_fd = open_private_directory(quarantine_dir)
+    destination_name = (
+        f"{path.stem}-{hashlib.sha256(payload).hexdigest()[:12]}-"
+        f"{secrets.token_hex(8)}{path.suffix}"
+    )
+    try:
+        metadata = os.stat(path.name, dir_fd=source_fd, follow_symlinks=False)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"malformed state is not a regular file: {path}")
+        os.rename(
+            path.name,
+            destination_name,
+            src_dir_fd=source_fd,
+            dst_dir_fd=quarantine_fd,
+        )
+        os.fsync(source_fd)
+        os.fsync(quarantine_fd)
+    finally:
+        os.close(source_fd)
+        os.close(quarantine_fd)
+    return quarantine_dir / destination_name
 
 
 def safe_transcript_path(
@@ -1846,9 +1975,13 @@ class AudioLibrary:
 
         inventory_path = self.state_dir / "inventory.json"
         previous_manifest = None
-        if inventory_path.is_file():
-            previous_bytes = inventory_path.read_bytes()
-            previous_manifest = json.loads(previous_bytes)
+        try:
+            previous_text = read_private_text(inventory_path)
+        except FileNotFoundError:
+            pass
+        else:
+            previous_bytes = previous_text.encode("utf-8")
+            previous_manifest = json.loads(previous_text)
             history_path = (
                 self.state_dir
                 / "inventory-history"
@@ -1856,12 +1989,13 @@ class AudioLibrary:
             )
             if not history_path.is_file():
                 atomic_json_write(history_path, previous_manifest)
-        manifest = self.backend.inventory(
-            self.root,
-            inventory_path,
-            threads=threads,
-        )
+        manifest = self.backend.inventory(self.root, threads=threads)
         if "files" in manifest:
+            for record in manifest["files"]:
+                if record.get("sha256"):
+                    validate_sha256(record["sha256"], label="backend inventory SHA-256")
+                    record["sha256_verified"] = True
+                    record["sha256_source"] = "content"
             restore_inventory_evidence(
                 manifest,
                 self.state_dir,
@@ -1889,6 +2023,7 @@ class AudioLibrary:
         failures = []
         for index, record in enumerate(records, start=1):
             status = "failed"
+            staged_audio: Path | None = None
             try:
                 self._verify_materialized_record(record)
                 sha256 = validate_sha256(record["sha256"])
@@ -1898,7 +2033,8 @@ class AudioLibrary:
                     skipped += 1
                     status = "cached"
                 else:
-                    result = transcriber.transcribe(self.root / record["path"])
+                    staged_audio = self._stage_materialized_record(record)
+                    result = transcriber.transcribe(staged_audio)
                     result.update(
                         {
                             "schema_version": 1,
@@ -1921,6 +2057,9 @@ class AudioLibrary:
                 failed += 1
                 status = "failed"
                 failures.append({"path": record["path"], "error": str(exc)})
+            finally:
+                if staged_audio is not None:
+                    remove_staged_file(self.staging_dir, staged_audio)
             if progress:
                 progress(index, len(records), record["path"], status)
         rebuild_manifest_summary(manifest)
@@ -2306,6 +2445,11 @@ class AudioLibrary:
                     cached += 1
                     status = "cached"
                 else:
+                    if staged_audio is None:
+                        staged_audio = self._stage_materialized_record(
+                            record, timeout_seconds=inspect_timeout_seconds
+                        )
+                        audio_input = staged_audio
                     if any(not pending.done() for pending in prefetch_futures.values()):
                         prefetch_transcription_overlaps += 1
                     result = transcriber.transcribe(audio_input)
@@ -2402,7 +2546,7 @@ class AudioLibrary:
             recorded_at = record.get("recorded_at")
             if recorded_at and is_existing_standard_filename(record, recorded_at):
                 continue
-            if not self._record_ready_for_mutation(record):
+            if not record_sha_is_verified(record):
                 continue
             transcript_path = safe_transcript_path(
                 self.state_dir / "transcripts", record["sha256"]
@@ -2576,11 +2720,18 @@ class AudioLibrary:
                 return None
             return tmk_record
 
+        def defer_record(record: dict[str, Any]) -> None:
+            """Keep a recording and its linked TMK atomic in deferred reporting."""
+
+            missing.append(record["path"])
+            if record.get("tmk_path"):
+                missing.append(record["tmk_path"])
+
         for group in manifest["duplicate_groups"]:
             for duplicate in group["duplicate_paths"]:
                 record = records_by_path[duplicate]
                 if not ready(record):
-                    missing.append(record["path"])
+                    defer_record(record)
                     continue
                 tmk_path = record.get("tmk_path")
                 tmk_record = None
@@ -2631,10 +2782,10 @@ class AudioLibrary:
                 destination = record["path"]
             else:
                 if transcript.get("filename_description_status") == "deferred":
-                    missing.append(record["path"])
+                    defer_record(record)
                     continue
                 if not ready(record):
-                    missing.append(record["path"])
+                    defer_record(record)
                     continue
                 destination = str(
                     Path(record["path"]).with_name(
@@ -2697,7 +2848,7 @@ class AudioLibrary:
             "schema_version": 1,
             "root": str(self.root),
             "inventory_sha256": hashlib.sha256(
-                (self.state_dir / "inventory.json").read_bytes()
+                read_private_text(self.state_dir / "inventory.json").encode("utf-8")
             ).hexdigest(),
             "operations": operations,
             "deferred_paths": deferred_paths,
@@ -2711,11 +2862,11 @@ class AudioLibrary:
         """Validate by default, or execute only when explicitly requested."""
 
         self._validate_mutation_plan()
-        return self.backend.apply(
-            self.state_dir / "mutation-plan.json",
-            self.state_dir / "mutation-journal.json",
-            execute=execute,
+        result = self.backend.apply(
+            self.state_dir / "mutation-plan.json", execute=execute
         )
+        atomic_json_write(self.state_dir / "mutation-journal.json", result)
+        return result
 
     def _ensure_secure_state_dir(self) -> None:
         """Keep all durable state in a real owner-only child of the library root."""
@@ -2764,31 +2915,73 @@ class AudioLibrary:
         record["materialized"] = True
         record["error"] = None
 
+    def _stage_materialized_record(
+        self, record: dict[str, Any], *, timeout_seconds: float = 14_400
+    ) -> Path:
+        """Bind GPU consumption to the same private copy whose SHA was verified."""
+
+        ensure_staging_capacity(self.staging_dir, int(record.get("size_bytes", 0)))
+        staged = self.backend.stage(
+            self.root,
+            record["path"],
+            self.staging_dir,
+            timeout_seconds=timeout_seconds,
+        )
+        staged_path = Path(staged["staged_path"]).absolute()
+        if staged_path.parent != self.staging_dir.absolute():
+            raise ValueError(
+                f"backend staged path escaped private scratch: {staged_path}"
+            )
+        try:
+            metadata = os.stat(staged_path, follow_symlinks=False)
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(
+                    f"backend staged artifact is not regular: {staged_path}"
+                )
+            inspected = staged["record"]
+            actual = validate_sha256(inspected.get("sha256"), label="staged SHA-256")
+            expected = validate_sha256(record.get("sha256"), label="record SHA-256")
+            if actual != expected:
+                record["sha256_verified"] = False
+                record["error"] = (
+                    f"SHA-256 changed for {record['path']}: expected {expected}, "
+                    f"got {actual}"
+                )
+                raise ValueError(record["error"])
+        except Exception:
+            remove_staged_file(self.staging_dir, staged_path)
+            raise
+        return staged_path
+
     def _record_ready_for_mutation(self, record: dict[str, Any]) -> bool:
-        """Verify local bytes now, or require prior content-bound staging evidence."""
+        """Require current local bytes; persisted hashes never authorize mutation."""
 
         source = self.root / record["path"]
         if source.is_file() and not is_icloud_dataless(source):
             self._verify_materialized_record(record)
             return True
-        return record_sha_is_verified(record)
+        return False
 
     def _validate_mutation_plan(self) -> None:
         """Reject a tampered plan before it reaches even a mocked/native backend."""
 
         self._ensure_secure_state_dir()
         plan_path = self.state_dir / "mutation-plan.json"
-        if not plan_path.is_file():
+        try:
+            plan_text = read_private_text(plan_path)
+        except FileNotFoundError:
             raise FileNotFoundError(
                 f"mutation plan not found: {plan_path}; call plan() first"
-            )
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            ) from None
+        plan = json.loads(plan_text)
         if plan.get("schema_version") != 1:
             raise ValueError("unsupported mutation plan schema")
         if plan.get("root") != str(self.root):
             raise ValueError("mutation plan root does not match the audio library")
         inventory_path = self.state_dir / "inventory.json"
-        inventory_sha256 = hashlib.sha256(inventory_path.read_bytes()).hexdigest()
+        inventory_sha256 = hashlib.sha256(
+            read_private_text(inventory_path).encode("utf-8")
+        ).hexdigest()
         if plan.get("inventory_sha256") != inventory_sha256:
             raise ValueError("inventory changed after mutation plan generation")
         operations = plan.get("operations")
@@ -2822,7 +3015,7 @@ class AudioLibrary:
             manifest,
             allow_missing_transcripts=allow_missing_transcripts,
             defer_unready=defer_unready,
-            verify_sources=False,
+            verify_sources=True,
         )
         if operations != expected_operations:
             raise ValueError(
@@ -2838,11 +3031,13 @@ class AudioLibrary:
 
         self._ensure_secure_state_dir()
         path = self.state_dir / "inventory.json"
-        if not path.is_file():
+        try:
+            inventory_text = read_private_text(path)
+        except FileNotFoundError:
             raise FileNotFoundError(
                 f"inventory not found: {path}; call inventory() first"
-            )
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+            ) from None
+        manifest = json.loads(inventory_text)
         manifest_root = manifest.get("root")
         if (
             manifest_root is not None
@@ -2925,14 +3120,11 @@ def unique_audio_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 def record_sha_is_verified(record: dict[str, Any]) -> bool:
     """Distinguish current/content-bound hashes from placeholder-only hints."""
 
-    explicit = record.get("sha256_verified")
-    if isinstance(explicit, bool):
-        return explicit
-    return bool(record.get("sha256")) and record.get("sha256_source") not in {
-        "mutation_journal",
-        "previous_inventory",
-        "transcript_sidecar",
-    }
+    return (
+        record.get("sha256_verified") is True
+        and record.get("sha256_source") == "content"
+        and SHA256_RE.fullmatch(str(record.get("sha256", ""))) is not None
+    )
 
 
 def rebuild_manifest_summary(manifest: dict[str, Any]) -> None:
@@ -3052,13 +3244,41 @@ def restore_inventory_evidence(
 
     journal_sha: dict[str, str] = {}
     journal_path = state_dir / "mutation-journal.json"
-    if journal_path.is_file():
-        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    try:
+        journal_text = read_private_text(journal_path)
+    except FileNotFoundError:
+        journal = {}
+    else:
+        try:
+            journal = json.loads(journal_text)
+            if not isinstance(journal, dict):
+                raise ValueError("mutation journal must be a JSON object")
+            if not isinstance(journal.get("executed", False), bool):
+                raise ValueError("mutation journal executed flag must be boolean")
+            if not isinstance(journal.get("completed", []), list) or any(
+                not isinstance(operation, dict)
+                for operation in journal.get("completed", [])
+            ):
+                raise ValueError("mutation journal completed operations must be a list")
+        except (json.JSONDecodeError, ValueError) as exc:
+            quarantined = quarantine_malformed_private_file(
+                journal_path, state_dir / "recovery" / "malformed-journals"
+            )
+            manifest.setdefault("state_recovery_events", []).append(
+                {
+                    "path": journal_path.name,
+                    "quarantined_path": str(quarantined.relative_to(state_dir)),
+                    "error": str(exc),
+                }
+            )
+            journal = {}
+    if journal:
         if journal.get("executed"):
             journal_sha = {
                 operation["destination"]: operation["sha256"]
                 for operation in journal.get("completed", [])
-                if operation.get("sha256")
+                if isinstance(operation.get("destination"), str)
+                and operation.get("sha256")
                 and SHA256_RE.fullmatch(str(operation["sha256"]))
             }
     transcript_dir = state_dir / "transcripts"
@@ -3072,8 +3292,6 @@ def restore_inventory_evidence(
     }
     restored = 0
     for record in manifest["files"]:
-        if record.get("sha256"):
-            record.setdefault("sha256_verified", True)
         if not record.get("sha256"):
             sha256 = journal_sha.get(record["path"])
             source = "mutation_journal"

@@ -170,10 +170,14 @@ generic-only titles are deferred. The final title and its audit context are
 cached together in the SHA-keyed transcript sidecar, and evidence selection is
 rescored against both the thesis and outcome. The model identifier and revision
 are allowlisted, tokenizer remote code is disabled, transcript prompt data is
-control-delimiter escaped JSON, and title concepts must be supported by the
-transcript or its validated contextual analysis. Old keyword-only caches are not
-silently upgraded. Planning consumes this evidence-backed description when
-present and retains the deterministic extractor as a no-model failure-safe.
+control-delimiter escaped JSON, and every title term must be recoverable from
+the transcript itself. Segment references count only when they appear as
+anchored `[S###]` labels; an `S###` string inside speech is not evidence. Central
+idea and outcome terms must also occur in the cited transcript segments, so the
+model cannot legitimize an invented title through its own analysis fields. Old
+keyword-only caches are not silently upgraded. Planning consumes this
+evidence-backed description when present and retains the deterministic extractor
+as a no-model failure-safe.
 Once semantic analysis has explicitly failed, its reason is checkpointed and
 the unstandardized recording is deferred instead of being renamed from a
 keyword-only fallback.
@@ -182,6 +186,11 @@ Existing SHA-bound standard names remain stable.
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
 that local stage, and Python atomically checkpoints before removing the stage.
+Already-materialized recordings follow the same byte-binding rule: Rust opens
+each path component with no-follow descriptors, copies and hashes the opened
+file into private scratch, and the GPU reads only that verified copy. A pathname
+swap after inspection therefore cannot redirect transcription outside the
+library.
 `--prefetch-workers` keeps a bounded rolling queue of Rust/iCloud staging calls
 full; `--prefetch-max-bytes` caps their combined logical size (512 MiB by
 default). As soon as the next selected recording is staged, the ordered Python
@@ -246,9 +255,11 @@ Every rescan archives the previous inventory by its SHA-256. If iCloud evicts a
 previously hashed recording, same-path/same-size evidence and transcript
 sidecars restore its full hash only as an explicitly unverified identity hint.
 It cannot form an exact-duplicate group or a new rename/quarantine operation
-until Rust hashes current bytes. An executed mutation journal remains verified
-because Rust checked the full source digest before the move. Materialized files
-are rehashed before any transcript cache hit, GPU call, or new mutation plan.
+until Rust hashes current bytes. An executed mutation journal can restore
+identity continuity after a move, but remains unverified until current bytes are
+opened and hashed again. Materialized files are rehashed before any transcript
+cache hit or new mutation plan, then copied and hashed into private scratch
+before a GPU call.
 Transcripts are keyed by the full SHA-256 under
 `.codec-carver/transcripts/`, use owner-only directory/file permissions, and
 accept only canonical 64-hex digest filenames. Exact copies are inferred only
@@ -266,6 +277,11 @@ performed by default. Inventory, TMK, transcript, and mutation paths are
 validated beneath the canonical library root before Python or Rust receives
 them. Symlinked state/staging roots are refused, and scratch cleanup uses a
 no-follow directory handle rather than a check-then-unlink pathname.
+Rust returns inventory and mutation-journal JSON on stdout; Python alone commits
+those state files through descriptor-relative atomic replacement. Final-name
+symlinks are never followed, and a partial or schema-invalid mutation journal is
+moved to `.codec-carver/recovery/malformed-journals/` so a damaged checkpoint
+cannot brick later inventories.
 
 The importable API is `audio_library.AudioLibrary`. The architecture, evidence
 precedence, filename contract, and primary research/standards sources are in
