@@ -569,6 +569,13 @@ class NamingTests(unittest.TestCase):
             ),
             "경영보고지연-설비데이터통합",
         )
+        self.assertEqual(
+            validate_semantic_description(
+                "DESCRIPTION: 수작업-VOC-과제선정에서-시스템-관리로",
+                grounding_text="수작업 VOC 과제 선정과 시스템 관리",
+            ),
+            "수작업-VOC-과제선정에서-시스템-관리로",
+        )
         contextual = audio_library.parse_contextual_description(
             "CENTRAL_IDEA: 수기 경영 보고의 지연을 설비 데이터 통합으로 해결해야 합니다.\n"
             "OUTCOME: 설비 데이터 통합을 우선 추진합니다.\n"
@@ -796,6 +803,16 @@ class NamingTests(unittest.TestCase):
             (
                 "바스 고도화 프로젝트를 추진해야 합니다.",
                 "프로젝트 추진",
+                "outcome lacks a concrete purpose",
+            ),
+            (
+                "데이터 분석 기술적인 측면보다 업무 과정이 먼저입니다.",
+                "전문 말씀하심 과정",
+                "outcome lacks a concrete purpose",
+            ),
+            (
+                "친구분과 미팅을 해서 어떤 부분이 문제인지 확인합니다.",
+                "어떤 부분이 문제가 있는지 알아보는 것",
                 "outcome lacks a concrete purpose",
             ),
         ):

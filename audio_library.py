@@ -329,6 +329,7 @@ CONTEXT_CLAIM_CONNECTIVES = frozenset(
 )
 CONTEXT_GENERIC_OUTCOME_TERMS = frozenset(
     {
+        "과정",
         "결정",
         "검토",
         "계획",
@@ -337,16 +338,22 @@ CONTEXT_GENERIC_OUTCOME_TERMS = frozenset(
         "단계",
         "당장",
         "미결",
+        "말씀",
+        "말씀하신",
         "보류",
         "상태",
+        "측면",
         "완료",
+        "있는지",
         "작업",
+        "전문",
         "진행",
         "추진",
         "판단",
         "프로젝트",
     }
 )
+CONTEXT_GENERIC_OUTCOME_PREFIXES = ("알아보", "말씀")
 
 
 class GpuTranscriptionUnavailableError(RuntimeError):
@@ -1609,6 +1616,7 @@ def contextual_outcome_terms(value: str) -> tuple[str, ...]:
             for _display, key in description_terms(value)
             if key not in CONTEXT_CLAIM_CONNECTIVES
             and key not in CONTEXT_GENERIC_OUTCOME_TERMS
+            and not key.startswith(CONTEXT_GENERIC_OUTCOME_PREFIXES)
             and not key.startswith(CONTEXT_CLAIM_RELATION_PREFIXES)
         )
     )
@@ -2165,27 +2173,35 @@ def validate_semantic_description(
         )
 
         def is_grounded(token: str) -> bool:
-            """Accept a literal term or a compound made only from source terms."""
+            """Accept a literal, particle-normalized, or source-only compound term."""
 
-            candidate = token.casefold()
-            if candidate in source_terms or any(
-                KOREAN_TERM_RE.fullmatch(candidate) is not None
-                and KOREAN_TERM_RE.fullmatch(source) is not None
-                and source.startswith(candidate)
-                for source in source_terms
-                if min(len(source), len(candidate)) >= 2
-            ):
-                return True
-            reachable = {0}
-            for start in range(len(candidate)):
-                if start not in reachable:
-                    continue
-                reachable.update(
-                    start + len(term)
-                    for term in source_terms
-                    if candidate.startswith(term, start)
+            candidates = tuple(
+                dict.fromkeys(
+                    [token.casefold()]
+                    + [key for _display, key in description_terms(token)]
                 )
-            return len(candidate) in reachable
+            )
+            for candidate in candidates:
+                if candidate in source_terms or any(
+                    KOREAN_TERM_RE.fullmatch(candidate) is not None
+                    and KOREAN_TERM_RE.fullmatch(source) is not None
+                    and source.startswith(candidate)
+                    for source in source_terms
+                    if min(len(source), len(candidate)) >= 2
+                ):
+                    return True
+                reachable = {0}
+                for start in range(len(candidate)):
+                    if start not in reachable:
+                        continue
+                    reachable.update(
+                        start + len(term)
+                        for term in source_terms
+                        if candidate.startswith(term, start)
+                    )
+                if len(candidate) in reachable:
+                    return True
+            return False
 
         ungrounded = [token for token in tokens if not is_grounded(token)]
         if ungrounded:
