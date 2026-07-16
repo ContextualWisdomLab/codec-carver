@@ -21,6 +21,7 @@ import secrets
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import wave
@@ -45,6 +46,7 @@ DEFAULT_CUDA_MODEL_REPOSITORY = "dropbox-dash/faster-whisper-large-v3-turbo"
 DEFAULT_CUDA_MODEL_REVISION = "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
 DEFAULT_GEMMA_DESCRIPTION_MODEL = "mlx-community/gemma-4-e2b-it-4bit"
 DEFAULT_GEMMA_DESCRIPTION_REVISION = "238767527555cb75a05732a84dff5d6ba0dd6809"
+DEFAULT_MLX_IMPORT_TIMEOUT_SECONDS = 30
 APPROVED_FFPROBE_PATHS = (
     Path("/opt/homebrew/bin/ffprobe"),
     Path("/usr/local/bin/ffprobe"),
@@ -1335,7 +1337,7 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
     repeated_segment_count = max(Counter(normalized_segments).values(), default=0)
     background_or_repetition = (
         stock_count >= 2
-        and stock_count * 5 >= len(segment_texts)
+        and stock_count * 8 >= len(segment_texts)
         or len(lexical_tokens) >= 12
         and dominant_token_count * 3 >= len(lexical_tokens)
         and len(token_counts) * 4 <= len(lexical_tokens)
@@ -2126,6 +2128,46 @@ def prompt_data_json(payload: dict[str, str]) -> str:
     )
 
 
+def preflight_mlx_vlm_import(
+    timeout_seconds: float = DEFAULT_MLX_IMPORT_TIMEOUT_SECONDS,
+) -> None:
+    """Fail boundedly when macOS stalls while loading MLX-VLM native libraries."""
+
+    if "mlx_vlm" in sys.modules:
+        return
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "from mlx_vlm import generate, load; "
+            "from mlx_vlm.prompt_utils import apply_chat_template; "
+            "from mlx_vlm.utils import load_config"
+        ),
+    ]
+    try:
+        subprocess.run(
+            command,
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+            env=trusted_child_environment(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SemanticDescriptionUnavailableError(
+            "MLX-VLM native-library initialization exceeded "
+            f"{timeout_seconds:g} seconds"
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        detail = str(exc.stderr or "").strip()[-2_000:]
+        raise SemanticDescriptionUnavailableError(
+            "MLX-VLM native-library preflight failed: "
+            f"{detail or 'no diagnostic output'}"
+        ) from exc
+
+
 def install_gemma4_mlx_weight_layout_compatibility() -> None:
     """Backport the upstream Gemma 4 audio-weight layout fix to MLX-VLM 0.6.4."""
 
@@ -2183,6 +2225,7 @@ class GemmaDescriptionGenerator:
         """Load one pinned model for all descriptions in the current batch."""
 
         validate_gemma_model_selection(model, revision)
+        preflight_mlx_vlm_import()
         try:
             from mlx_vlm import generate, load  # type: ignore[import-not-found]
             from mlx_vlm.prompt_utils import (  # type: ignore[import-not-found]
@@ -3662,8 +3705,6 @@ class AudioLibrary:
                 and record["path"] not in requested_paths
             ):
                 continue
-            if not record_sha_is_verified(record):
-                continue
             transcript_path = safe_transcript_path(
                 self.state_dir / "transcripts", record["sha256"]
             )
@@ -3690,6 +3731,7 @@ class AudioLibrary:
                 loaded_transcript = json.loads(transcript_text)
                 if not isinstance(loaded_transcript, dict):
                     raise ValueError("transcript sidecar must be a JSON object")
+                validate_transcript_record_identity(record, loaded_transcript)
                 transcript = loaded_transcript
                 quality_flags = transcript_quality_flags(transcript)
                 if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags:
@@ -4335,6 +4377,28 @@ def record_sha_is_verified(record: dict[str, Any]) -> bool:
         and record.get("sha256_source") == "content"
         and SHA256_RE.fullmatch(str(record.get("sha256", ""))) is not None
     )
+
+
+def validate_transcript_record_identity(
+    record: dict[str, Any], transcript: dict[str, Any]
+) -> str:
+    """Bind a transcript sidecar to its inventory record without reading audio bytes."""
+
+    record_sha256 = validate_sha256(record.get("sha256"))
+    transcript_sha256 = transcript.get("sha256")
+    if transcript_sha256 is None:
+        if record_sha_is_verified(record):
+            return record_sha256
+        raise ValueError(
+            "dataless or otherwise unverified audio requires a transcript-sidecar SHA-256"
+        )
+    transcript_sha256 = validate_sha256(transcript_sha256)
+    if transcript_sha256 != record_sha256:
+        raise ValueError(
+            "transcript-sidecar SHA-256 does not match its inventory record: "
+            f"{transcript_sha256} != {record_sha256}"
+        )
+    return record_sha256
 
 
 def rebuild_manifest_summary(manifest: dict[str, Any]) -> None:

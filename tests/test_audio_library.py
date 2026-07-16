@@ -264,6 +264,46 @@ class NamingTests(unittest.TestCase):
             audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
             audio_library.transcript_quality_flags(stock_background),
         )
+        diluted_stock_background = {
+            "segments": [
+                *[{"text": "다음 영상에서 만나요."} for _ in range(13)],
+                *[{"text": f"서로다른발언{index}"} for index in range(79)],
+            ]
+        }
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(diluted_stock_background),
+        )
+        sparse_stock_phrases = {
+            "segments": [
+                {"text": "다음 영상에서 만나요."},
+                {"text": "다음 영상에서 만나요."},
+                *[
+                    {"text": value}
+                    for value in (
+                        "예산",
+                        "배포",
+                        "일정",
+                        "검토",
+                        "설계",
+                        "고객",
+                        "시장",
+                        "품질",
+                        "보안",
+                        "운영",
+                        "책임",
+                        "계약",
+                        "시험",
+                        "분석",
+                        "결정",
+                    )
+                ],
+            ]
+        }
+        self.assertNotIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(sparse_stock_phrases),
+        )
         dominant_background = {"text": "도움말 " * 20 + "종료 안내"}
         self.assertIn(
             audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
@@ -1133,6 +1173,7 @@ class NamingTests(unittest.TestCase):
             return real_import(name, *args, **kwargs)
 
         with (
+            patch("audio_library.preflight_mlx_vlm_import"),
             patch("builtins.__import__", side_effect=blocked_import),
             self.assertRaises(audio_library.SemanticDescriptionUnavailableError),
         ):
@@ -1236,6 +1277,56 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(
             without_config[f"{conv}.layer0.conv.weight"].shape, (128, 3, 1, 3)
         )
+
+    def test_mlx_vlm_preflight_is_bounded_and_reports_failures(self) -> None:
+        with (
+            patch.dict(sys.modules, {"mlx_vlm": types.ModuleType("mlx_vlm")}),
+            patch("audio_library.subprocess.run") as run,
+        ):
+            audio_library.preflight_mlx_vlm_import()
+        run.assert_not_called()
+
+        with patch.dict(sys.modules, {}, clear=False):
+            sys.modules.pop("mlx_vlm", None)
+            with patch("audio_library.subprocess.run") as run:
+                audio_library.preflight_mlx_vlm_import(timeout_seconds=12)
+            self.assertEqual(run.call_args.kwargs["timeout"], 12)
+            self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+            self.assertEqual(run.call_args.kwargs["stdout"], subprocess.DEVNULL)
+            self.assertEqual(run.call_args.kwargs["stderr"], subprocess.PIPE)
+            self.assertEqual(
+                run.call_args.kwargs["env"]["PATH"],
+                audio_library.TRUSTED_CHILD_PATH,
+            )
+
+            with (
+                patch(
+                    "audio_library.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(["python"], 7),
+                ),
+                self.assertRaisesRegex(
+                    audio_library.SemanticDescriptionUnavailableError,
+                    "exceeded 7 seconds",
+                ),
+            ):
+                audio_library.preflight_mlx_vlm_import(timeout_seconds=7)
+
+            for stderr, expected in (
+                ("native failure", "native failure"),
+                ("", "no diagnostic output"),
+            ):
+                with (
+                    patch(
+                        "audio_library.subprocess.run",
+                        side_effect=subprocess.CalledProcessError(
+                            1, ["python"], stderr=stderr
+                        ),
+                    ),
+                    self.assertRaisesRegex(
+                        audio_library.SemanticDescriptionUnavailableError, expected
+                    ),
+                ):
+                    audio_library.preflight_mlx_vlm_import()
 
     def test_sanitize_and_standard_filename(self) -> None:
         self.assertEqual(sanitize_component(" a / b ::: ", limit=20), "a-b")
@@ -3851,6 +3942,14 @@ class CliTests(unittest.TestCase):
                     "filename_description_status": "deferred",
                 },
             )
+            atomic_json_write(
+                audio_library.safe_transcript_path(transcript_dir, "d" * 64),
+                {
+                    "sha256": "d" * 64,
+                    "text": "BAS 공정 데이터",
+                    "segments": [{"text": "BAS 공정 데이터"}],
+                },
+            )
 
             generator = Mock()
             generated_result = audio_library.SemanticDescriptionResult(
@@ -4003,6 +4102,47 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("filename_description_status", regenerated_a)
             self.assertNotIn("filename_description_error", regenerated_a)
             self.assertNotIn("filename_description_attempted_at", regenerated_a)
+
+            unverified_generator = Mock()
+            unverified_generator.analyze.return_value = generated_result
+            with patch(
+                "audio_library.GemmaDescriptionGenerator",
+                return_value=unverified_generator,
+            ):
+                described_dataless = library.describe(
+                    relative_paths=["unverified.wav"]
+                )
+            self.assertEqual(described_dataless["selected"], 1)
+            self.assertEqual(described_dataless["completed"], 1)
+            unverified_generator.analyze.assert_called_once()
+
+            unverified_path = audio_library.safe_transcript_path(
+                transcript_dir, "d" * 64
+            )
+            mismatched_unverified = json.loads(
+                unverified_path.read_text(encoding="utf-8")
+            )
+            mismatched_unverified["sha256"] = HASH_A
+            atomic_json_write(unverified_path, mismatched_unverified)
+            with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
+                mismatched = library.describe(relative_paths=["unverified.wav"])
+            self.assertEqual(mismatched["failed"], 1)
+            self.assertIn("does not match", mismatched["failures"][0]["error"])
+            generator_class.assert_not_called()
+            self.assertEqual(
+                json.loads(unverified_path.read_text(encoding="utf-8"))["sha256"],
+                HASH_A,
+            )
+            missing_identity = json.loads(
+                unverified_path.read_text(encoding="utf-8")
+            )
+            missing_identity.pop("sha256")
+            atomic_json_write(unverified_path, missing_identity)
+            with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
+                missing_sha = library.describe(relative_paths=["unverified.wav"])
+            self.assertEqual(missing_sha["failed"], 1)
+            self.assertIn("requires", missing_sha["failures"][0]["error"])
+            generator_class.assert_not_called()
 
             standard_generator = Mock()
             standard_generator.analyze.return_value = generated_result
