@@ -146,6 +146,10 @@ codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
 codec-carver-library /path/to/recordings describe \
   --path "recording-a.m4a" --path "recording-b.wav"
 codec-carver-library /path/to/recordings plan
+# Existing SHA-bound names are preserved by default. Recompute one known-bad
+# standardized name only when its transcript context has been reviewed.
+codec-carver-library /path/to/recordings plan \
+  --refresh-standardized-path "2024-06-24_15-44-11__선유로__old-title__sha256-04d93e2e12fb.m4a"
 # When iCloud has not supplied every source, mutate only fully ready recordings
 # and preserve the unresolved paths as explicit deferred evidence.
 codec-carver-library /path/to/recordings plan --defer-unready

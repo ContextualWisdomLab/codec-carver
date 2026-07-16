@@ -327,6 +327,18 @@ class NamingTests(unittest.TestCase):
         self.assertIn("BAS 공정 데이터", excerpt)
         self.assertNotIn("다음 영상", excerpt)
         self.assertLessEqual(len(excerpt), 80)
+        context_segments = [
+            {"text": f"일반 진행 발언 {index} 세부 설명"} for index in range(80)
+        ]
+        context_segments[21] = {
+            "text": "BAS 고도화가 필요하고 상품화를 추진하고 싶습니다"
+        }
+        context_segments[63] = {"text": "가격 정책을 결정해야 합니다"}
+        context_excerpt = semantic_transcript_excerpt(
+            {"segments": context_segments}, max_segments=8
+        )
+        self.assertIn("BAS 고도화가 필요하고 상품화를 추진", context_excerpt)
+        self.assertIn("가격 정책을 결정", context_excerpt)
         self.assertEqual(
             semantic_transcript_excerpt({"text": " 단일 원문 "}), "[S001] 단일 원문"
         )
@@ -382,12 +394,110 @@ class NamingTests(unittest.TestCase):
         )
         self.assertEqual(contextual.title, "경영보고지연-설비데이터통합")
         self.assertEqual(contextual.evidence_segment_ids, ("S001", "S002"))
+        with self.assertRaisesRegex(ValueError, "omits an explicit purpose"):
+            audio_library.parse_contextual_description(
+                "CENTRAL_IDEA: 바스 표준 화면 고도화 프로젝트를 추진합니다.\n"
+                "OUTCOME: 바스 고도화 프로젝트를 추진합니다.\n"
+                "EVIDENCE: S001,S002\n"
+                "CONFIDENCE: high\n"
+                "DESCRIPTION: 바스-고도화-프로젝트",
+                grounding_text=(
+                    "[S001] 바스 표준 화면 고도화 프로젝트를 추진합니다.\n"
+                    "[S002] 그래야 상품화가 됩니다."
+                ),
+            )
+        purpose_context = audio_library.parse_contextual_description(
+            "CENTRAL_IDEA: 바스 표준 화면 고도화 프로젝트를 추진합니다.\n"
+            "OUTCOME: 상품화를 추진합니다.\n"
+            "EVIDENCE: S001,S002\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: 바스고도화-상품화",
+            grounding_text=(
+                "[S001] 바스 표준 화면 고도화 프로젝트를 추진합니다.\n"
+                "[S002] 그래야 상품화가 됩니다."
+            ),
+        )
+        self.assertEqual(purpose_context.title, "바스고도화-상품화")
+        self.assertEqual(purpose_context.evidence_segment_ids, ("S001", "S002"))
+        rescued_context = audio_library.rescue_contextual_description(
+            "CENTRAL_IDEA: 제품 표준화 및 고도화 개발\n"
+            "OUTCOME: 바스 툴 고도화 프로젝트 추진\n"
+            "EVIDENCE: S002,S003\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: 바스고도화프로젝트",
+            grounding_text=(
+                "[S001] 표준 화면을 개발했습니다.\n"
+                "[S002] 제품 화면을 더 표준화하고 바스 고도화 프로젝트를 합니다.\n"
+                "[S003] 그래야 상품화가 됩니다."
+            ),
+        )
+        self.assertEqual(rescued_context.title, "바스고도화-상품화")
+        self.assertEqual(rescued_context.outcome, "상품화")
+        self.assertEqual(
+            audio_library.contextual_fallback_title(
+                title_hint="관계없는제목",
+                central_idea="바스 고도화가 핵심입니다.",
+                outcome="상품화",
+                grounding_text="바스 고도화를 거쳐 상품화합니다.",
+            ),
+            "바스고도화-상품화",
+        )
+        with self.assertRaisesRegex(ValueError, "without a concrete outcome"):
+            audio_library.contextual_fallback_title(
+                title_hint="바스고도화",
+                central_idea="바스 고도화가 핵심입니다.",
+                outcome="프로젝트 추진",
+                grounding_text="바스 고도화 프로젝트 추진",
+            )
+        with self.assertRaisesRegex(ValueError, "grounded subject-purpose title"):
+            audio_library.contextual_fallback_title(
+                title_hint="바스",
+                central_idea="바스가 핵심입니다.",
+                outcome="판매 상품화",
+                grounding_text="바스 검토",
+            )
+        rescue_candidate = (
+            "CENTRAL_IDEA: 바스 고도화 프로젝트가 핵심입니다.\n"
+            "OUTCOME: 바스 프로젝트 추진\n"
+            "EVIDENCE: {evidence}\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: 바스고도화프로젝트"
+        )
+        with self.assertRaisesRegex(ValueError, "insufficient transcript evidence"):
+            audio_library.rescue_contextual_description(
+                rescue_candidate.format(evidence="S001"),
+                grounding_text="[S001] 바스 고도화\n[S002] 그래야 상품화됩니다.",
+            )
+        with self.assertRaisesRegex(ValueError, "absent transcript evidence"):
+            audio_library.rescue_contextual_description(
+                rescue_candidate.format(evidence="S001,S999"),
+                grounding_text="[S001] 바스 고도화\n[S002] 그래야 상품화됩니다.",
+            )
+        with self.assertRaisesRegex(ValueError, "no explicit cited purpose"):
+            audio_library.rescue_contextual_description(
+                rescue_candidate.format(evidence="S001,S002"),
+                grounding_text="[S001] 바스 고도화\n[S002] 프로젝트 추진",
+            )
         self.assertEqual(
             audio_library.validate_contextual_title_specificity(contextual.title),
             contextual.title,
         )
         with self.assertRaisesRegex(ValueError, "only generic keywords"):
             audio_library.validate_contextual_title_specificity("데이터-통합-의사결정")
+        with self.assertRaisesRegex(ValueError, "omits the concrete outcome"):
+            audio_library.validate_contextual_title_specificity(
+                "바스-고도화-프로젝트", outcome="상품화 추진"
+            )
+        self.assertEqual(
+            audio_library.validate_contextual_title_specificity(
+                "바스고도화-상품화", outcome="상품화 추진"
+            ),
+            "바스고도화-상품화",
+        )
+        with self.assertRaisesRegex(ValueError, "no concrete purpose"):
+            audio_library.validate_contextual_title_specificity(
+                "바스-고도화-프로젝트", outcome="프로젝트 추진"
+            )
         self.assertEqual(
             audio_library.normalize_contextual_title_output(
                 "설비데이터 통합을 통한 경영 의사결정 지연 해결"
@@ -453,6 +563,11 @@ class NamingTests(unittest.TestCase):
         for central_idea, outcome, expected_error in (
             ("짧음", "추진", "central idea is too short"),
             ("설비 데이터 통합을 우선 추진해야 합니다.", "", "outcome is missing"),
+            (
+                "바스 고도화 프로젝트를 추진해야 합니다.",
+                "프로젝트 추진",
+                "outcome lacks a concrete purpose",
+            ),
         ):
             with self.subTest(expected_error=expected_error):
                 with self.assertRaisesRegex(ValueError, expected_error):
@@ -473,6 +588,15 @@ class NamingTests(unittest.TestCase):
                 "DESCRIPTION: 설비데이터-통합추진",
                 grounding_text="[S001] 설비 데이터\n[S002] 통합 추진",
             )
+        with self.assertRaisesRegex(ValueError, "insufficient transcript evidence"):
+            audio_library.validate_contextual_description(
+                title="설비데이터-통합추진",
+                central_idea="설비 데이터 통합을 우선 추진해야 합니다.",
+                outcome="설비 데이터 통합 추진",
+                evidence_segment_ids=("S001",),
+                confidence="high",
+                grounding_text="[S001] 설비 데이터\n[S002] 통합 추진",
+            )
         with self.assertRaisesRegex(ValueError, "absent transcript segments"):
             audio_library.parse_contextual_description(
                 "CENTRAL_IDEA: 설비 데이터 통합을 우선 추진해야 합니다.\n"
@@ -481,6 +605,15 @@ class NamingTests(unittest.TestCase):
                 "CONFIDENCE: high\n"
                 "DESCRIPTION: 설비데이터-통합추진",
                 grounding_text="[S001] 설비 데이터\n[S002] 통합 추진",
+            )
+        with self.assertRaisesRegex(ValueError, "absent transcript segments"):
+            audio_library.validate_contextual_description(
+                title="설비데이터-통합추진",
+                central_idea="설비 데이터 통합을 우선 추진해야 합니다.",
+                outcome="설비 데이터 통합 추진",
+                evidence_segment_ids=("S999",),
+                confidence="high",
+                grounding_text="[S001] 설비 데이터 통합 추진",
             )
         with self.assertRaisesRegex(ValueError, "absent transcript segments"):
             audio_library.parse_contextual_description(
@@ -729,6 +862,87 @@ class NamingTests(unittest.TestCase):
                     }
                 ),
                 "경영의사결정지연-설비데이터기준통합",
+            )
+        self.assertEqual(generate.call_count, 3)
+        generate.reset_mock()
+        invalid_purpose_context = (
+            "CENTRAL_IDEA: 제품 표준화 및 고도화 개발\n"
+            "OUTCOME: 바스 툴 고도화 프로젝트 추진\n"
+            "EVIDENCE: S002,S003\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: 바스고도화프로젝트"
+        )
+        generate.side_effect = [
+            types.SimpleNamespace(text=invalid_purpose_context),
+            types.SimpleNamespace(text=invalid_purpose_context),
+        ]
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.models": fake_models,
+                "mlx_vlm.models.gemma4": fake_gemma4_package,
+                "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
+                "mlx_vlm.prompt_utils": fake_prompt_utils,
+                "mlx_vlm.utils": fake_utils,
+                "transformers": fake_transformers,
+            },
+        ):
+            fallback_generator = GemmaDescriptionGenerator()
+            self.assertEqual(
+                fallback_generator.describe(
+                    {
+                        "segments": [
+                            {"text": "표준 화면을 개발했습니다"},
+                            {
+                                "text": (
+                                    "제품 화면을 더 표준화하고 바스 고도화 프로젝트를 "
+                                    "합니다"
+                                )
+                            },
+                            {"text": "그래야 상품화가 됩니다"},
+                        ]
+                    }
+                ),
+                "바스고도화-상품화",
+            )
+        self.assertEqual(generate.call_count, 2)
+        generate.reset_mock()
+        valid_purpose_context = (
+            "CENTRAL_IDEA: 바스 고도화 프로젝트를 추진합니다.\n"
+            "OUTCOME: 상품화\n"
+            "EVIDENCE: S001,S002\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: 바스고도화-상품화"
+        )
+        generate.side_effect = [
+            types.SimpleNamespace(text=valid_purpose_context),
+            types.SimpleNamespace(text="DESCRIPTION: 바스고도화-프로젝트"),
+            types.SimpleNamespace(text="DESCRIPTION: 바스고도화-프로젝트"),
+        ]
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.models": fake_models,
+                "mlx_vlm.models.gemma4": fake_gemma4_package,
+                "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
+                "mlx_vlm.prompt_utils": fake_prompt_utils,
+                "mlx_vlm.utils": fake_utils,
+                "transformers": fake_transformers,
+            },
+        ):
+            title_fallback_generator = GemmaDescriptionGenerator()
+            self.assertEqual(
+                title_fallback_generator.describe(
+                    {
+                        "segments": [
+                            {"text": "바스 고도화 프로젝트를 추진합니다"},
+                            {"text": "그래야 상품화가 됩니다"},
+                        ]
+                    }
+                ),
+                "바스고도화-상품화",
             )
         self.assertEqual(generate.call_count, 3)
         prompt_payload = audio_library.prompt_data_json(
@@ -1598,6 +1812,20 @@ class AudioLibraryTests(unittest.TestCase):
             )
             plan = AudioLibrary(root, Mock()).plan()
             self.assertEqual(plan["operations"], [])
+            library = AudioLibrary(root, Mock())
+            with patch.object(library, "_record_ready_for_mutation", return_value=True):
+                refreshed = library.plan(refresh_standardized_paths=[standard])
+            self.assertEqual(refreshed["refresh_standardized_paths"], [standard])
+            self.assertEqual(
+                [(item["action"], item["source"]) for item in refreshed["operations"]],
+                [("rename", standard), ("rename", tmk)],
+            )
+            self.assertIn(
+                "나중에-개선된-완전히-다른-대표-주제",
+                refreshed["operations"][0]["destination"],
+            )
+            with self.assertRaisesRegex(ValueError, "absent from inventory"):
+                library.plan(refresh_standardized_paths=["unknown.wav"])
 
     def test_transcribe_writes_sidecars_and_isolates_bad_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2984,7 +3212,13 @@ class CliTests(unittest.TestCase):
                 "--max-files",
                 "1",
             ],
-            [".", "plan", "--defer-unready"],
+            [
+                ".",
+                "plan",
+                "--defer-unready",
+                "--refresh-standardized-path",
+                "a.wav",
+            ],
             [".", "apply", "--execute"],
         ]
         with (
@@ -3027,6 +3261,7 @@ class CliTests(unittest.TestCase):
         library.plan.assert_called_once_with(
             allow_missing_transcripts=False,
             defer_unready=True,
+            refresh_standardized_paths=["a.wav"],
         )
         library.apply.assert_called_once_with(execute=True)
 
@@ -3772,6 +4007,10 @@ class CliTests(unittest.TestCase):
                 ({**valid, "inventory_sha256": HASH_A}, "inventory changed"),
                 ({**valid, "operations": {}}, "must be a list"),
                 ({**valid, "defer_unready": "yes"}, "options must be booleans"),
+                (
+                    {**valid, "refresh_standardized_paths": "safe.wav"},
+                    "refresh paths must be a list",
+                ),
                 ({**valid, "deferred_paths": ["forged"]}, "deferred paths"),
                 ({**valid, "operations": ["bad"]}, "invalid mutation"),
                 (

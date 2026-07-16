@@ -141,16 +141,22 @@ word probability below 0.25 remains in the JSON evidence with a
 `low_confidence` flag but is excluded from usable text and filename descriptions.
 
 The optional `describe` phase treats transcript text as escaped JSON data,
-selects an information-rich segment from each of at most 48 time buckets, and
-uses greedy generation. It first requires a central idea, outcome, confidence,
-and valid segment IDs, then runs a separate title pass so tools and frequent
-nouns do not displace the recording's actual purpose. A deterministic scorer
-selects the strongest thesis and outcome evidence, generic-only titles and low
-confidence are rejected, and the complete audit context is stored beside the
-title. Only anchored `[S###]` lines establish segment identity. Central-idea and
-outcome terms are checked against those cited lines, while title terms are
-checked directly against the transcript; model-authored analysis cannot become
-its own grounding source. The only accepted model identifier and immutable Hub revision are
+reserves part of its at-most-48-segment sample for problem, decision, and
+purpose cues, and uses greedy generation. It first requires a central idea,
+concrete outcome, confidence, and valid segment IDs, then runs a separate title
+pass so tools and frequent nouns do not displace the recording's actual
+purpose. Explicit means-to-purpose clauses such as `그래야` cannot be reduced to
+generic workflow status. If the small model repeats an invalid repair, a
+deterministic fallback may retain only concrete purpose words from its cited
+transcript lines and compose a transcript-grounded subject-purpose title. A
+deterministic scorer expands the evidence set until every claim term is
+covered, generic-only titles and low confidence are rejected, and the complete
+audit context is stored beside the title. Only anchored `[S###]` lines establish
+segment identity. Central-idea and outcome terms are checked against those
+cited lines, while title terms are checked directly against the transcript;
+model-authored analysis cannot become its own grounding source. Existing
+standard names remain immutable unless their exact inventory path is supplied
+to `plan --refresh-standardized-path`. The only accepted model identifier and immutable Hub revision are
 compiled in, tokenizer `trust_remote_code` is forced off, and old validation
 versions are regenerated rather than relabeled. No Ollama server is used and
 transcript text is not sent to a hosted inference API. A failed semantic
