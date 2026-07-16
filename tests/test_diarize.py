@@ -221,6 +221,15 @@ class TestMergeWithTranscript(unittest.TestCase):
     def test_empty_segments_returns_empty_list(self):
         self.assertEqual(merge_with_transcript([SpeakerTurn(0, 1, "S")], []), [])
 
+    def test_unsorted_turns_fall_back_to_slow_path(self):
+        turns = [
+            SpeakerTurn(4.0, 10.0, "SPEAKER_01"),
+            SpeakerTurn(0.0, 4.0, "SPEAKER_00"),
+        ]
+        # Segment spans 3..9: 1s with SPEAKER_00, 5s with SPEAKER_01.
+        merged = merge_with_transcript(turns, [FakeSegment(3.0, 9.0, "mixed")])
+        self.assertEqual(merged[0].speaker, "SPEAKER_01")
+
 
 class TestToText(unittest.TestCase):
     """Rendering attributed segments as '[speaker] text' lines."""
