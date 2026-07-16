@@ -1143,17 +1143,12 @@ fn open_locked_root(root: &Path) -> Result<File> {
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(root)
         .with_context(|| format!("cannot securely open plan root {}", root.display()))?;
-    lock_root_with(directory, root, |descriptor| unsafe {
-        libc::flock(descriptor, libc::LOCK_EX)
-    })
+    let result = unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX) };
+    finish_root_lock(directory, root, result)
 }
 
 #[cfg(unix)]
-fn lock_root_with<F>(directory: File, root: &Path, lock: F) -> Result<File>
-where
-    F: FnOnce(libc::c_int) -> libc::c_int,
-{
-    let result = lock(directory.as_raw_fd());
+fn finish_root_lock(directory: File, root: &Path, result: libc::c_int) -> Result<File> {
     if result != 0 {
         return Err(std::io::Error::last_os_error())
             .with_context(|| format!("cannot lock plan root {}", root.display()));
@@ -2514,12 +2509,24 @@ mod tests {
         fs::create_dir(root.join("source-directory.wav")).unwrap();
         let root_directory = open_locked_root(&root).unwrap();
 
+        assert!(open_locked_root(&root.join("missing-root")).is_err());
+        assert!(
+            component_name(
+                std::ffi::OsStr::from_bytes(b"invalid\0component"),
+                Path::new("invalid-component.wav"),
+            )
+            .is_err()
+        );
+        assert!(
+            open_mutation_source(&root_directory, Path::new("missing-parent/source.wav")).is_err()
+        );
+
         let unlocked = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&root)
             .unwrap();
-        assert!(lock_root_with(unlocked, &root, |_| -1).is_err());
+        assert!(finish_root_lock(unlocked, &root, -1).is_err());
 
         let created = CString::new("created").unwrap();
         create_child_directory(&root_directory, &created, Path::new("created/child.wav")).unwrap();
