@@ -178,7 +178,7 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" max="5368709120" aria-describedby="target_bytes_help target_bytes_preview" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes">
@@ -192,6 +192,7 @@ HTML_TEMPLATE = """
         </form>
         <script>
             const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
+            const MAX_TARGET_BYTES = 5 * 1024 * 1024 * 1024;
             function formatBinaryBytes(value) {
                 const units = ['B', 'KiB', 'MiB', 'GiB'];
                 let size = value;
@@ -260,6 +261,11 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
                     this.setAttribute('aria-invalid', 'true');
+                } else if (val > MAX_TARGET_BYTES) {
+                    preview.innerText = 'Exceeds the maximum allowed size (5 GiB).';
+                    preview.style.color = '#dc3545';
+                    this.setCustomValidity('Exceeds the maximum allowed size (5 GiB).');
+                    this.setAttribute('aria-invalid', 'true');
                 } else {
                     preview.innerText = formatBinaryBytes(val);
                 }
@@ -286,6 +292,11 @@ HTML_TEMPLATE = """
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
+                } else if (val > MAX_TARGET_BYTES) {
+                    preview.innerText = 'Exceeds the maximum allowed size (5 GiB).';
+                    preview.style.color = '#dc3545';
+                    this.setCustomValidity('Exceeds the maximum allowed size (5 GiB).');
                     this.setAttribute('aria-invalid', 'true');
                 } else {
                     preview.innerText = formatBinaryBytes(val);
@@ -392,7 +403,7 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="batch_target_bytes">Target Bytes (per file): <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="batch_target_bytes_help batch_target_bytes_preview" required>
+                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" max="5368709120" aria-describedby="batch_target_bytes_help batch_target_bytes_preview" required>
                 <br><span id="batch_target_bytes_help" class="help-text">Maximum allowed size in bytes for each output file</span>
                 <br><span id="batch_target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="batch_preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes for batch">
