@@ -4729,6 +4729,18 @@ class CliTests(unittest.TestCase):
             self.assertFalse((moved_library / "state" / "state.json").exists())
 
     def test_private_directory_descriptor_failure_cleanup(self) -> None:
+        with (
+            patch("audio_library.tempfile.gettempdir", return_value="/tmp-alias"),
+            patch(
+                "audio_library.Path.resolve", return_value=Path("/private/tmp-alias")
+            ),
+        ):
+            self.assertEqual(
+                audio_library.normalized_private_absolute_path(
+                    Path("/tmp-alias/private-state")
+                ),
+                Path("/private/tmp-alias/private-state"),
+            )
         with self.assertRaisesRegex(ValueError, "non-root absolute path"):
             audio_library.open_private_directory(Path("/"))
         with tempfile.TemporaryDirectory() as tmp:
