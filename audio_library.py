@@ -1138,6 +1138,8 @@ def open_private_directory(path: Path) -> int:
             raise ValueError(f"private directory changed while opening: {path}")
         if opened.st_uid != os.geteuid():
             raise PermissionError(f"private directory is not owned by this user: {path}")
+        # Directories need the search bit; 0o700 is the least owner-only usable mode.
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
         os.fchmod(descriptor, 0o700)
         return descriptor
     except Exception:

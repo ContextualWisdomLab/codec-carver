@@ -37,7 +37,7 @@ transcribe-mlx = [
     "mlx-whisper==0.4.3; platform_system == 'Darwin' and platform_machine == 'arm64'",
 ]
 describe-mlx = [
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm.git@94e06ec3b381f6ea92da54c8580c8ca1ecf4e1fb; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm.git@94e06ec3b381f6ea92da54c8580c8ca1ecf4e1fb ; platform_system == 'Darwin' and platform_machine == 'arm64'",
 ]
 transcribe-cuda = ["faster-whisper==1.2.1"]
 dev = [
@@ -55,7 +55,7 @@ all = [
     "mcp==1.28.1",
     "faster-whisper==1.2.1",
     "mlx-whisper==0.4.3; platform_system == 'Darwin' and platform_machine == 'arm64'",
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm.git@94e06ec3b381f6ea92da54c8580c8ca1ecf4e1fb; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm.git@94e06ec3b381f6ea92da54c8580c8ca1ecf4e1fb ; platform_system == 'Darwin' and platform_machine == 'arm64'",
 ]
 
 [project.urls]
