@@ -94,7 +94,8 @@ def _content_words(sentence):
     """
     words = []
     for raw in sentence.split():
-        token = _TOKEN_STRIP_RE.sub("", raw).lower()
+        # Fast path: skip regex overhead for alphanumeric words
+        token = raw.lower() if raw.isalnum() else _TOKEN_STRIP_RE.sub("", raw).lower()
         if token and token not in _STOPWORDS:
             words.append(token)
     return words
