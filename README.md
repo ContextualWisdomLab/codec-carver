@@ -172,6 +172,12 @@ Whisper as an in-memory waveform, so `mlx-whisper` never resolves a bare
 `ffmpeg` from caller-controlled `PATH`. Rust, ffprobe, and ffmpeg children all
 receive a minimal allowlisted environment that excludes `LD_*` and `DYLD_*`
 loader injection controls.
+Whisper repositories are also immutable inputs: MLX accepts only
+`mlx-community/whisper-large-v3-turbo-q4` at revision
+`660c343bbf4e52ac257f0b7d952e5388e6f93bef`, while CUDA resolves
+`dropbox-dash/faster-whisper-large-v3-turbo` at revision
+`0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf`. Mutable model names or arbitrary
+Hub repositories are rejected before inference.
 
 `describe` loads the pinned 4-bit
 `mlx-community/gemma-4-e2b-it-4bit` revision once per batch, samples up to 48
@@ -184,9 +190,14 @@ rescored against both the thesis and outcome. The model identifier and revision
 are allowlisted, tokenizer remote code is disabled, transcript prompt data is
 control-delimiter escaped JSON, and every title term must be recoverable from
 the transcript itself. Segment references count only when they appear as
-anchored `[S###]` labels; an `S###` string inside speech is not evidence. Central
-idea and outcome terms must also occur in the cited transcript segments, so the
-model cannot legitimize an invented title through its own analysis fields. Old
+anchored `[S###]` labels; an `S###` string inside speech is not evidence.
+Untrusted CR/LF and other control whitespace inside each Whisper segment are
+collapsed before Python assigns its label, and the resulting labels must form
+the exact contiguous sequence `S001`, `S002`, and so on. Title grounding
+preserves token boundaries, so a cross-token substring cannot impersonate a
+source term. Central idea and outcome terms must also occur in the cited
+transcript segments, so the model cannot legitimize an invented title through
+its own analysis fields. Old
 keyword-only caches are not silently upgraded. Planning consumes this
 evidence-backed description when present and retains the deterministic extractor
 as a no-model failure-safe.
@@ -203,9 +214,13 @@ each path component with no-follow descriptors, copies and hashes the opened
 file into private scratch, and the GPU reads only that verified copy. A pathname
 swap after inspection therefore cannot redirect transcription outside the
 library. Python independently opens the backend-reported scratch child relative
-to its owner-only directory with `O_NOFOLLOW`, hashes that exact descriptor, and
-compares the actual byte count and SHA-256 with both the backend record and any
-known inventory digest before the path can reach the GPU or TMK metadata flow.
+to its owner-only directory with `O_NOFOLLOW` and requires the scratch file to
+have exactly one link. It confirms that name still identifies the opened inode,
+unlinks the name, and only then hashes the anonymous descriptor. The actual byte
+count and SHA-256 must match both the backend record and any known inventory
+digest before ffmpeg or faster-whisper consumes that same descriptor. A
+same-user hardlink, replacement path, or post-check rename therefore cannot
+redirect the bytes used for inference.
 `--prefetch-workers` keeps a bounded rolling queue of Rust/iCloud staging calls
 full; `--prefetch-max-bytes` caps their combined logical size (512 MiB by
 default). As soon as the next selected recording is staged, the ordered Python
@@ -236,6 +251,9 @@ can delay every placeholder; rerunning resumes only unresolved sidecars. Repeat
 waking every iCloud placeholder.
 `stream-transcribe` never blocks an audio recording on an unresolved TMK: it uses
 hydrated markers when present and records `tmk_error` evidence otherwise.
+Inventory validation also requires every audio `tmk_path` to reference a record
+whose kind is exactly `tmk`; a crafted audio-to-audio link cannot authorize
+quarantining canonical audio as if it were a duplicate sidecar.
 On macOS, Rust requests every dataless item through Foundation's supported
 `FileManager.startDownloadingUbiquitousItem` API, then coordinates the read with
 `NSFileCoordinator` and performs the single-pass copy-and-hash inside the
@@ -294,6 +312,9 @@ performed by default. Inventory, TMK, transcript, and mutation paths are
 validated beneath the canonical library root before Python or Rust receives
 them. Symlinked state/staging roots are refused, and scratch cleanup uses a
 no-follow directory handle rather than a check-then-unlink pathname.
+Private state paths are created and opened from `/` one component at a time with
+`mkdirat`/`openat`, `O_DIRECTORY`, and `O_NOFOLLOW`; an intermediate ancestor
+swap cannot redirect an atomic state write outside the selected library.
 Rust holds an exclusive per-library mutation lock from validation through
 execution, walks or creates every source/destination parent relative to the
 locked root descriptor with `O_NOFOLLOW`, and performs no-overwrite

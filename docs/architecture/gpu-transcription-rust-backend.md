@@ -25,6 +25,9 @@ preferred interface for recording curation.
   available recording time is retained on the group.
 - Sony TMK markers such as `[00075:00.00]` are interpreted as minute-based
   offsets and joined to audio by directory and normalized stem.
+- An audio record's `tmk_path` must resolve to an inventory record whose kind is
+  exactly `tmk`; TMK records cannot themselves carry `tmk_path`. This typed
+  relationship prevents a crafted sidecar link from authorizing an audio move.
 - `hydrate-tmk` fetches unresolved iCloud TMK sidecars concurrently, atomically
   checkpoints each hash/marker result, and never refetches a sidecar whose
   metadata is already complete even if iCloud restores its dataless flag.
@@ -71,6 +74,10 @@ preferred interface for recording curation.
   term must occur in the cited segments, and every title term must be composed
   from transcript terms rather than model-authored claims. Deterministic
   extractive topic density remains the failure-safe.
+- Whisper-segment control whitespace is flattened before Python assigns
+  evidence labels. Labeled evidence must be the exact contiguous sequence
+  `S001`, `S002`, and so on, and title grounding preserves source token
+  boundaries rather than accepting arbitrary cross-token substrings.
 - A name already satisfying the timestamp, known-location, extension, and
   SHA-prefix contract is stable across rescans. Description extractor upgrades
   therefore affect only previously unstandardized recordings.
@@ -98,12 +105,20 @@ preferred interface for recording curation.
   directory must be real directories rather than symlinks. Every transcript
   read opens the final SHA sidecar with `O_NOFOLLOW`; a symlink or non-regular
   entry is unavailable evidence and is never dereferenced.
+- Every private state-directory component is created and opened relative to the
+  preceding descriptor with `mkdirat`/`openat`, `O_DIRECTORY`, and
+  `O_NOFOLLOW`. Intermediate ancestor swaps therefore cannot redirect durable
+  state writes.
 - Scratch cleanup unlinks a direct regular-file child relative to a no-follow
   directory descriptor, avoiding pathname containment check/use races.
 - Before staged audio or TMK metadata is consumed, Python opens the reported
-  direct scratch child relative to that descriptor with `O_NOFOLLOW`, hashes
-  the opened file, and requires its real byte count and SHA-256 to match the
-  backend record and any known inventory digest.
+  direct scratch child relative to that descriptor with `O_NOFOLLOW` and
+  requires exactly one link. Python confirms the name still identifies the
+  opened inode, unlinks it, hashes the now-anonymous descriptor, and requires
+  its real byte count and SHA-256 to match the backend record and any known
+  inventory digest. MLX decoding and CUDA transcription consume that retained
+  descriptor, so hardlinks and pathname replacement cannot change inference
+  input.
 - Rust opens every materialized audio path component with no-follow descriptors
   and the GPU consumes only a private copy hashed from that opened descriptor.
   Symlink swaps cannot redirect the GPU read after validation.
@@ -137,15 +152,18 @@ transcript sidecars, semantic and deterministic description extraction, iCloud
 streaming checkpoints, parallel one-time TMK hydration, and mutation-plan
 generation.
 
-- Apple Silicon: `mlx-whisper` on the Metal GPU, defaulting to
-  `mlx-community/whisper-large-v3-turbo-q4`.
+- Apple Silicon: `mlx-whisper` on the Metal GPU, fixed to
+  `mlx-community/whisper-large-v3-turbo-q4` revision
+  `660c343bbf4e52ac257f0b7d952e5388e6f93bef`.
 - Apple Silicon filename topics: `mlx-vlm` with the pinned 4-bit Gemma 4 E2B
   instruct model. It runs after transcription as a separate batch so Whisper
   and Gemma do not need to occupy unified memory simultaneously.
   The runtime uses the released `mlx-vlm==0.6.4` wheel plus a narrow compatibility
   shim for the already-converted Gemma 4 audio-weight layout fixed upstream in
   PR #931 (`bc3461b13a636d7cb8213b0008d885a9965f1e69`).
-- NVIDIA: `faster-whisper` on CUDA with FP16 compute.
+- NVIDIA: `faster-whisper` on CUDA with FP16 compute, fixed to
+  `dropbox-dash/faster-whisper-large-v3-turbo` revision
+  `0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf`.
 
 MLX Whisper caches the loaded model within the process, so the library API keeps
 one `GpuTranscriber` alive for the entire run.
@@ -173,9 +191,13 @@ covered, generic-only titles and low confidence are rejected, and the complete
 audit context is stored beside the title. Only anchored `[S###]` lines establish
 segment identity. Central-idea and outcome terms are checked against those
 cited lines, while title terms are checked directly against the transcript;
-model-authored analysis cannot become its own grounding source. Existing
-standard names remain immutable unless their exact inventory path is supplied
-to `plan --refresh-standardized-path`. The only accepted model identifier and immutable Hub revision are
+model-authored analysis cannot become its own grounding source. Whisper segment
+newlines are flattened before labels are assigned, labels must remain
+contiguous from `S001`, and compound title validation consumes complete source
+terms without crossing token boundaries. Existing standard names remain
+immutable unless their exact inventory path is supplied to
+`plan --refresh-standardized-path`. The only accepted model identifier and
+immutable Hub revision are
 compiled in, tokenizer `trust_remote_code` is forced off, and old validation
 versions are regenerated rather than relabeled. No Ollama server is used and
 transcript text is not sent to a hosted inference API. A failed semantic
@@ -247,7 +269,10 @@ temporary root. The bounded prefetch byte limit controls concurrent logical
 size, at least 512 MiB of free-space headroom is required, and descriptor-based
 scratch deletion accepts only direct regular-file children. A backend-reported
 stage becomes usable only after Python has independently hashed that no-follow
-child descriptor and matched its actual size and digest.
+child descriptor and matched its actual size and digest. Before hashing it
+rejects any child with more than one hardlink and unlinks the identity-checked
+name, then hands the retained anonymous descriptor directly to the media
+decoder or CUDA runtime.
 
 ## Primary references
 

@@ -30,11 +30,14 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, BinaryIO, Callable, Iterable
 
 
 DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo-q4"
+DEFAULT_MLX_MODEL_REVISION = "660c343bbf4e52ac257f0b7d952e5388e6f93bef"
 DEFAULT_CUDA_MODEL = "large-v3-turbo"
+DEFAULT_CUDA_MODEL_REPOSITORY = "dropbox-dash/faster-whisper-large-v3-turbo"
+DEFAULT_CUDA_MODEL_REVISION = "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
 DEFAULT_GEMMA_DESCRIPTION_MODEL = "mlx-community/gemma-4-e2b-it-4bit"
 DEFAULT_GEMMA_DESCRIPTION_REVISION = "238767527555cb75a05732a84dff5d6ba0dd6809"
 APPROVED_FFPROBE_PATHS = (
@@ -80,6 +83,7 @@ STOCK_HALLUCINATION_RE = re.compile(
     r"시청해-주셔서-감사합니다|이곳은-이곳에서|다음-주에-만나요)"
 )
 DESCRIPTION_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]+")
+KOREAN_TERM_RE = re.compile(r"^[가-힣]+$")
 SEMANTIC_GENERIC_TOKENS = frozenset(
     {
         "결과",
@@ -349,6 +353,42 @@ class TranscriptionConfig:
     model: str | None = None
     language: str | None = "ko"
     word_timestamps: bool = False
+
+
+@dataclass
+class VerifiedStagedArtifact:
+    """An unlinked, content-verified staging inode held open for GPU use."""
+
+    path: Path
+    record: dict[str, Any]
+    handle: BinaryIO
+    identity: tuple[int, int, int, int, int, int]
+
+    def verify_unchanged(self) -> None:
+        """Ensure the anonymous inode did not change while a decoder consumed it."""
+
+        metadata = os.fstat(self.handle.fileno())
+        current = (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+            metadata.st_nlink,
+        )
+        if current != self.identity:
+            raise ValueError(f"verified staging inode changed during use: {self.path}")
+
+    def rewind(self) -> BinaryIO:
+        """Rewind and return the exact verified file object."""
+
+        self.handle.seek(0)
+        return self.handle
+
+    def close(self) -> None:
+        """Close the anonymous staging inode."""
+
+        self.handle.close()
 
 
 def sha256_regular_file(path: Path) -> str:
@@ -817,6 +857,46 @@ class RustBackend:
         return json.loads(completed.stdout)
 
 
+def resolve_pinned_whisper_model(
+    accelerator: str, requested_model: str | None
+) -> tuple[str, str, Path]:
+    """Resolve only an approved Whisper repository at an immutable commit."""
+
+    if accelerator == "mlx":
+        display_model = DEFAULT_MLX_MODEL
+        repository = DEFAULT_MLX_MODEL
+        revision = DEFAULT_MLX_MODEL_REVISION
+    elif accelerator == "cuda":
+        display_model = DEFAULT_CUDA_MODEL
+        repository = DEFAULT_CUDA_MODEL_REPOSITORY
+        revision = DEFAULT_CUDA_MODEL_REVISION
+    else:  # pragma: no cover - caller validates the accelerator
+        raise ValueError(f"unsupported transcription accelerator: {accelerator}")
+    if requested_model not in {None, display_model, repository}:
+        raise ValueError(
+            f"{accelerator} transcription requires the approved pinned Whisper model"
+        )
+    try:
+        from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise GpuTranscriptionUnavailableError(
+            "pinned Whisper loading requires huggingface-hub"
+        ) from exc
+    try:
+        snapshot = Path(
+            snapshot_download(repo_id=repository, revision=revision)
+        ).resolve(strict=True)
+    except Exception as exc:
+        raise GpuTranscriptionUnavailableError(
+            f"approved Whisper snapshot is unavailable: {repository}@{revision}"
+        ) from exc
+    if not snapshot.is_dir() or snapshot.name != revision:
+        raise GpuTranscriptionUnavailableError(
+            "Hugging Face did not return the requested immutable Whisper snapshot"
+        )
+    return display_model, revision, snapshot
+
+
 class GpuTranscriber:
     """Persistent-model Whisper adapter for Metal/MLX and NVIDIA CUDA."""
 
@@ -837,6 +917,8 @@ class GpuTranscriber:
         self.model = config.model or (
             DEFAULT_MLX_MODEL if accelerator == "mlx" else DEFAULT_CUDA_MODEL
         )
+        self.model_revision = ""
+        self.model_path = Path()
         self._cuda_model: Any | None = None
         self._initialize_runtime()
 
@@ -852,6 +934,11 @@ class GpuTranscriber:
                     "MLX GPU transcription is unavailable; install the `transcribe-mlx` extra"
                 ) from exc
             mx.set_default_device(mx.gpu)
+            (
+                self.model,
+                self.model_revision,
+                self.model_path,
+            ) = resolve_pinned_whisper_model(self.accelerator, self.config.model)
             return
         try:
             from faster_whisper import WhisperModel  # type: ignore[import-not-found]
@@ -860,29 +947,37 @@ class GpuTranscriber:
                 "CUDA transcription is unavailable; install the `transcribe-cuda` extra"
             ) from exc
         try:
+            (
+                self.model,
+                self.model_revision,
+                self.model_path,
+            ) = resolve_pinned_whisper_model(self.accelerator, self.config.model)
             self._cuda_model = WhisperModel(
-                self.model, device="cuda", compute_type="float16"
+                str(self.model_path), device="cuda", compute_type="float16"
             )
         except Exception as exc:
             raise GpuTranscriptionUnavailableError(
                 "faster-whisper could not initialize an NVIDIA CUDA GPU"
             ) from exc
 
-    def transcribe(self, audio_path: Path) -> dict[str, Any]:
+    def transcribe(self, audio_source: Path | VerifiedStagedArtifact) -> dict[str, Any]:
         """Transcribe one recording while retaining timestamps and language metadata."""
 
         started = time.perf_counter()
-        duration_seconds = audio_duration_seconds(audio_path)
+        duration_seconds = audio_duration_seconds(audio_source)
         if (
             duration_seconds is not None
             and duration_seconds < MIN_TRANSCRIBABLE_SECONDS
         ):
+            if isinstance(audio_source, VerifiedStagedArtifact):
+                audio_source.verify_unchanged()
             return {
                 "text": "",
                 "segments": [],
                 "language": self.config.language,
                 "accelerator": self.accelerator,
                 "model": self.model,
+                "model_revision": self.model_revision,
                 "duration_seconds": round(duration_seconds, 6),
                 "quality_flags": ["too_short_for_reliable_speech"],
                 "elapsed_seconds": round(time.perf_counter() - started, 3),
@@ -890,10 +985,10 @@ class GpuTranscriber:
         if self.accelerator == "mlx":
             import mlx_whisper  # type: ignore[import-not-found]
 
-            decoded_audio = decode_audio_for_mlx(audio_path)
+            decoded_audio = decode_audio_for_mlx(audio_source)
             raw = mlx_whisper.transcribe(
                 decoded_audio,
-                path_or_hf_repo=self.model,
+                path_or_hf_repo=str(self.model_path),
                 language=self.config.language,
                 word_timestamps=self.config.word_timestamps,
                 condition_on_previous_text=False,
@@ -910,7 +1005,11 @@ class GpuTranscriber:
             language = raw.get("language")
         else:
             raw_segments, info = self._cuda_model.transcribe(
-                str(audio_path),
+                (
+                    audio_source.rewind()
+                    if isinstance(audio_source, VerifiedStagedArtifact)
+                    else str(audio_source)
+                ),
                 language=self.config.language,
                 word_timestamps=self.config.word_timestamps,
                 vad_filter=True,
@@ -933,12 +1032,15 @@ class GpuTranscriber:
                 segments.append(normalize_segment(normalized))
             text = trusted_transcript_text(segments)
             language = getattr(info, "language", None)
+        if isinstance(audio_source, VerifiedStagedArtifact):
+            audio_source.verify_unchanged()
         return {
             "text": text,
             "segments": segments,
             "language": language,
             "accelerator": self.accelerator,
             "model": self.model,
+            "model_revision": self.model_revision,
             "duration_seconds": duration_seconds,
             "quality_flags": [],
             "elapsed_seconds": round(time.perf_counter() - started, 3),
@@ -987,14 +1089,23 @@ def trusted_ffmpeg_binary() -> Path | None:
     return trusted_media_binary("CODEC_CARVER_FFMPEG", APPROVED_FFMPEG_PATHS)
 
 
-def audio_duration_seconds(audio_path: Path) -> float | None:
+def audio_duration_seconds(
+    audio_source: Path | VerifiedStagedArtifact,
+) -> float | None:
     """Probe duration cheaply from WAV headers, then fall back to ffprobe."""
 
-    if not audio_path.is_file():
+    artifact = (
+        audio_source if isinstance(audio_source, VerifiedStagedArtifact) else None
+    )
+    audio_path = artifact.path if artifact is not None else audio_source
+    if artifact is None and not audio_path.is_file():
         return None
     if audio_path.suffix.lower() == ".wav":
         try:
-            with wave.open(str(audio_path), "rb") as source:
+            wave_input: str | BinaryIO = (
+                artifact.rewind() if artifact is not None else str(audio_path)
+            )
+            with wave.open(wave_input, "rb") as source:
                 return source.getnframes() / source.getframerate()
         except (EOFError, wave.Error, ZeroDivisionError):
             pass
@@ -1002,32 +1113,40 @@ def audio_duration_seconds(audio_path: Path) -> float | None:
     if not ffprobe:
         return None
     try:
+        command = [
+            str(ffprobe),
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            "pipe:0" if artifact is not None else str(audio_path),
+        ]
         completed = subprocess.run(
-            [
-                str(ffprobe),
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(audio_path),
-            ],
+            command,
             check=True,
             capture_output=True,
             text=True,
             shell=False,
             timeout=60,
             env=trusted_child_environment(),
+            stdin=artifact.rewind() if artifact is not None else None,
         )
         return float(completed.stdout.strip())
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
 
 
-def decode_audio_for_mlx(audio_path: Path) -> Any:
+def decode_audio_for_mlx(
+    audio_source: Path | VerifiedStagedArtifact,
+) -> Any:
     """Decode one recording through an approved absolute ffmpeg into an MLX array."""
 
+    artifact = (
+        audio_source if isinstance(audio_source, VerifiedStagedArtifact) else None
+    )
+    audio_path = artifact.path if artifact is not None else audio_source
     ffmpeg = trusted_ffmpeg_binary()
     if ffmpeg is None:
         raise GpuTranscriptionUnavailableError(
@@ -1039,7 +1158,7 @@ def decode_audio_for_mlx(audio_path: Path) -> Any:
                 str(ffmpeg),
                 "-nostdin",
                 "-i",
-                str(audio_path),
+                "pipe:0" if artifact is not None else str(audio_path),
                 "-threads",
                 "0",
                 "-f",
@@ -1057,6 +1176,7 @@ def decode_audio_for_mlx(audio_path: Path) -> Any:
             shell=False,
             timeout=14_400,
             env=trusted_child_environment(),
+            stdin=artifact.rewind() if artifact is not None else None,
         )
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.decode("utf-8", errors="replace").strip()
@@ -1182,22 +1302,30 @@ def topical_transcript_description(values: list[str], *, limit: int) -> str | No
     return sanitize_component(source, limit=limit) if source else None
 
 
+def flatten_semantic_evidence_text(value: Any) -> str:
+    """Collapse untrusted control whitespace before assigning an evidence label."""
+
+    return SPACE_RE.sub(" ", str(value)).strip()
+
+
 def semantic_transcript_excerpt(
     transcript: dict[str, Any], *, max_segments: int = 48, max_chars: int = 18_000
 ) -> str:
     """Sample chronological segments with stable evidence IDs for one prompt."""
 
     values = [
-        str(segment.get("text", "")).strip()
+        flatten_semantic_evidence_text(segment.get("text", ""))
         for segment in transcript.get("segments", [])
         if not segment.get("low_confidence")
-        and str(segment.get("text", "")).strip()
+        and flatten_semantic_evidence_text(segment.get("text", ""))
         and not STOCK_HALLUCINATION_RE.search(
-            sanitize_component(str(segment.get("text", "")), limit=256)
+            sanitize_component(
+                flatten_semantic_evidence_text(segment.get("text", "")), limit=256
+            )
         )
     ]
     if not values:
-        values = [str(transcript.get("text", "")).strip()]
+        values = [flatten_semantic_evidence_text(transcript.get("text", ""))]
     values = [
         value
         for value in values
@@ -1268,9 +1396,22 @@ def semantic_transcript_excerpt(
 
 
 def contextual_evidence_segments(grounding_text: str) -> dict[str, str]:
-    """Parse only anchored transcript labels, never S-like tokens inside speech."""
+    """Parse a contiguous sequence of exact evidence lines."""
 
-    return dict(SEMANTIC_EVIDENCE_LABEL_RE.findall(grounding_text))
+    lines = grounding_text.splitlines()
+    if not any(re.match(r"^\[S\d{3}\]", line) for line in lines):
+        flattened = flatten_semantic_evidence_text(grounding_text)
+        return {"S001": flattened} if flattened else {}
+    segments: dict[str, str] = {}
+    for index, line in enumerate(lines, start=1):
+        match = SEMANTIC_EVIDENCE_LABEL_RE.fullmatch(line)
+        expected = f"S{index:03d}"
+        if match is None or match.group(1) != expected:
+            raise ValueError(
+                "transcript evidence labels must be contiguous and authentic"
+            )
+        segments[expected] = match.group(2)
+    return segments
 
 
 def validate_context_claim(
@@ -1303,6 +1444,8 @@ def validate_context_claim(
             key == evidence
             or (
                 min(len(key), len(evidence)) >= 2
+                and KOREAN_TERM_RE.fullmatch(key) is not None
+                and KOREAN_TERM_RE.fullmatch(evidence) is not None
                 and (key.startswith(evidence) or evidence.startswith(key))
             )
             for evidence in evidence_terms
@@ -1787,19 +1930,24 @@ def validate_semantic_description(
         grounding_tokens.extend(
             key for _display, key in description_terms(grounding_text)
         )
-        grounding = "".join(grounding_tokens)
+        source_terms = sorted(
+            {term for term in grounding_tokens if len(term) >= 2},
+            key=len,
+            reverse=True,
+        )
 
         def is_grounded(token: str) -> bool:
             """Accept a literal term or a compound made only from source terms."""
 
             candidate = token.casefold()
-            if candidate in grounding:
+            if candidate in source_terms or any(
+                KOREAN_TERM_RE.fullmatch(candidate) is not None
+                and KOREAN_TERM_RE.fullmatch(source) is not None
+                and source.startswith(candidate)
+                for source in source_terms
+                if min(len(source), len(candidate)) >= 2
+            ):
                 return True
-            source_terms = sorted(
-                {term for term in grounding_tokens if len(term) >= 2},
-                key=len,
-                reverse=True,
-            )
             reachable = {0}
             for start in range(len(candidate)):
                 if start not in reachable:
@@ -2324,44 +2472,65 @@ def validate_relative_path(root: Path, value: Any, *, label: str) -> str:
     return relative.as_posix()
 
 
-def open_private_directory(path: Path) -> int:
-    """Open an owner-only real directory without following its final component."""
+def normalized_private_absolute_path(path: Path) -> Path:
+    """Normalize only the OS-provided temporary-directory alias, not user links."""
 
-    if path.is_symlink():
-        raise ValueError(f"private directory must not be a symlink: {path}")
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if path.is_symlink() or not path.is_dir():
-        raise ValueError(f"private directory is not a real directory: {path}")
+    absolute = path.absolute()
+    temporary_alias = Path(tempfile.gettempdir()).absolute()
+    temporary_real = Path(tempfile.gettempdir()).resolve()
+    if temporary_alias != temporary_real and absolute.is_relative_to(temporary_alias):
+        return temporary_real / absolute.relative_to(temporary_alias)
+    return absolute
+
+
+def open_private_directory(path: Path) -> int:
+    """Create and open a private directory without following any path component."""
+
     nofollow = getattr(os, "O_NOFOLLOW", None)
     directory = getattr(os, "O_DIRECTORY", None)
     if nofollow is None or directory is None:  # pragma: no cover - unsupported OS
         raise RuntimeError(
             "secure directory descriptors require O_NOFOLLOW and O_DIRECTORY"
         )
+    absolute = normalized_private_absolute_path(path)
+    components = absolute.parts[1:]
+    if absolute.anchor != "/" or not components:
+        raise ValueError(f"private directory must be a non-root absolute path: {path}")
     flags = os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open("/", flags)
     try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        if path.is_symlink():
-            raise ValueError(
-                f"private directory must not be a symlink: {path}"
-            ) from exc
-        raise
-    try:
-        opened = os.fstat(descriptor)
-        current = os.stat(path, follow_symlinks=False)
-        if not stat.S_ISDIR(current.st_mode) or (opened.st_dev, opened.st_ino) != (
-            current.st_dev,
-            current.st_ino,
-        ):
-            raise ValueError(f"private directory changed while opening: {path}")
-        if opened.st_uid != os.geteuid():
-            raise PermissionError(
-                f"private directory is not owned by this user: {path}"
-            )
-        # Directories need the search bit; 0o700 is the least owner-only usable mode.
-        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
-        os.fchmod(descriptor, 0o700)
+        for index, component in enumerate(components):
+            try:
+                os.mkdir(component, 0o700, dir_fd=descriptor)
+            except FileExistsError:
+                pass
+            try:
+                child_fd = os.open(component, flags, dir_fd=descriptor)
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                    raise ValueError(
+                        "private directory component is not a real directory: "
+                        f"{component}"
+                    ) from exc
+                raise
+            try:
+                metadata = os.fstat(child_fd)
+                if not stat.S_ISDIR(metadata.st_mode):
+                    raise ValueError(
+                        f"private directory component is not a directory: {component}"
+                    )
+                if index == len(components) - 1:
+                    if metadata.st_uid != os.geteuid():
+                        raise PermissionError(
+                            f"private directory is not owned by this user: {path}"
+                        )
+                    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+                    os.fchmod(child_fd, 0o700)
+            except Exception:
+                os.close(child_fd)
+                raise
+            os.close(descriptor)
+            descriptor = child_fd
         return descriptor
     except Exception:
         os.close(descriptor)
@@ -2732,7 +2901,7 @@ class AudioLibrary:
         failures = []
         for index, record in enumerate(records, start=1):
             status = "failed"
-            staged_audio: Path | None = None
+            staged_audio: VerifiedStagedArtifact | None = None
             try:
                 self._verify_materialized_record(record)
                 sha256 = validate_sha256(record["sha256"])
@@ -2768,7 +2937,7 @@ class AudioLibrary:
                 failures.append({"path": record["path"], "error": str(exc)})
             finally:
                 if staged_audio is not None:
-                    remove_staged_file(self.staging_dir, staged_audio)
+                    staged_audio.close()
             if progress:
                 progress(index, len(records), record["path"], status)
         rebuild_manifest_summary(manifest)
@@ -2777,6 +2946,7 @@ class AudioLibrary:
             "schema_version": 1,
             "accelerator": transcriber.accelerator,
             "model": transcriber.model,
+            "model_revision": vars(transcriber).get("model_revision"),
             "unique_recordings": len(records),
             "completed": completed,
             "cached": skipped,
@@ -2830,7 +3000,7 @@ class AudioLibrary:
             dataless = not record.get("materialized", False) or is_icloud_dataless(
                 source
             )
-            staged_path: Path | None = None
+            staged_artifact: VerifiedStagedArtifact | None = None
             try:
                 if dataless:
                     ensure_staging_capacity(
@@ -2842,11 +3012,12 @@ class AudioLibrary:
                         self.staging_dir,
                         timeout_seconds=inspect_timeout_seconds,
                     )
-                    staged_path, inspected = verify_staged_artifact(
+                    staged_artifact = verify_staged_artifact(
                         self.staging_dir,
                         staged,
                         expected_sha256=record.get("sha256"),
                     )
+                    inspected = staged_artifact.record
                 else:
                     inspected = self.backend.inspect(
                         self.root,
@@ -2856,8 +3027,8 @@ class AudioLibrary:
                 inspected["materialized"] = not is_icloud_dataless(source)
                 return inspected
             finally:
-                if staged_path is not None:
-                    remove_staged_file(self.staging_dir, staged_path)
+                if staged_artifact is not None:
+                    staged_artifact.close()
 
         if records:
             with ThreadPoolExecutor(max_workers=min(workers, len(records))) as executor:
@@ -3054,7 +3225,7 @@ class AudioLibrary:
         for index, record in enumerate(records, start=1):
             audio_path = self.root / record["path"]
             audio_input = audio_path
-            staged_audio: Path | None = None
+            staged_audio: VerifiedStagedArtifact | None = None
             was_dataless = record["path"] in prefetch_futures or is_icloud_dataless(
                 audio_path
             )
@@ -3135,11 +3306,12 @@ class AudioLibrary:
                             timeout_seconds=stage_stall_timeout_seconds,
                         )
                     try:
-                        staged_audio, inspected = verify_staged_artifact(
+                        staged_audio = verify_staged_artifact(
                             self.staging_dir,
                             staged,
                             expected_sha256=known_sha256 or None,
                         )
+                        inspected = staged_audio.record
                     except Exception:
                         if known_sha256:
                             record["sha256_verified"] = False
@@ -3195,7 +3367,7 @@ class AudioLibrary:
                 failures.append({"path": record["path"], "error": str(exc)})
             finally:
                 if staged_audio is not None:
-                    remove_staged_file(self.staging_dir, staged_audio)
+                    staged_audio.close()
                 if evict_after and was_dataless and record.get("materialized"):
                     if any(not pending.done() for pending in prefetch_futures.values()):
                         deferred_evictions.append(record)
@@ -3214,6 +3386,7 @@ class AudioLibrary:
             "mode": "icloud_streaming",
             "accelerator": transcriber.accelerator,
             "model": transcriber.model,
+            "model_revision": vars(transcriber).get("model_revision"),
             "prefetch_workers": prefetch_workers,
             "prefetched": len(candidates),
             "prefetch_bytes": prefetch_bytes,
@@ -3448,6 +3621,7 @@ class AudioLibrary:
             tmk_record = records_by_path.get(tmk_path)
             if (
                 tmk_record is None
+                or tmk_record.get("kind") != "tmk"
                 or not tmk_record.get("sha256")
                 or not ready(tmk_record)
             ):
@@ -3621,11 +3795,7 @@ class AudioLibrary:
     def _ensure_secure_state_dir(self) -> None:
         """Keep all durable state in a real owner-only child of the library root."""
 
-        if self.state_dir.is_symlink():
-            raise ValueError(f"state directory must not be a symlink: {self.state_dir}")
         ensure_private_directory(self.state_dir)
-        if self.state_dir.resolve() != self.root / ".codec-carver":
-            raise ValueError("state directory escaped the library root")
 
     def _verify_materialized_record(
         self, record: dict[str, Any], *, timeout_seconds: float = 14_400
@@ -3667,7 +3837,7 @@ class AudioLibrary:
 
     def _stage_materialized_record(
         self, record: dict[str, Any], *, timeout_seconds: float = 14_400
-    ) -> Path:
+    ) -> VerifiedStagedArtifact:
         """Bind GPU consumption to the same private copy whose SHA was verified."""
 
         ensure_staging_capacity(self.staging_dir, int(record.get("size_bytes", 0)))
@@ -3679,7 +3849,7 @@ class AudioLibrary:
         )
         try:
             expected = validate_sha256(record.get("sha256"), label="record SHA-256")
-            staged_path, _inspected = verify_staged_artifact(
+            staged_artifact = verify_staged_artifact(
                 self.staging_dir,
                 staged,
                 expected_sha256=expected,
@@ -3688,7 +3858,7 @@ class AudioLibrary:
             record["sha256_verified"] = False
             record["error"] = f"staged artifact validation failed for {record['path']}"
             raise
-        return staged_path
+        return staged_artifact
 
     def _record_ready_for_mutation(self, record: dict[str, Any]) -> bool:
         """Require current local bytes; persisted hashes never authorize mutation."""
@@ -3816,6 +3986,19 @@ class AudioLibrary:
                     label=f"inventory TMK path {index}",
                 )
             records_by_path[record["path"]] = record
+        for index, record in enumerate(files):
+            tmk_path = record.get("tmk_path")
+            if record["kind"] == "tmk" and tmk_path:
+                raise ValueError(
+                    f"TMK inventory record {index} must not link a TMK path"
+                )
+            if record["kind"] != "audio" or not tmk_path:
+                continue
+            tmk_record = records_by_path.get(tmk_path)
+            if tmk_record is None or tmk_record.get("kind") != "tmk":
+                raise ValueError(
+                    f"inventory TMK path {index} must reference a TMK record"
+                )
         duplicate_groups = manifest.get("duplicate_groups")
         if not isinstance(duplicate_groups, list):
             raise ValueError("inventory duplicate_groups must be a list")
@@ -3834,7 +4017,11 @@ class AudioLibrary:
                     self.root, value, label=f"duplicate group path {index}"
                 )
                 record = records_by_path.get(normalized)
-                if record is None or record.get("sha256") != sha256:
+                if (
+                    record is None
+                    or record.get("kind") != "audio"
+                    or record.get("sha256") != sha256
+                ):
                     raise ValueError(
                         f"duplicate group {index} is not bound to matching inventory records"
                     )
@@ -3965,8 +4152,8 @@ def verify_staged_artifact(
     staged: Any,
     *,
     expected_sha256: Any | None = None,
-) -> tuple[Path, dict[str, Any]]:
-    """Rehash one no-follow scratch child before metadata or GPU consumption."""
+) -> VerifiedStagedArtifact:
+    """Verify, unlink, and retain one staging inode for descriptor-bound use."""
 
     if not isinstance(staged, dict):
         raise ValueError("backend stage response must be a JSON object")
@@ -4001,20 +4188,61 @@ def verify_staged_artifact(
             raise PermissionError(
                 f"backend staged artifact is not owned by this user: {candidate}"
             )
-
-        digest = hashlib.sha256()
-        size_bytes = 0
-        while chunk := os.read(file_fd, 1024 * 1024):
-            digest.update(chunk)
-            size_bytes += len(chunk)
-        finished = os.fstat(file_fd)
-        stable_identity = (
+        if opened.st_nlink != 1:
+            raise ValueError(
+                f"backend staged artifact must have exactly one link: {candidate}"
+            )
+        current = os.stat(candidate.name, dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISREG(current.st_mode) or (
+            current.st_dev,
+            current.st_ino,
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+            current.st_nlink,
+        ) != (
             opened.st_dev,
             opened.st_ino,
             opened.st_size,
             opened.st_mtime_ns,
             opened.st_ctime_ns,
+            1,
+        ):
+            raise ValueError(
+                f"backend staged artifact changed before descriptor handoff: {candidate}"
+            )
+        os.unlink(candidate.name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+        detached = os.fstat(file_fd)
+        if detached.st_nlink != 0 or (
+            detached.st_dev,
+            detached.st_ino,
+            detached.st_size,
+            detached.st_mtime_ns,
+        ) != (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+            opened.st_mtime_ns,
+        ):
+            raise ValueError(
+                f"backend staged artifact was not detached safely: {candidate}"
+            )
+        stable_identity = (
+            detached.st_dev,
+            detached.st_ino,
+            detached.st_size,
+            detached.st_mtime_ns,
+            detached.st_ctime_ns,
+            detached.st_nlink,
         )
+        digest = hashlib.sha256()
+        size_bytes = 0
+        os.lseek(file_fd, 0, os.SEEK_SET)
+        while chunk := os.read(file_fd, 1024 * 1024):
+            digest.update(chunk)
+            size_bytes += len(chunk)
+        finished = os.fstat(file_fd)
         if (
             stable_identity
             != (
@@ -4023,6 +4251,7 @@ def verify_staged_artifact(
                 finished.st_size,
                 finished.st_mtime_ns,
                 finished.st_ctime_ns,
+                finished.st_nlink,
             )
             or size_bytes != finished.st_size
         ):
@@ -4059,7 +4288,15 @@ def verify_staged_artifact(
         verified = dict(inspected)
         verified["sha256"] = actual_sha256
         verified["size_bytes"] = size_bytes
-        return candidate, verified
+        os.lseek(file_fd, 0, os.SEEK_SET)
+        handle = os.fdopen(file_fd, "rb")
+        file_fd = None
+        return VerifiedStagedArtifact(
+            path=candidate,
+            record=verified,
+            handle=handle,
+            identity=stable_identity,
+        )
     except Exception:
         try:
             remove_staged_file(root, candidate)
@@ -4267,7 +4504,14 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument(
         "--accelerator", choices=["auto", "mlx", "cuda"], default="auto"
     )
-    transcribe_parser.add_argument("--model")
+    transcribe_parser.add_argument(
+        "--model",
+        choices=[
+            DEFAULT_MLX_MODEL,
+            DEFAULT_CUDA_MODEL,
+            DEFAULT_CUDA_MODEL_REPOSITORY,
+        ],
+    )
     transcribe_parser.add_argument("--language", default="ko")
     transcribe_parser.add_argument("--max-files", type=int)
     transcribe_parser.add_argument("--word-timestamps", action="store_true")
@@ -4275,7 +4519,14 @@ def build_parser() -> argparse.ArgumentParser:
     stream_parser.add_argument(
         "--accelerator", choices=["auto", "mlx", "cuda"], default="auto"
     )
-    stream_parser.add_argument("--model")
+    stream_parser.add_argument(
+        "--model",
+        choices=[
+            DEFAULT_MLX_MODEL,
+            DEFAULT_CUDA_MODEL,
+            DEFAULT_CUDA_MODEL_REPOSITORY,
+        ],
+    )
     stream_parser.add_argument("--language", default="ko")
     stream_parser.add_argument("--max-files", type=int)
     stream_parser.add_argument("--path", action="append", default=[])

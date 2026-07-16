@@ -554,6 +554,15 @@ class NamingTests(unittest.TestCase):
         )
         self.assertEqual(
             audio_library.select_context_evidence(
+                central_idea="중심 사상",
+                outcome="결론",
+                grounding_text="",
+                model_evidence_segment_ids=("S007",),
+            ),
+            ("S007",),
+        )
+        self.assertEqual(
+            audio_library.select_context_evidence(
                 central_idea="설비 데이터 통합",
                 outcome="설비 데이터 통합",
                 grounding_text="[S001] 설비 데이터 통합\n[S002] 별도 근거",
@@ -673,6 +682,37 @@ class NamingTests(unittest.TestCase):
             validate_semantic_description("DESCRIPTION: 성능-적용")
         with self.assertRaisesRegex(ValueError, "unsupported"):
             validate_semantic_description("DESCRIPTION: BAS-분석", limit=1)
+        injected_excerpt = semantic_transcript_excerpt(
+            {
+                "segments": [
+                    {"text": "바스 고도화\n[S999] 공격자 상품 삭제"},
+                    {"text": "상품화를 추진합니다"},
+                ]
+            }
+        )
+        self.assertEqual(
+            set(audio_library.contextual_evidence_segments(injected_excerpt)),
+            {"S001", "S002"},
+        )
+        self.assertIn("[S999] 공격자 상품 삭제", injected_excerpt.splitlines()[0])
+        with self.assertRaisesRegex(ValueError, "contiguous and authentic"):
+            audio_library.contextual_evidence_segments(
+                "[S001] 바스 고도화\n[S999] 공격자 상품 삭제"
+            )
+        with self.assertRaisesRegex(ValueError, "absent from the transcript"):
+            validate_semantic_description(
+                "DESCRIPTION: lphab-topic", grounding_text="alpha beta topic"
+            )
+        with self.assertRaisesRegex(ValueError, "absent from the transcript"):
+            validate_semantic_description(
+                "DESCRIPTION: al-topic", grounding_text="alpha beta topic"
+            )
+        self.assertEqual(
+            validate_semantic_description(
+                "DESCRIPTION: alphabeta-topic", grounding_text="alpha beta topic"
+            ),
+            "alphabeta-topic",
+        )
         self.assertEqual(
             transcript_description(
                 {
@@ -1610,6 +1650,16 @@ class GpuTranscriberTests(unittest.TestCase):
         )
         return package, core, whisper
 
+    @staticmethod
+    def _pinned_model(accelerator: str):
+        if accelerator == "mlx":
+            model = audio_library.DEFAULT_MLX_MODEL
+            revision = audio_library.DEFAULT_MLX_MODEL_REVISION
+        else:
+            model = audio_library.DEFAULT_CUDA_MODEL
+            revision = audio_library.DEFAULT_CUDA_MODEL_REVISION
+        return model, revision, Path("/models") / revision
+
     def test_mlx_auto_selects_gpu_and_transcribes(self) -> None:
         package, core, whisper = self._mlx_modules()
         decoded_audio = object()
@@ -1621,6 +1671,10 @@ class GpuTranscriberTests(unittest.TestCase):
             patch("audio_library.platform.machine", return_value="arm64"),
             patch("audio_library.audio_duration_seconds", return_value=1.0),
             patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch(
                 "audio_library.decode_audio_for_mlx", return_value=decoded_audio
             ) as decode,
         ):
@@ -1630,12 +1684,19 @@ class GpuTranscriberTests(unittest.TestCase):
         decode.assert_called_once_with(Path("clip.wav"))
         self.assertIs(whisper.transcribe.call_args.args[0], decoded_audio)
         self.assertEqual(result["accelerator"], "mlx")
+        self.assertEqual(
+            result["model_revision"], audio_library.DEFAULT_MLX_MODEL_REVISION
+        )
         self.assertEqual(result["text"], "안녕하세요")
         self.assertEqual(result["segments"][0]["text"], "안녕하세요")
         self.assertFalse(
             whisper.transcribe.call_args.kwargs["condition_on_previous_text"]
         )
         self.assertEqual(whisper.transcribe.call_args.kwargs["temperature"], 0.0)
+        self.assertEqual(
+            whisper.transcribe.call_args.kwargs["path_or_hf_repo"],
+            str(Path("/models") / audio_library.DEFAULT_MLX_MODEL_REVISION),
+        )
 
     def test_too_short_audio_skips_model_inference(self) -> None:
         package, _, whisper = self._mlx_modules()
@@ -1643,6 +1704,10 @@ class GpuTranscriberTests(unittest.TestCase):
             patch.dict(
                 sys.modules,
                 {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
             ),
             patch("audio_library.audio_duration_seconds", return_value=0.1),
             patch("audio_library.decode_audio_for_mlx") as decode,
@@ -1654,6 +1719,57 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertEqual(result["quality_flags"], ["too_short_for_reliable_speech"])
         decode.assert_not_called()
         whisper.transcribe.assert_not_called()
+
+    def test_descriptor_bound_mlx_input_is_revalidated(self) -> None:
+        package, _, whisper = self._mlx_modules()
+        handle = tempfile.TemporaryFile("w+b")
+        handle.write(AUDIO_A_BYTES)
+        metadata = os.fstat(handle.fileno())
+        artifact = audio_library.VerifiedStagedArtifact(
+            path=Path("detached.wav"),
+            record={"sha256": HASH_A},
+            handle=handle,
+            identity=(
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+                metadata.st_nlink,
+            ),
+        )
+        artifact.verify_unchanged = Mock()
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=0.1),
+        ):
+            GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(artifact)
+        artifact.verify_unchanged.assert_called_once_with()
+
+        artifact.verify_unchanged.reset_mock()
+        decoded_audio = object()
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=1.0),
+            patch("audio_library.decode_audio_for_mlx", return_value=decoded_audio),
+        ):
+            GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(artifact)
+        artifact.verify_unchanged.assert_called_once_with()
+        handle.close()
 
     def test_mlx_decode_uses_absolute_ffmpeg_and_sanitized_environment(self) -> None:
         class FakeArray:
@@ -1744,7 +1860,13 @@ class GpuTranscriberTests(unittest.TestCase):
 
         module = types.ModuleType("faster_whisper")
         module.WhisperModel = Model
-        with patch.dict(sys.modules, {"faster_whisper": module}):
+        with (
+            patch.dict(sys.modules, {"faster_whisper": module}),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("cuda"),
+            ),
+        ):
             transcriber = GpuTranscriber(
                 TranscriptionConfig(accelerator="cuda", language=None)
             )
@@ -1752,12 +1874,105 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertEqual(
             calls["init"][1], {"device": "cuda", "compute_type": "float16"}
         )
+        self.assertEqual(
+            calls["init"][0],
+            str(Path("/models") / audio_library.DEFAULT_CUDA_MODEL_REVISION),
+        )
         self.assertTrue(calls["transcribe"][1]["vad_filter"])
         self.assertFalse(calls["transcribe"][1]["condition_on_previous_text"])
         self.assertEqual(calls["transcribe"][1]["beam_size"], 1)
         self.assertEqual(calls["transcribe"][1]["best_of"], 1)
         self.assertEqual(result["text"], "hello")
         self.assertEqual(result["segments"][0]["word_probability"], 0.9)
+        self.assertEqual(
+            result["model_revision"], audio_library.DEFAULT_CUDA_MODEL_REVISION
+        )
+
+    def test_whisper_models_are_resolved_at_approved_revisions(self) -> None:
+        for accelerator, requested, repository, revision in (
+            (
+                "mlx",
+                audio_library.DEFAULT_MLX_MODEL,
+                audio_library.DEFAULT_MLX_MODEL,
+                audio_library.DEFAULT_MLX_MODEL_REVISION,
+            ),
+            (
+                "cuda",
+                audio_library.DEFAULT_CUDA_MODEL_REPOSITORY,
+                audio_library.DEFAULT_CUDA_MODEL_REPOSITORY,
+                audio_library.DEFAULT_CUDA_MODEL_REVISION,
+            ),
+        ):
+            with self.subTest(accelerator=accelerator):
+                hub = types.ModuleType("huggingface_hub")
+                with tempfile.TemporaryDirectory() as tmp:
+                    snapshot = Path(tmp) / revision
+                    snapshot.mkdir()
+                    hub.snapshot_download = Mock(return_value=str(snapshot))
+                    with patch.dict(sys.modules, {"huggingface_hub": hub}):
+                        model, actual_revision, model_path = (
+                            audio_library.resolve_pinned_whisper_model(
+                                accelerator, requested
+                            )
+                        )
+                self.assertEqual(actual_revision, revision)
+                self.assertEqual(model_path.name, revision)
+                self.assertEqual(
+                    model,
+                    audio_library.DEFAULT_MLX_MODEL
+                    if accelerator == "mlx"
+                    else audio_library.DEFAULT_CUDA_MODEL,
+                )
+                hub.snapshot_download.assert_called_once_with(
+                    repo_id=repository, revision=revision
+                )
+
+        with self.assertRaisesRegex(ValueError, "approved pinned Whisper model"):
+            audio_library.resolve_pinned_whisper_model("mlx", "attacker/model")
+
+        hub = types.ModuleType("huggingface_hub")
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "mutable-main"
+            snapshot.mkdir()
+            hub.snapshot_download = Mock(return_value=str(snapshot))
+            with (
+                patch.dict(sys.modules, {"huggingface_hub": hub}),
+                self.assertRaisesRegex(
+                    GpuTranscriptionUnavailableError, "immutable Whisper snapshot"
+                ),
+            ):
+                audio_library.resolve_pinned_whisper_model("mlx", None)
+
+        with (
+            patch.dict(sys.modules, {"huggingface_hub": None}),
+            self.assertRaisesRegex(
+                GpuTranscriptionUnavailableError, "requires huggingface-hub"
+            ),
+        ):
+            audio_library.resolve_pinned_whisper_model("mlx", None)
+
+        hub = types.ModuleType("huggingface_hub")
+        hub.snapshot_download = Mock(side_effect=OSError("offline"))
+        with (
+            patch.dict(sys.modules, {"huggingface_hub": hub}),
+            self.assertRaisesRegex(
+                GpuTranscriptionUnavailableError, "snapshot is unavailable"
+            ),
+        ):
+            audio_library.resolve_pinned_whisper_model("cuda", None)
+
+        hub = types.ModuleType("huggingface_hub")
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot_file = Path(tmp) / audio_library.DEFAULT_MLX_MODEL_REVISION
+            snapshot_file.write_text("not a model directory", encoding="utf-8")
+            hub.snapshot_download = Mock(return_value=str(snapshot_file))
+            with (
+                patch.dict(sys.modules, {"huggingface_hub": hub}),
+                self.assertRaisesRegex(
+                    GpuTranscriptionUnavailableError, "immutable Whisper snapshot"
+                ),
+            ):
+                audio_library.resolve_pinned_whisper_model("mlx", None)
 
     def test_invalid_and_missing_gpu_runtimes_are_explicit(self) -> None:
         with self.assertRaises(ValueError):
@@ -1774,7 +1989,13 @@ class GpuTranscriberTests(unittest.TestCase):
     def test_cuda_initialization_failure_is_gpu_error(self) -> None:
         module = types.ModuleType("faster_whisper")
         module.WhisperModel = Mock(side_effect=RuntimeError("no CUDA"))
-        with patch.dict(sys.modules, {"faster_whisper": module}):
+        with (
+            patch.dict(sys.modules, {"faster_whisper": module}),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("cuda"),
+            ),
+        ):
             with self.assertRaises(GpuTranscriptionUnavailableError):
                 GpuTranscriber(TranscriptionConfig(accelerator="cuda"))
 
@@ -2153,13 +2374,14 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(progress.call_count, 2)
             self.assertTrue(
                 all(
-                    call.args[0].parent == library.staging_dir
+                    call.args[0].path.parent == library.staging_dir
                     for call in fake.transcribe.call_args_list
                 )
             )
             self.assertTrue(
                 all(
-                    not call.args[0].exists() for call in fake.transcribe.call_args_list
+                    not call.args[0].path.exists() and call.args[0].handle.closed
+                    for call in fake.transcribe.call_args_list
                 )
             )
 
@@ -3795,6 +4017,27 @@ class CliTests(unittest.TestCase):
                     {**base, "files": [{**base["files"][0], "tmk_path": "../x"}]},
                     "stay beneath",
                 ),
+                (
+                    {
+                        **base,
+                        "files": [{**base["files"][0], "tmk_path": "safe.wav"}],
+                    },
+                    "must reference a TMK record",
+                ),
+                (
+                    {
+                        **base,
+                        "files": [
+                            {
+                                **base["files"][0],
+                                "path": "safe.tmk",
+                                "kind": "tmk",
+                                "tmk_path": "safe.wav",
+                            }
+                        ],
+                    },
+                    "must not link a TMK path",
+                ),
                 ({**base, "duplicate_groups": {}}, "must be a list"),
                 ({**base, "duplicate_groups": ["bad"]}, "must be an object"),
                 (
@@ -3882,20 +4125,32 @@ class CliTests(unittest.TestCase):
             root.mkdir()
             external.mkdir()
             (root / ".codec-carver").symlink_to(external, target_is_directory=True)
-            with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+            with self.assertRaisesRegex(ValueError, "not a real directory"):
                 AudioLibrary(root, Mock())
 
             direct_link = base / "direct-link"
             direct_link.symlink_to(external, target_is_directory=True)
-            with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+            with self.assertRaisesRegex(ValueError, "not a real directory"):
                 audio_library.ensure_private_directory(direct_link)
 
             racy = base / "racy"
+            real_open = os.open
+            swapped = False
+
+            def swap_created_component(path, flags, mode=0o777, *, dir_fd=None):
+                nonlocal swapped
+                if not swapped and dir_fd is not None and path == racy.name:
+                    racy.rmdir()
+                    racy.symlink_to(external, target_is_directory=True)
+                    swapped = True
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
             with (
-                patch("audio_library.Path.is_symlink", side_effect=[False, True]),
+                patch("audio_library.os.open", side_effect=swap_created_component),
                 self.assertRaisesRegex(ValueError, "not a real directory"),
             ):
                 audio_library.ensure_private_directory(racy)
+            self.assertTrue(swapped)
 
             safe_root = base / "safe"
             safe_root.mkdir()
@@ -3910,11 +4165,8 @@ class CliTests(unittest.TestCase):
                 AudioLibrary(safe_root, Mock())
 
             secure = AudioLibrary(safe_root, Mock())
-            with (
-                patch("audio_library.Path.resolve", return_value=base),
-                self.assertRaisesRegex(ValueError, "state directory escaped"),
-            ):
-                secure._ensure_secure_state_dir()
+            secure._ensure_secure_state_dir()
+            self.assertEqual(secure.state_dir.stat().st_mode & 0o777, 0o700)
 
     def test_private_state_names_never_follow_final_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4120,6 +4372,38 @@ class CliTests(unittest.TestCase):
             ):
                 audio_library.trusted_transcript_hashes(transcript_dir)
 
+    def test_crafted_tmk_link_cannot_quarantine_canonical_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            canonical_path = root / "canonical.wav"
+            duplicate_path = root / "duplicate.wav"
+            canonical_path.write_bytes(AUDIO_A_BYTES)
+            duplicate_path.write_bytes(AUDIO_A_BYTES)
+            canonical = _record("canonical.wav", HASH_A, tmk_path=None)
+            duplicate = _record("duplicate.wav", HASH_A, tmk_path="canonical.wav")
+            atomic_json_write(
+                root / ".codec-carver" / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [canonical, duplicate],
+                    "duplicate_groups": [
+                        {
+                            "sha256": HASH_A,
+                            "canonical_path": "canonical.wav",
+                            "duplicate_paths": ["duplicate.wav"],
+                            "earliest_recorded_at": canonical["recorded_at"],
+                        }
+                    ],
+                },
+            )
+            backend = Mock()
+            with self.assertRaisesRegex(ValueError, "must reference a TMK record"):
+                AudioLibrary(root, backend).plan(defer_unready=True)
+            self.assertEqual(canonical_path.read_bytes(), AUDIO_A_BYTES)
+            self.assertEqual(duplicate_path.read_bytes(), AUDIO_A_BYTES)
+            backend.inspect.assert_not_called()
+
     def test_gpu_stage_rejects_escape_and_symlink_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4185,8 +4469,36 @@ class CliTests(unittest.TestCase):
                 },
             }
             record["sha256"] = HASH_A
-            self.assertEqual(library._stage_materialized_record(record), valid)
-            remove_staged_file(library.staging_dir, valid)
+            artifact = library._stage_materialized_record(record)
+            try:
+                self.assertEqual(artifact.path, valid)
+                self.assertFalse(valid.exists())
+                self.assertEqual(artifact.rewind().read(), AUDIO_A_BYTES)
+                self.assertEqual(os.fstat(artifact.handle.fileno()).st_nlink, 0)
+
+                valid.write_bytes(b"replacement after verification")
+                self.assertEqual(artifact.rewind().read(), AUDIO_A_BYTES)
+                artifact.verify_unchanged()
+                self.assertEqual(valid.read_bytes(), b"replacement after verification")
+            finally:
+                artifact.close()
+                remove_staged_file(library.staging_dir, valid)
+
+            external_hardlink = root / "same-user-secret.wav"
+            external_hardlink.write_bytes(AUDIO_A_BYTES)
+            hardlinked = library.staging_dir / "hardlinked.wav"
+            os.link(external_hardlink, hardlinked)
+            backend.stage.return_value = {
+                "staged_path": str(hardlinked),
+                "record": {
+                    "sha256": HASH_A,
+                    "size_bytes": len(AUDIO_A_BYTES),
+                },
+            }
+            with self.assertRaisesRegex(ValueError, "exactly one link"):
+                library._stage_materialized_record(record)
+            self.assertEqual(external_hardlink.read_bytes(), AUDIO_A_BYTES)
+            self.assertEqual(os.stat(external_hardlink).st_nlink, 1)
 
     def test_stream_transcribe_never_forwards_backend_escape_to_gpu(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4254,14 +4566,27 @@ class CliTests(unittest.TestCase):
 
             candidate.write_bytes(AUDIO_A_BYTES)
             real_fstat = os.fstat
-            calls = 0
+            candidate_inode = os.stat(candidate).st_ino
+            file_stats = 0
 
             def mutate_before_final_stat(descriptor):
-                nonlocal calls
-                calls += 1
-                if calls == 3:
-                    candidate.touch()
-                return real_fstat(descriptor)
+                nonlocal file_stats
+                metadata = real_fstat(descriptor)
+                if (
+                    audio_library.stat.S_ISREG(metadata.st_mode)
+                    and metadata.st_ino == candidate_inode
+                ):
+                    file_stats += 1
+                if file_stats == 3:
+                    return types.SimpleNamespace(
+                        st_dev=metadata.st_dev,
+                        st_ino=metadata.st_ino,
+                        st_size=metadata.st_size,
+                        st_mtime_ns=metadata.st_mtime_ns,
+                        st_ctime_ns=metadata.st_ctime_ns + 1,
+                        st_nlink=metadata.st_nlink,
+                    )
+                return metadata
 
             with (
                 patch("audio_library.os.fstat", side_effect=mutate_before_final_stat),
@@ -4270,6 +4595,110 @@ class CliTests(unittest.TestCase):
                 audio_library.verify_staged_artifact(library.staging_dir, stage)
             self.assertFalse(candidate.exists())
 
+            for non_regular in (False, True):
+                with self.subTest(handoff_non_regular=non_regular):
+                    candidate.write_bytes(AUDIO_A_BYTES)
+                    real_stat = os.stat
+
+                    def changed_handoff(path, *args, **kwargs):
+                        metadata = real_stat(path, *args, **kwargs)
+                        if path == candidate.name and kwargs.get("dir_fd") is not None:
+                            return types.SimpleNamespace(
+                                st_mode=(
+                                    audio_library.stat.S_IFDIR
+                                    if non_regular
+                                    else metadata.st_mode
+                                ),
+                                st_dev=metadata.st_dev,
+                                st_ino=metadata.st_ino + (0 if non_regular else 1),
+                                st_size=metadata.st_size,
+                                st_mtime_ns=metadata.st_mtime_ns,
+                                st_ctime_ns=metadata.st_ctime_ns,
+                                st_nlink=metadata.st_nlink,
+                            )
+                        return metadata
+
+                    with (
+                        patch("audio_library.os.stat", side_effect=changed_handoff),
+                        self.assertRaisesRegex(
+                            ValueError, "changed before descriptor handoff"
+                        ),
+                    ):
+                        audio_library.verify_staged_artifact(library.staging_dir, stage)
+                    if non_regular:
+                        self.assertTrue(candidate.exists())
+                        candidate.unlink()
+                    else:
+                        self.assertFalse(candidate.exists())
+
+            for linked, metadata_drift in ((True, False), (False, True)):
+                with self.subTest(
+                    detached_linked=linked, metadata_drift=metadata_drift
+                ):
+                    candidate.write_bytes(AUDIO_A_BYTES)
+                    candidate_inode = os.stat(candidate).st_ino
+                    real_fstat = os.fstat
+                    file_stats = 0
+
+                    def unsafe_detach(descriptor):
+                        nonlocal file_stats
+                        metadata = real_fstat(descriptor)
+                        if (
+                            audio_library.stat.S_ISREG(metadata.st_mode)
+                            and metadata.st_ino == candidate_inode
+                        ):
+                            file_stats += 1
+                            if file_stats == 2:
+                                return types.SimpleNamespace(
+                                    st_mode=metadata.st_mode,
+                                    st_uid=metadata.st_uid,
+                                    st_dev=metadata.st_dev,
+                                    st_ino=metadata.st_ino,
+                                    st_size=metadata.st_size,
+                                    st_mtime_ns=(
+                                        metadata.st_mtime_ns + int(metadata_drift)
+                                    ),
+                                    st_ctime_ns=metadata.st_ctime_ns,
+                                    st_nlink=1 if linked else 0,
+                                )
+                        return metadata
+
+                    with (
+                        patch("audio_library.os.fstat", side_effect=unsafe_detach),
+                        self.assertRaisesRegex(ValueError, "not detached safely"),
+                    ):
+                        audio_library.verify_staged_artifact(library.staging_dir, stage)
+                    self.assertFalse(candidate.exists())
+
+            candidate.write_bytes(AUDIO_A_BYTES)
+            artifact = audio_library.verify_staged_artifact(library.staging_dir, stage)
+            real_fstat = os.fstat
+
+            def report_changed_after_handoff(descriptor):
+                metadata = real_fstat(descriptor)
+                if descriptor == artifact.handle.fileno():
+                    return types.SimpleNamespace(
+                        st_dev=metadata.st_dev,
+                        st_ino=metadata.st_ino,
+                        st_size=metadata.st_size,
+                        st_mtime_ns=metadata.st_mtime_ns + 1,
+                        st_ctime_ns=metadata.st_ctime_ns,
+                        st_nlink=metadata.st_nlink,
+                    )
+                return metadata
+
+            try:
+                with (
+                    patch(
+                        "audio_library.os.fstat",
+                        side_effect=report_changed_after_handoff,
+                    ),
+                    self.assertRaisesRegex(ValueError, "changed during use"),
+                ):
+                    artifact.verify_unchanged()
+            finally:
+                artifact.close()
+
     def test_atomic_state_write_resists_post_validation_symlink_swap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -4277,27 +4706,31 @@ class CliTests(unittest.TestCase):
             outside = base / "attacker-controlled"
             state_dir.mkdir(parents=True)
             outside.mkdir()
+            moved_library = base / "library.original"
             real_open = os.open
             swapped = False
 
             def swap_before_descriptor_open(path, flags, mode=0o777, *, dir_fd=None):
                 nonlocal swapped
-                if not swapped and dir_fd is None and Path(path) == state_dir:
-                    state_dir.rmdir()
-                    state_dir.symlink_to(outside, target_is_directory=True)
+                if not swapped and dir_fd is not None and path == "library":
+                    (base / "library").rename(moved_library)
+                    (base / "library").symlink_to(outside, target_is_directory=True)
                     swapped = True
                 return real_open(path, flags, mode, dir_fd=dir_fd)
 
             with (
                 patch("audio_library.os.open", side_effect=swap_before_descriptor_open),
-                self.assertRaisesRegex(ValueError, "must not be a symlink"),
+                self.assertRaisesRegex(ValueError, "not a real directory"),
             ):
                 atomic_json_write(state_dir / "state.json", {"marker": "blocked"})
 
             self.assertTrue(swapped)
             self.assertFalse((outside / "state.json").exists())
+            self.assertFalse((moved_library / "state" / "state.json").exists())
 
     def test_private_directory_descriptor_failure_cleanup(self) -> None:
+        with self.assertRaisesRegex(ValueError, "non-root absolute path"):
+            audio_library.open_private_directory(Path("/"))
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp) / "state"
             directory.mkdir()
@@ -4308,19 +4741,32 @@ class CliTests(unittest.TestCase):
             ):
                 audio_library.open_private_directory(directory)
 
-            current = os.stat(directory, follow_symlinks=False)
-            changed = types.SimpleNamespace(
-                st_mode=current.st_mode,
-                st_dev=current.st_dev,
-                st_ino=current.st_ino + 1,
-                st_uid=current.st_uid,
-            )
+            real_open = os.open
+
+            def unexpected_component_error(path, flags, mode=0o777, *, dir_fd=None):
+                if dir_fd is not None and path == directory.name:
+                    raise OSError(errno.EIO, "unexpected I/O failure")
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
             with (
-                patch("audio_library.os.stat", return_value=changed),
-                self.assertRaisesRegex(ValueError, "changed while opening"),
+                patch("audio_library.os.open", side_effect=unexpected_component_error),
+                self.assertRaisesRegex(OSError, "unexpected I/O failure"),
             ):
                 audio_library.open_private_directory(directory)
 
+            non_directory = types.SimpleNamespace(st_mode=audio_library.stat.S_IFREG)
+            with (
+                patch("audio_library.os.fstat", return_value=non_directory),
+                self.assertRaisesRegex(ValueError, "component is not a directory"),
+            ):
+                audio_library.open_private_directory(directory)
+
+            linked_directory = Path(tmp) / "linked-state"
+            linked_directory.symlink_to(directory, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "not a real directory"):
+                audio_library.open_private_directory(linked_directory)
+
+            current = os.stat(directory, follow_symlinks=False)
             wrong_owner = types.SimpleNamespace(
                 st_mode=current.st_mode,
                 st_dev=current.st_dev,
