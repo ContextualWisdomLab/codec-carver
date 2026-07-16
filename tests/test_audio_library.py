@@ -238,6 +238,31 @@ class NamingTests(unittest.TestCase):
         }
         self.assertIn("프로젝트-예산-검토", transcript_description(transcript))
         self.assertEqual(transcript_description({"text": ""}), "무음-또는-전사불명")
+        self.assertFalse(audio_library.transcript_cache_is_usable(None))
+        self.assertFalse(audio_library.transcript_cache_is_usable({"text": ""}))
+        self.assertFalse(
+            audio_library.transcript_cache_is_usable(
+                {"segments": [{"text": " "}], "quality_flags": ["unknown"]}
+            )
+        )
+        self.assertTrue(
+            audio_library.transcript_cache_is_usable({"text": "cached speech"})
+        )
+        self.assertTrue(
+            audio_library.transcript_cache_is_usable(
+                {"segments": [{"text": "segment speech"}]}
+            )
+        )
+        self.assertTrue(
+            audio_library.transcript_cache_is_usable(
+                {"text": "", "quality_flags": ["no_speech_detected"]}
+            )
+        )
+        self.assertTrue(
+            audio_library.transcript_cache_is_usable(
+                {"quality_flags": ["too_short_for_reliable_speech"]}
+            )
+        )
         low = normalize_segment(
             {
                 "start": 0,
@@ -376,11 +401,22 @@ class NamingTests(unittest.TestCase):
             "text": "BAS 고도화가 필요하고 상품화를 추진하고 싶습니다"
         }
         context_segments[63] = {"text": "가격 정책을 결정해야 합니다"}
+        context_segments[7] = {
+            "text": "AI 크롤러 운영 이슈를 명확히 정해서 날짜를 확정합시다"
+        }
         context_excerpt = semantic_transcript_excerpt(
-            {"segments": context_segments}, max_segments=8
+            {"segments": context_segments}, max_segments=12
         )
         self.assertIn("BAS 고도화가 필요하고 상품화를 추진", context_excerpt)
         self.assertIn("가격 정책을 결정", context_excerpt)
+        self.assertIn("AI 크롤러 운영 이슈", context_excerpt)
+        self.assertIn(
+            "날짜",
+            audio_library.explicit_contextual_purpose_terms(
+                selected_ids=("S001",),
+                segments={"S001": "AI 크롤러 운영 이슈를 정해서 날짜를 확정합시다"},
+            ),
+        )
         self.assertEqual(
             semantic_transcript_excerpt({"text": " 단일 원문 "}), "[S001] 단일 원문"
         )
@@ -1751,6 +1787,30 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertEqual(result["quality_flags"], ["too_short_for_reliable_speech"])
         decode.assert_not_called()
         whisper.transcribe.assert_not_called()
+
+    def test_mlx_marks_an_empty_inference_as_explained_no_speech(self) -> None:
+        package, _, whisper = self._mlx_modules()
+        whisper.transcribe.return_value = {
+            "text": "",
+            "segments": [],
+            "language": "ko",
+        }
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=1.0),
+            patch("audio_library.decode_audio_for_mlx", return_value=object()),
+        ):
+            result = GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(
+                Path("silent.wav")
+            )
+        self.assertEqual(result["quality_flags"], ["no_speech_detected"])
 
     def test_descriptor_bound_mlx_input_is_revalidated(self) -> None:
         package, _, whisper = self._mlx_modules()

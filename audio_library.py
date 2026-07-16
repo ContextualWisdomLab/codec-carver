@@ -67,6 +67,9 @@ DEFAULT_STAGE_STALL_TIMEOUT_SECONDS = 420
 STAGE_TOTAL_TIMEOUT_MULTIPLIER = 4
 MACOS_SF_DATALESS = 0x40000000
 MIN_TRANSCRIBABLE_SECONDS = 0.5
+EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
+    {"no_speech_detected", "too_short_for_reliable_speech"}
+)
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 STANDARD_NAME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:__[^/]+)*__sha256-[0-9a-f]{12}$"
@@ -261,15 +264,17 @@ DESCRIPTION_STOPWORDS = frozenset(
 )
 DESCRIPTION_DISPLAY_STOPWORDS = frozenset({"결론적", "관해서", "내가", "되게"})
 SEMANTIC_DESCRIPTION_RE = re.compile(r"^[0-9A-Za-z가-힣]+(?:-[0-9A-Za-z가-힣]+){1,5}$")
-SEMANTIC_DESCRIPTION_VALIDATION = "context_evidence_title_v5"
+SEMANTIC_DESCRIPTION_VALIDATION = "context_evidence_title_v6"
 SEMANTIC_EVIDENCE_ID_RE = re.compile(r"\bS\d{3}\b")
 SEMANTIC_EVIDENCE_LABEL_RE = re.compile(r"^\[(S\d{3})\]\s+(.+)$", re.MULTILINE)
 SEMANTIC_CONTEXT_CUE_RE = re.compile(
     r"문제|원하|하고\s*싶|필요|결정|추진|보류|완료|목표|목적|결론|그래야|"
-    r"표준|고도화|상품화|정책|빠른|한계|위험"
+    r"표준|고도화|상품화|정책|빠른|한계|위험|운영|이슈|해야|책임|이관|"
+    r"넘겨|날짜|확정|합시다"
 )
 CONTEXT_EXPLICIT_PURPOSE_RE = re.compile(
-    r"그래야|(?:을|를|기|에)\s*위해|위한|목적|목표"
+    r"그래야|(?:을|를|기|에)\s*위해|위한|목적|목표|해야|되어야|돼야|"
+    r"합시다|하자|확정하|결정하"
 )
 CONTEXT_PURPOSE_RELATION_PREFIXES = (
     "그래야",
@@ -1034,6 +1039,7 @@ class GpuTranscriber:
             language = getattr(info, "language", None)
         if isinstance(audio_source, VerifiedStagedArtifact):
             audio_source.verify_unchanged()
+        quality_flags = [] if text or segments else ["no_speech_detected"]
         return {
             "text": text,
             "segments": segments,
@@ -1042,7 +1048,7 @@ class GpuTranscriber:
             "model": self.model,
             "model_revision": self.model_revision,
             "duration_seconds": duration_seconds,
-            "quality_flags": [],
+            "quality_flags": quality_flags,
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         }
 
@@ -1200,6 +1206,26 @@ def decode_audio_for_mlx(
 
     samples = np.frombuffer(completed.stdout, np.int16)
     return mx.array(samples).flatten().astype(mx.float32) / 32768.0
+
+
+def transcript_cache_is_usable(transcript: Any) -> bool:
+    """Reject unexplained empty results so fixed decoders can retry them once."""
+
+    if not isinstance(transcript, dict):
+        return False
+    text = transcript.get("text")
+    if isinstance(text, str) and text.strip():
+        return True
+    segments = transcript.get("segments")
+    if isinstance(segments, list) and any(
+        isinstance(segment, dict) and str(segment.get("text", "")).strip()
+        for segment in segments
+    ):
+        return True
+    flags = transcript.get("quality_flags")
+    return isinstance(flags, list) and any(
+        flag in EXPLAINED_EMPTY_TRANSCRIPT_FLAGS for flag in flags
+    )
 
 
 def normalize_segment(segment: dict[str, Any]) -> dict[str, Any]:
@@ -2921,7 +2947,7 @@ class AudioLibrary:
                 sha256 = validate_sha256(record["sha256"])
                 output = safe_transcript_path(transcript_dir, sha256)
                 text_output = safe_transcript_path(transcript_dir, sha256, ".txt")
-                if output.is_file():
+                if transcript_cache_is_usable(read_optional_private_json(output)):
                     skipped += 1
                     status = "cached"
                 else:
@@ -3343,7 +3369,9 @@ class AudioLibrary:
                 sha256 = validate_sha256(record["sha256"])
                 transcript_path = safe_transcript_path(transcript_dir, sha256)
                 text_path = safe_transcript_path(transcript_dir, sha256, ".txt")
-                if read_optional_private_json(transcript_path) is not None:
+                if transcript_cache_is_usable(
+                    read_optional_private_json(transcript_path)
+                ):
                     cached += 1
                     status = "cached"
                 else:
