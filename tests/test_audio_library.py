@@ -1014,27 +1014,30 @@ class NamingTests(unittest.TestCase):
             ),
             "BAS-공정-데이터-분석",
         )
-        self.assertEqual(
-            transcript_description(
-                {
-                    "filename_description": ("설비데이터통합-경영의사결정지연"),
-                    "filename_description_validation": (
-                        audio_library.SEMANTIC_DESCRIPTION_VALIDATION
-                    ),
-                    "filename_description_context": {
-                        "central_idea": (
-                            "설비 데이터 통합으로 경영 의사결정 지연을 해결합니다."
-                        ),
-                        "outcome": "설비 데이터 통합을 추진합니다.",
-                        "evidence_segment_ids": ["S001", "S002"],
-                        "confidence": "high",
-                    },
-                    "segments": [
-                        {"text": "설비 데이터 통합으로 경영 의사결정 지연"},
-                        {"text": "설비 데이터 통합 추진"},
-                    ],
-                }
+        contextual_transcript = {
+            "filename_description": "설비데이터통합-경영의사결정지연",
+            "filename_description_validation": (
+                audio_library.SEMANTIC_DESCRIPTION_VALIDATION
             ),
+            "filename_description_context": {
+                "central_idea": "설비 데이터 통합으로 경영 의사결정 지연을 해결합니다.",
+                "outcome": "설비 데이터 통합을 추진합니다.",
+                "evidence_segment_ids": ["S001", "S002"],
+                "confidence": "high",
+            },
+            "segments": [
+                {"text": "설비 데이터 통합으로 경영 의사결정 지연"},
+                {"text": "설비 데이터 통합 추진"},
+                {"text": "설비 데이터 통합 추진"},
+                {"text": "설비 데이터 통합 추진"},
+            ],
+        }
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(contextual_transcript),
+        )
+        self.assertEqual(
+            transcript_description(contextual_transcript),
             "설비데이터통합-경영의사결정지연",
         )
         self.assertEqual(
@@ -4303,6 +4306,7 @@ class CliTests(unittest.TestCase):
                     "filename_description_source": audio_library.MANUAL_DESCRIPTION_SOURCE,
                     "filename_description_model": "manual-transcript-review",
                     "filename_description_revision": "manual-review-1",
+                    "duration_seconds": 3.0,
                 }
             )
             atomic_json_write(

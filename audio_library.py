@@ -2730,31 +2730,38 @@ class GemmaDescriptionGenerator:
 def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> str:
     """Derive a deterministic, transcript-central filename description."""
 
+    semantic = transcript.get("filename_description")
+    context = transcript.get("filename_description_context")
+    contextual_cache = (
+        isinstance(semantic, str)
+        and transcript.get("filename_description_validation")
+        == SEMANTIC_DESCRIPTION_VALIDATION
+        and isinstance(context, dict)
+    )
+    if contextual_cache:
+        try:
+            result = validate_contextual_description(
+                title=semantic,
+                central_idea=str(context.get("central_idea", "")),
+                outcome=str(context.get("outcome", "")),
+                evidence_segment_ids=context.get("evidence_segment_ids", ()),
+                confidence=str(context.get("confidence", "")),
+                grounding_text=semantic_transcript_excerpt(transcript),
+                limit=limit,
+            )
+            return validate_contextual_title_specificity(
+                result.title, outcome=result.outcome
+            )
+        except ValueError:
+            semantic = None
     quality_flags = transcript_quality_flags(transcript)
     if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags:
         return "배경음-전사불명"
     if INSUFFICIENT_CONTEXT_AUDIO_FLAG in quality_flags:
         return "짧은발화-맥락불명"
-    semantic = transcript.get("filename_description")
     if isinstance(semantic, str):
         try:
             excerpt = semantic_transcript_excerpt(transcript)
-            context = transcript.get("filename_description_context")
-            if transcript.get(
-                "filename_description_validation"
-            ) == SEMANTIC_DESCRIPTION_VALIDATION and isinstance(context, dict):
-                result = validate_contextual_description(
-                    title=semantic,
-                    central_idea=str(context.get("central_idea", "")),
-                    outcome=str(context.get("outcome", "")),
-                    evidence_segment_ids=context.get("evidence_segment_ids", ()),
-                    confidence=str(context.get("confidence", "")),
-                    grounding_text=excerpt,
-                    limit=limit,
-                )
-                return validate_contextual_title_specificity(
-                    result.title, outcome=result.outcome
-                )
             return validate_semantic_description(
                 semantic,
                 limit=limit,
@@ -3986,6 +3993,32 @@ class AudioLibrary:
                     raise ValueError("transcript sidecar must be a JSON object")
                 validate_transcript_record_identity(record, loaded_transcript)
                 transcript = loaded_transcript
+                valid_contextual_cache = False
+                context = transcript.get("filename_description_context")
+                if (
+                    isinstance(transcript.get("filename_description"), str)
+                    and transcript.get("filename_description_validation")
+                    == SEMANTIC_DESCRIPTION_VALIDATION
+                    and isinstance(context, dict)
+                ):
+                    try:
+                        excerpt = semantic_transcript_excerpt(transcript)
+                        cached_context = validate_contextual_description(
+                            title=transcript["filename_description"],
+                            central_idea=str(context.get("central_idea", "")),
+                            outcome=str(context.get("outcome", "")),
+                            evidence_segment_ids=context.get(
+                                "evidence_segment_ids", ()
+                            ),
+                            confidence=str(context.get("confidence", "")),
+                            grounding_text=excerpt,
+                        )
+                        validate_contextual_title_specificity(
+                            cached_context.title, outcome=cached_context.outcome
+                        )
+                        valid_contextual_cache = True
+                    except ValueError:
+                        pass
                 quality_flags = transcript_quality_flags(transcript)
                 repetitive_background = (
                     REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags
@@ -3994,7 +4027,10 @@ class AudioLibrary:
                     flag in EXPLAINED_EMPTY_TRANSCRIPT_FLAGS for flag in quality_flags
                 )
                 insufficient_context = INSUFFICIENT_CONTEXT_AUDIO_FLAG in quality_flags
-                if repetitive_background or explained_empty or insufficient_context:
+                if valid_contextual_cache:
+                    cached += 1
+                    status = "cached"
+                elif repetitive_background or explained_empty or insufficient_context:
                     quality_title = (
                         "배경음-전사불명"
                         if repetitive_background
