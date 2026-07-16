@@ -383,6 +383,96 @@ def trusted_executable(
     return resolved, digest
 
 
+def snapshot_trusted_executable(
+    path: Path, expected_sha256: str
+) -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
+    """Copy verified descriptor bytes into a sealed private execution inode."""
+
+    resolved, digest = trusted_executable(path, expected_sha256=expected_sha256)
+    snapshot = tempfile.TemporaryDirectory(prefix="codec-carver-backend-")
+    snapshot_dir = Path(snapshot.name)
+    pinned = snapshot_dir / "codec-carver-core"
+    try:
+        source_fd = os.open(
+            resolved,
+            os.O_RDONLY
+            | os.O_NONBLOCK
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            source_metadata = os.fstat(source_fd)
+            if not stat.S_ISREG(source_metadata.st_mode):
+                raise ValueError(
+                    f"trusted executable changed before snapshot: {resolved}"
+                )
+            target_fd = os.open(
+                pinned,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o500,
+            )
+            try:
+                copied = hashlib.sha256()
+                copied_size = 0
+                while chunk := os.read(source_fd, 1024 * 1024):
+                    copied.update(chunk)
+                    copied_size += len(chunk)
+                    view = memoryview(chunk)
+                    while view:
+                        written = os.write(target_fd, view)
+                        if written <= 0:
+                            raise OSError(
+                                "trusted executable snapshot write made no progress"
+                            )
+                        view = view[written:]
+                source_finished = os.fstat(source_fd)
+                source_identity = (
+                    source_metadata.st_dev,
+                    source_metadata.st_ino,
+                    source_metadata.st_size,
+                    source_metadata.st_mtime_ns,
+                    source_metadata.st_ctime_ns,
+                )
+                if (
+                    source_identity
+                    != (
+                        source_finished.st_dev,
+                        source_finished.st_ino,
+                        source_finished.st_size,
+                        source_finished.st_mtime_ns,
+                        source_finished.st_ctime_ns,
+                    )
+                    or copied_size != source_finished.st_size
+                ):
+                    raise ValueError(
+                        f"trusted executable changed while snapshotting: {resolved}"
+                    )
+                if copied.hexdigest() != digest:
+                    raise ValueError(
+                        f"trusted executable changed before snapshot: {resolved}"
+                    )
+                os.fchmod(target_fd, 0o500)
+                os.fsync(target_fd)
+            finally:
+                os.close(target_fd)
+        finally:
+            os.close(source_fd)
+    except BaseException:
+        snapshot.cleanup()
+        raise
+    try:
+        trusted_executable(pinned, expected_sha256=digest)
+        snapshot_dir.chmod(0o500)
+    except BaseException:
+        snapshot.cleanup()
+        raise
+    return snapshot, pinned, digest
+
+
 class RustBackend:
     """One-process-per-batch bridge to the optimized Rust backend."""
 
@@ -417,26 +507,66 @@ class RustBackend:
                 )
             candidates.append((explicit, expected_sha256))
         candidates.extend((candidate, None) for candidate in repository_candidates)
+        self.source_binary: Path | None = None
         self.binary: Path | None = None
         self.binary_sha256: str | None = None
+        self._binary_snapshot: tempfile.TemporaryDirectory[str] | None = None
         for candidate, expected in candidates:
             if not candidate.is_file() and not candidate.is_symlink():
                 continue
-            self.binary, self.binary_sha256 = trusted_executable(
+            self.source_binary, self.binary_sha256 = trusted_executable(
                 candidate.absolute(), expected_sha256=expected
             )
             break
-        if self.binary is None:
+        if self.source_binary is None or self.binary_sha256 is None:
             raise FileNotFoundError(
                 "codec-carver-core not found; run "
                 "`cargo build --release --manifest-path rust-core/Cargo.toml`"
             )
+        self._ensure_pinned_binary()
+
+    def _ensure_pinned_binary(self) -> Path:
+        """Pin the approved source bytes once and return the sealed snapshot."""
+
+        snapshot = getattr(self, "_binary_snapshot", None)
+        if snapshot is not None:
+            self._assert_binary_integrity()
+            assert self.binary is not None
+            return self.binary
+        source = getattr(self, "source_binary", None) or self.binary
+        expected = self.binary_sha256
+        if source is None or expected is None:
+            raise ValueError("trusted backend metadata is incomplete")
+        snapshot, pinned, digest = snapshot_trusted_executable(source, expected)
+        self.source_binary = source
+        self._binary_snapshot = snapshot
+        self.binary = pinned
+        self.binary_sha256 = digest
+        return pinned
 
     def _assert_binary_integrity(self) -> None:
-        """Fail closed if the selected native backend changed after selection."""
+        """Fail closed if the sealed native backend snapshot changed."""
 
         assert self.binary is not None and self.binary_sha256 is not None
         trusted_executable(self.binary, expected_sha256=self.binary_sha256)
+
+    def _bound_command(self, command: list[str]) -> list[str]:
+        """Force every backend launch to the verified private snapshot."""
+
+        if not command:
+            raise ValueError("backend command must not be empty")
+        requested = Path(command[0]).resolve(strict=False)
+        allowed = {
+            path.resolve(strict=False)
+            for path in (self.binary, getattr(self, "source_binary", None))
+            if path is not None
+        }
+        if requested not in allowed:
+            raise ValueError(
+                f"backend command uses an unapproved executable: {requested}"
+            )
+        pinned = self._ensure_pinned_binary()
+        return [str(pinned), *command[1:]]
 
     def inventory(self, root: Path, *, threads: int | None = None) -> dict[str, Any]:
         """Return an inventory on stdout so Python owns atomic state persistence."""
@@ -496,6 +626,7 @@ class RustBackend:
             "--staging-dir",
             str(staging_dir),
         ]
+        command = self._bound_command(command)
         started = time.monotonic()
         deadline = started + total_timeout_seconds
         last_progress = started
@@ -643,7 +774,7 @@ class RustBackend:
     ) -> dict[str, Any]:
         """Run a backend command without a shell and decode its JSON response."""
 
-        self._assert_binary_integrity()
+        command = self._bound_command(command)
         completed = subprocess.run(
             command,
             check=True,
@@ -3604,11 +3735,7 @@ def verify_staged_artifact(
     directory_fd = open_private_directory(root)
     file_fd: int | None = None
     try:
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0)
-        )
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         try:
             file_fd = os.open(candidate.name, flags, dir_fd=directory_fd)
         except OSError as exc:
@@ -3638,14 +3765,20 @@ def verify_staged_artifact(
             opened.st_mtime_ns,
             opened.st_ctime_ns,
         )
-        if stable_identity != (
-            finished.st_dev,
-            finished.st_ino,
-            finished.st_size,
-            finished.st_mtime_ns,
-            finished.st_ctime_ns,
-        ) or size_bytes != finished.st_size:
-            raise ValueError(f"backend staged artifact changed while hashing: {candidate}")
+        if (
+            stable_identity
+            != (
+                finished.st_dev,
+                finished.st_ino,
+                finished.st_size,
+                finished.st_mtime_ns,
+                finished.st_ctime_ns,
+            )
+            or size_bytes != finished.st_size
+        ):
+            raise ValueError(
+                f"backend staged artifact changed while hashing: {candidate}"
+            )
 
         actual_sha256 = digest.hexdigest()
         reported_sha256 = validate_sha256(

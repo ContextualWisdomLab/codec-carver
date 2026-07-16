@@ -1381,10 +1381,181 @@ class RustBackendTests(unittest.TestCase):
                 audio_library.trusted_executable(binary, expected_sha256="0" * 64)
             with self.assertRaisesRegex(ValueError, "requires expected_sha256"):
                 RustBackend(binary)
+            good_script = (
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "print(json.dumps({'which': 'good'}))\n"
+            )
+            evil_script = good_script.replace("good", "evil")
+            binary.write_text(good_script, encoding="utf-8")
+            binary.chmod(0o700)
+            digest = hashlib.sha256(good_script.encode()).hexdigest()
             backend = RustBackend(binary, expected_sha256=digest)
-            binary.write_bytes(b"replaced")
+            pinned = backend.binary
+            self.assertIsNotNone(pinned)
+            assert pinned is not None
+            self.assertNotEqual(pinned, binary)
+            self.assertEqual(pinned.parent.stat().st_mode & 0o777, 0o500)
+
+            evil = root / "core.evil"
+            evil.write_text(evil_script, encoding="utf-8")
+            evil.chmod(0o700)
+            original_run = subprocess.run
+
+            def replace_source_before_exec(command, **kwargs):
+                os.replace(evil, binary)
+                return original_run(command, **kwargs)
+
+            with patch(
+                "audio_library.subprocess.run", side_effect=replace_source_before_exec
+            ):
+                self.assertEqual(
+                    backend._run_json([str(binary)]),
+                    {"which": "good"},
+                )
+            self.assertEqual(audio_library.sha256_regular_file(pinned), digest)
+            with self.assertRaisesRegex(ValueError, "must not be empty"):
+                backend._bound_command([])
+            with self.assertRaisesRegex(ValueError, "unapproved executable"):
+                backend._bound_command([str(root / "other")])
+
+            incomplete = object.__new__(RustBackend)
+            incomplete.binary = None
+            incomplete.binary_sha256 = None
+            incomplete.source_binary = None
+            incomplete._binary_snapshot = None
+            with self.assertRaisesRegex(ValueError, "metadata is incomplete"):
+                incomplete._ensure_pinned_binary()
+
+            pinned.parent.chmod(0o700)
+            pinned.chmod(0o700)
+            pinned.write_bytes(b"replaced")
             with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
                 backend.inventory(root)
+
+    def test_executable_snapshot_rejects_source_races_and_copy_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "core"
+            binary.write_bytes(b"trusted executable bytes")
+            binary.chmod(0o700)
+            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            original_open = os.open
+
+            saved = root / "core.saved"
+            saved.write_bytes(binary.read_bytes())
+            saved.chmod(0o700)
+            evil = root / "core.evil"
+            evil.write_bytes(b"attacker executable data")
+            evil.chmod(0o700)
+            source_opens = 0
+            resolved_binary = binary.resolve()
+
+            def swap_before_snapshot(path, flags, *args, **kwargs):
+                nonlocal source_opens
+                if Path(path) == resolved_binary:
+                    source_opens += 1
+                    if source_opens == 2:
+                        os.replace(evil, binary)
+                return original_open(path, flags, *args, **kwargs)
+
+            with (
+                patch("audio_library.os.open", side_effect=swap_before_snapshot),
+                self.assertRaisesRegex(ValueError, "changed before snapshot"),
+            ):
+                audio_library.snapshot_trusted_executable(binary, digest)
+            os.replace(saved, binary)
+
+            original_read = os.read
+            nonempty_reads = 0
+
+            def mutate_during_snapshot(descriptor, size):
+                nonlocal nonempty_reads
+                chunk = original_read(descriptor, size)
+                if chunk:
+                    nonempty_reads += 1
+                    if nonempty_reads == 2:
+                        binary.write_bytes(chunk + b" changed")
+                return chunk
+
+            with (
+                patch("audio_library.os.read", side_effect=mutate_during_snapshot),
+                self.assertRaisesRegex(ValueError, "changed while snapshotting"),
+            ):
+                audio_library.snapshot_trusted_executable(binary, digest)
+
+            binary.write_bytes(b"trusted executable bytes")
+            binary.chmod(0o700)
+            snapshot, pinned, pinned_digest = (
+                audio_library.snapshot_trusted_executable(binary, digest)
+            )
+            snapshot_parent = pinned.parent
+            self.assertEqual(pinned_digest, digest)
+            self.assertEqual(pinned.read_bytes(), binary.read_bytes())
+            snapshot.cleanup()
+            self.assertFalse(snapshot_parent.exists())
+
+            original_trusted_executable = audio_library.trusted_executable
+            original_temporary_directory = tempfile.TemporaryDirectory
+            verification_calls = 0
+            failed_snapshot_dirs: list[Path] = []
+
+            def fail_snapshot_verification(path, **kwargs):
+                nonlocal verification_calls
+                verification_calls += 1
+                if verification_calls == 2:
+                    raise ValueError("snapshot verification failed")
+                return original_trusted_executable(path, **kwargs)
+
+            def record_snapshot_dir(*args, **kwargs):
+                temporary = original_temporary_directory(*args, **kwargs)
+                failed_snapshot_dirs.append(Path(temporary.name))
+                return temporary
+
+            with (
+                patch(
+                    "audio_library.trusted_executable",
+                    side_effect=fail_snapshot_verification,
+                ),
+                patch(
+                    "audio_library.tempfile.TemporaryDirectory",
+                    side_effect=record_snapshot_dir,
+                ),
+                self.assertRaisesRegex(ValueError, "snapshot verification failed"),
+            ):
+                audio_library.snapshot_trusted_executable(binary, digest)
+            self.assertEqual(len(failed_snapshot_dirs), 1)
+            self.assertFalse(failed_snapshot_dirs[0].exists())
+
+            with (
+                patch("audio_library.os.write", return_value=0),
+                self.assertRaisesRegex(OSError, "made no progress"),
+            ):
+                audio_library.snapshot_trusted_executable(binary, digest)
+
+            source_opens = 0
+            moved = root / "core.moved"
+
+            def replace_with_directory(path, flags, *args, **kwargs):
+                nonlocal source_opens
+                if Path(path) == resolved_binary:
+                    source_opens += 1
+                    if source_opens == 2:
+                        binary.rename(moved)
+                        binary.mkdir()
+                return original_open(path, flags, *args, **kwargs)
+
+            try:
+                with (
+                    patch("audio_library.os.open", side_effect=replace_with_directory),
+                    self.assertRaisesRegex(ValueError, "changed before snapshot"),
+                ):
+                    audio_library.snapshot_trusted_executable(binary, digest)
+            finally:
+                if binary.is_dir():
+                    binary.rmdir()
+                if moved.exists():
+                    moved.rename(binary)
 
 
 class GpuTranscriberTests(unittest.TestCase):

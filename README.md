@@ -160,10 +160,13 @@ codec-carver-library /path/to/recordings apply --execute
 The library backend is loaded only from the repository's release/debug build or
 an explicit `--backend-binary` accompanied by `--backend-sha256`; it is never
 selected from ambient `PATH`. The selected binary must be owner-controlled,
-non-symlinked, non-group/world-writable, and its SHA-256 is rechecked before
-each launch. Duration probing uses only the approved fixed system `ffprobe`
-locations. `CODEC_CARVER_FFPROBE` may select one of those fixed paths but cannot
-introduce an arbitrary executable.
+non-symlinked, and non-group/world-writable. Python copies the exact bytes read
+from a stable, no-follow source descriptor into an independent owner-only
+execution inode, seals its directory, and forces every Rust command to that
+SHA-256-pinned snapshot. Replacing the configured source path after validation
+therefore cannot change the bytes that execute. Duration probing uses only the
+approved fixed system `ffprobe` locations. `CODEC_CARVER_FFPROBE` may select one
+of those fixed paths but cannot introduce an arbitrary executable.
 
 `describe` loads the pinned 4-bit
 `mlx-community/gemma-4-e2b-it-4bit` revision once per batch, samples up to 48

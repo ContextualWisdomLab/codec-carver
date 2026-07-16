@@ -111,7 +111,10 @@ preferred interface for recording curation.
   mutation journals instead of blocking future inventory runs.
 - The Rust executable comes only from an integrity-pinned explicit path or a
   repository build and is checked for owner, mode, symlink, and SHA-256 drift.
-  `ffprobe` comes only from fixed approved system roots;
+  Python copies the exact bytes from a stable, no-follow source descriptor into
+  a sealed owner-only execution inode and binds every Rust launch to that
+  independent snapshot, so a later source-path replacement cannot redirect
+  execution. `ffprobe` comes only from fixed approved system roots;
   `CODEC_CARVER_FFPROBE` can select but not extend that allowlist. Neither uses
   ambient `PATH` discovery. Executed mutation-journal hashes remain unverified
   identity hints until current bytes are hashed again.
