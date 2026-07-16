@@ -30,6 +30,7 @@ requires it unless you call :func:`diarize_file` without a custom backend.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import bisect
 from typing import Callable, Iterable, Sequence
 
 
@@ -208,13 +209,37 @@ def merge_with_transcript(
         back to :data:`FALLBACK_SPEAKER`.
     """
     turn_list = list(turns)
+    is_sorted = all(turn_list[i].start <= turn_list[i + 1].start for i in range(len(turn_list) - 1))
+
+    if is_sorted and turn_list:
+        max_turn_duration = max(t.end - t.start for t in turn_list)
+        turn_starts = [t.start for t in turn_list]
+    else:
+        max_turn_duration = 0.0
+        turn_starts = []
+
     merged: list[AttributedSegment] = []
     for segment in segments:
         totals: dict[str, float] = {}
-        for turn in turn_list:
-            shared = _overlap(segment.start, segment.end, turn.start, turn.end)
-            if shared > 0.0:
-                totals[turn.speaker] = totals.get(turn.speaker, 0.0) + shared
+
+        if is_sorted and turn_list:
+            # Fast path: Binary search for the first turn that could possibly overlap.
+            search_start = segment.start - max_turn_duration
+            idx = bisect.bisect_left(turn_starts, search_start)
+            for i in range(idx, len(turn_list)):
+                turn = turn_list[i]
+                if turn.start >= segment.end:
+                    break
+                shared = _overlap(segment.start, segment.end, turn.start, turn.end)
+                if shared > 0.0:
+                    totals[turn.speaker] = totals.get(turn.speaker, 0.0) + shared
+        else:
+            # Slow path for unsorted turns
+            for turn in turn_list:
+                shared = _overlap(segment.start, segment.end, turn.start, turn.end)
+                if shared > 0.0:
+                    totals[turn.speaker] = totals.get(turn.speaker, 0.0) + shared
+
         if totals:
             speaker = max(totals, key=lambda name: totals[name])
         else:
