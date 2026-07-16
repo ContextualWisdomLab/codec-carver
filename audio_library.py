@@ -964,9 +964,8 @@ def semantic_transcript_excerpt(
             break
         if len(line) > remaining:
             line = line[:remaining].rstrip()
-        if line:
-            lines.append(line)
-            used_chars += len(line) + (1 if len(lines) > 1 else 0)
+        lines.append(line)
+        used_chars += len(line) + (1 if len(lines) > 1 else 0)
         if len(line) < len(f"[S{index:03d}] {value}"):
             break
     return "\n".join(lines)
