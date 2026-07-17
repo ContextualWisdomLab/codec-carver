@@ -346,7 +346,10 @@ repository. Loading native packages such as `tokenizers`, `torch`, and
 materialized. Create the persistent runtime under the local cache instead. The
 bootstrap supports Apple Silicon and installs the complete Python dependency
 graph from `requirements-macos-mlx-lock.txt` with package hashes verified; the
-checkout itself is run directly rather than installed as an editable package:
+checkout itself is run directly rather than installed as an editable package.
+The runtime must be a direct child of the owner-controlled
+`~/Library/Caches/codec-carver/venvs` directory; bootstrap operations stay bound
+to the validated directory inode so a later pathname swap cannot redirect them:
 
 ```bash
 ./scripts/bootstrap_macos_gpu_runtime.sh

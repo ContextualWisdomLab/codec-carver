@@ -5539,6 +5539,18 @@ class CliTests(unittest.TestCase):
             ):
                 audio_library.open_private_directory(existing)
 
+    def test_private_directory_rejects_parent_traversal_before_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            traversed = base / "private" / "transcripts" / ".." / ".." / "escaped"
+
+            with self.assertRaisesRegex(ValueError, "parent traversal"):
+                audio_library.safe_transcript_path(traversed, HASH_A)
+            with self.assertRaisesRegex(ValueError, "parent traversal"):
+                audio_library.open_private_directory(traversed)
+
+            self.assertFalse((base / "escaped").exists())
+
     def test_file_provider_anchor_rejects_unsafe_and_racy_paths(self) -> None:
         flags = (
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)

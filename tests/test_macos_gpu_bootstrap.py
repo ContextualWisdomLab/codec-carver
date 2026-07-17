@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -22,6 +25,9 @@ class MacosGpuBootstrapTests(unittest.TestCase):
         self.assertIn('--requirements "$LOCK_FILE"', script)
         self.assertNotIn("--editable", script)
         self.assertIn('[[ "$(uname -m)" == "arm64" ]]', script)
+        self.assertIn('cd -- "$RUNTIME_DIR"', script)
+        self.assertIn('--python "./bin/python"', script)
+        self.assertIn('secure_directory_identity . "runtime directory"', script)
 
     def test_every_locked_requirement_is_exact_and_hashed(self) -> None:
         lock = LOCK_FILE.read_text(encoding="utf-8")
@@ -47,6 +53,87 @@ class MacosGpuBootstrapTests(unittest.TestCase):
         ):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, lock)
+
+    def test_bootstrap_rejects_broad_symlinked_and_swapped_runtime_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            fake_bin = root / "bin"
+            escape = root / "escape"
+            home.mkdir()
+            fake_bin.mkdir()
+            escape.mkdir()
+            trusted_root = home / "Library" / "Caches" / "codec-carver" / "venvs"
+            trusted_root.mkdir(parents=True)
+
+            (fake_bin / "uname").write_text(
+                "#!/bin/sh\n[ \"$1\" = -s ] && echo Darwin || echo arm64\n",
+                encoding="utf-8",
+            )
+            (fake_bin / "xattr").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            (fake_bin / "uv").write_text(
+                """#!/bin/bash
+set -e
+if [[ "$1" == "venv" ]]; then
+    if [[ -n "${RACE_RUNTIME:-}" ]]; then
+        mv "$RACE_RUNTIME" "$RACE_RUNTIME.moved"
+        ln -s "$RACE_TARGET" "$RACE_RUNTIME"
+    fi
+    mkdir -p ./bin
+    : > ./bin/python
+    chmod +x ./bin/python
+fi
+""",
+                encoding="utf-8",
+            )
+            for executable in fake_bin.iterdir():
+                executable.chmod(0o700)
+
+            env = {
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "UV_BIN": str(fake_bin / "uv"),
+            }
+
+            broad = subprocess.run(
+                [str(BOOTSTRAP), "--runtime-dir", f"{home}/"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertNotEqual(broad.returncode, 0)
+            self.assertIn("runtime path is too broad", broad.stderr)
+
+            symlink_runtime = trusted_root / "linked"
+            symlink_runtime.symlink_to(Path("/"), target_is_directory=True)
+            linked = subprocess.run(
+                [str(BOOTSTRAP), "--runtime-dir", str(symlink_runtime)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertNotEqual(linked.returncode, 0)
+            self.assertIn("runtime path must be a real directory", linked.stderr)
+
+            raced_runtime = trusted_root / "raced"
+            raced_env = {
+                **env,
+                "RACE_RUNTIME": str(raced_runtime),
+                "RACE_TARGET": str(escape),
+            }
+            raced = subprocess.run(
+                [str(BOOTSTRAP), "--runtime-dir", str(raced_runtime)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=raced_env,
+            )
+            self.assertNotEqual(raced.returncode, 0)
+            self.assertIn("runtime directory path changed", raced.stderr)
+            self.assertFalse((escape / "bin" / "python").exists())
 
 
 if __name__ == "__main__":

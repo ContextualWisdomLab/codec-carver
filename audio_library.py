@@ -2947,11 +2947,15 @@ def validate_relative_path(root: Path, value: Any, *, label: str) -> str:
 def normalized_private_absolute_path(path: Path) -> Path:
     """Normalize only the OS-provided temporary-directory alias, not user links."""
 
+    if ".." in path.parts:
+        raise ValueError(f"private directory path contains parent traversal: {path}")
     absolute = path.absolute()
     temporary_alias = Path(tempfile.gettempdir()).absolute()
     temporary_real = Path(tempfile.gettempdir()).resolve()
     if temporary_alias != temporary_real and absolute.is_relative_to(temporary_alias):
-        return temporary_real / absolute.relative_to(temporary_alias)
+        absolute = temporary_real / absolute.relative_to(temporary_alias)
+    if ".." in absolute.parts:
+        raise ValueError(f"private directory path contains parent traversal: {path}")
     return absolute
 
 
@@ -3049,6 +3053,8 @@ def open_private_directory(path: Path) -> int:
     components = absolute.parts[1:]
     if absolute.anchor != "/" or not components:
         raise ValueError(f"private directory must be a non-root absolute path: {path}")
+    if any(component in {"", ".", ".."} for component in components):
+        raise ValueError(f"private directory path contains unsafe components: {path}")
     flags = os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
     descriptor: int | None = os.open("/", flags)
     try:
@@ -3372,8 +3378,9 @@ def safe_transcript_path(
     validate_sha256(sha256, label="transcript SHA-256")
     if suffix not in {".json", ".txt"}:
         raise ValueError(f"unsupported transcript suffix: {suffix}")
-    ensure_private_directory(transcript_dir)
-    return transcript_dir / f"{sha256}{suffix}"
+    normalized_dir = normalized_private_absolute_path(transcript_dir)
+    ensure_private_directory(normalized_dir)
+    return normalized_dir / f"{sha256}{suffix}"
 
 
 class AudioLibrary:
