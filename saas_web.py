@@ -325,6 +325,14 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
+
+                if (totalSize > MAX_UPLOAD_BYTES) {
+                    input.setCustomValidity('Total batch size exceeds 5 GiB limit.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ', exceeds 5 GiB limit)';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
                 preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
             }
 
