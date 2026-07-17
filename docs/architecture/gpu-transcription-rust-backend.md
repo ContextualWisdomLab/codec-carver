@@ -78,10 +78,10 @@ preferred interface for recording curation.
   evidence labels. Labeled evidence must be the exact contiguous sequence
   `S001`, `S002`, and so on, and title grounding preserves source token
   boundaries rather than accepting arbitrary cross-token substrings.
-- A name is stable only when its complete basename equals the timestamp,
-  known-location, transcript-derived description, extension, and SHA suffix
-  recomputed from current evidence. A structurally valid wrapper cannot preserve
-  an arbitrary or stale description.
+- Every existing name is compared with the complete timestamp, known-location,
+  transcript-derived description, extension, and SHA suffix recomputed from
+  current evidence. Drift is always reported, but changing an already-standard
+  path requires explicit refresh authorization.
 - Mutations are dry-run by default. Python recomputes the exact authorized
   operation list from the current inventory and transcript evidence; Rust then
   rehashes every audio and TMK source before any move. Execution rejects
@@ -142,6 +142,9 @@ preferred interface for recording curation.
   interpreter directory and verifies the resolved package is beneath that
   interpreter's prefix before any model import. Executed mutation-journal hashes
   remain unverified identity hints until current bytes are hashed again.
+- The macOS GPU bootstrap sets a fixed system `PATH` before its first helper
+  invocation, uses fixed absolute paths for native utilities, and executes `uv`
+  only from a private runtime snapshot whose bytes match a reviewed SHA-256.
 - Malformed-journal quarantine creates and opens `recovery` and
   `malformed-journals` relative to one verified state-directory descriptor.
   Each component uses no-follow directory operations, so an intermediate
@@ -199,12 +202,11 @@ model-authored analysis cannot become its own grounding source. Whisper segment
 newlines are flattened before labels are assigned, labels must remain
 contiguous from `S001`, and compound title validation consumes complete source
 terms without crossing token boundaries. Planning always compares the complete
-current expected name, while `plan --refresh-standardized-path` and
-`plan --refresh-description-drift` preserve explicit audit metadata for reviewed
-paths. Drift is computed only from a SHA-matching sidecar whose contextual or
-quality-gate evidence validates under the current schema. Dataless and
-SHA-unverified drift paths are reported as deferred and never authorize
-mutation. The only accepted
+current expected name and reports `description_drift_paths` independently of
+authorization. `plan --refresh-standardized-path` authorizes reviewed paths;
+`plan --refresh-description-drift` authorizes all detected drift. Dataless and
+SHA-unverified authorized paths are reported as deferred and never mutate. The
+only accepted
 model identifier and immutable Hub revision are
 compiled in, tokenizer `trust_remote_code` is forced off, and old validation
 versions are regenerated rather than relabeled. No Ollama server is used and
@@ -231,7 +233,9 @@ uses macOS `renameatx_np(RENAME_EXCL)` or Linux
 `renameat2(RENAME_NOREPLACE)`; rollback follows the same descriptor-relative
 route. The Python API rejects mutation execution through mocks, wrappers, or
 other injected backends, so path-name semantics cannot replace this Rust
-boundary.
+boundary. The public Python `inspect`, `stage`, and `evict` methods also reject
+absolute, parent, non-portable, and symlink-component paths before constructing
+native argv; Rust repeats its own descriptor-relative validation.
 
 ## Evidence precedence
 

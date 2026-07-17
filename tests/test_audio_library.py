@@ -1714,6 +1714,40 @@ class RustBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "must be positive"):
                     backend.evict(Path(tmp), "a.wav", timeout_seconds=0)
 
+    def test_public_backend_rejects_unsafe_relative_paths_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "library"
+            root.mkdir()
+            staging = Path(tmp) / "staging"
+            staging.mkdir()
+            outside = Path(tmp) / "outside"
+            outside.mkdir()
+            (root / "linked").symlink_to(outside, target_is_directory=True)
+            binary = Path(tmp) / "core"
+            binary.write_bytes(b"")
+            backend = _test_backend(binary)
+
+            for candidate in (
+                "../outside.txt",
+                "nested/../outside.txt",
+                "/etc/passwd",
+                "C:\\Windows\\system.ini",
+                "//server/share",
+                "nested\\file.wav",
+                "linked/file.wav",
+                "bad\0path",
+            ):
+                for method in ("inspect", "stage", "evict"):
+                    with self.subTest(candidate=candidate, method=method):
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            "relative path|beneath the library root|non-portable|symlink",
+                        ):
+                            if method == "stage":
+                                backend.stage(root, candidate, staging)
+                            else:
+                                getattr(backend, method)(root, candidate)
+
     def test_stage_command_decodes_success_and_monitors_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2912,10 +2946,9 @@ class AudioLibraryTests(unittest.TestCase):
             with patch.object(library, "_record_ready_for_mutation", return_value=True):
                 plan = library.plan()
                 refreshed = library.plan(refresh_standardized_paths=[standard])
-            self.assertEqual(
-                [(item["action"], item["source"]) for item in plan["operations"]],
-                [("rename", standard), ("rename", tmk)],
-            )
+            self.assertEqual(plan["operations"], [])
+            self.assertEqual(plan["description_drift_paths"], [standard])
+            self.assertEqual(plan["refresh_standardized_paths"], [])
             self.assertEqual(refreshed["refresh_standardized_paths"], [standard])
             self.assertEqual(
                 [(item["action"], item["source"]) for item in refreshed["operations"]],

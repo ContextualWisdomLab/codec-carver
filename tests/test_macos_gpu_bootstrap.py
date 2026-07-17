@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,15 +26,23 @@ class MacosGpuBootstrapTests(unittest.TestCase):
         self.assertIn("--only-binary :all:", script)
         self.assertIn('--requirements "$LOCK_FILE"', script)
         self.assertNotIn("--editable", script)
-        self.assertIn('[[ "$(uname -m)" == "arm64" ]]', script)
+        self.assertIn('[[ "$("$UNAME_BIN" -m)" == "arm64" ]]', script)
         self.assertIn('cd -- "$RUNTIME_DIR"', script)
         self.assertIn('--python "./bin/python"', script)
         self.assertIn('secure_directory_identity . "runtime directory"', script)
+        self.assertIn('PATH="/usr/bin:/bin:/usr/sbin:/sbin"', script)
+        self.assertIn('DIRNAME_BIN="/usr/bin/dirname"', script)
+        self.assertIn('UV_BIN="/opt/homebrew/bin/uv"', script)
+        self.assertIn('UV_SNAPSHOT="$("$MKTEMP_BIN"', script)
+        self.assertIn('sha256_file "$UV_SNAPSHOT"', script)
+        self.assertNotIn("command -v", script)
 
     def test_every_locked_requirement_is_exact_and_hashed(self) -> None:
         lock = LOCK_FILE.read_text(encoding="utf-8")
         blocks = re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", lock)
-        requirements = [block for block in blocks if re.match(r"^[A-Za-z0-9_.-]+==", block)]
+        requirements = [
+            block for block in blocks if re.match(r"^[A-Za-z0-9_.-]+==", block)
+        ]
 
         self.assertGreater(len(requirements), 50)
         for requirement in requirements:
@@ -54,6 +64,27 @@ class MacosGpuBootstrapTests(unittest.TestCase):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, lock)
 
+    def test_hostile_path_cannot_hijack_bootstrap_help(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / "marker"
+            hostile_dirname = root / "dirname"
+            hostile_dirname.write_text(
+                f'#!/bin/sh\nprintf owned > {str(marker)!r}\nexec /usr/bin/dirname "$@"\n',
+                encoding="utf-8",
+            )
+            hostile_dirname.chmod(0o700)
+            completed = subprocess.run(
+                [str(BOOTSTRAP), "--help"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}"},
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS bootstrap runtime test")
     def test_bootstrap_rejects_broad_symlinked_and_swapped_runtime_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -67,7 +98,7 @@ class MacosGpuBootstrapTests(unittest.TestCase):
             trusted_root.mkdir(parents=True)
 
             (fake_bin / "uname").write_text(
-                "#!/bin/sh\n[ \"$1\" = -s ] && echo Darwin || echo arm64\n",
+                '#!/bin/sh\n[ "$1" = -s ] && echo Darwin || echo arm64\n',
                 encoding="utf-8",
             )
             (fake_bin / "xattr").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
@@ -88,16 +119,22 @@ fi
             )
             for executable in fake_bin.iterdir():
                 executable.chmod(0o700)
+            uv_sha256 = hashlib.sha256((fake_bin / "uv").read_bytes()).hexdigest()
 
             env = {
                 **os.environ,
                 "HOME": str(home),
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
-                "UV_BIN": str(fake_bin / "uv"),
             }
+            uv_options = [
+                "--uv-bin",
+                str(fake_bin / "uv"),
+                "--uv-sha256",
+                uv_sha256,
+            ]
 
             broad = subprocess.run(
-                [str(BOOTSTRAP), "--runtime-dir", f"{home}/"],
+                [str(BOOTSTRAP), "--runtime-dir", f"{home}/", *uv_options],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -109,7 +146,12 @@ fi
             symlink_runtime = trusted_root / "linked"
             symlink_runtime.symlink_to(Path("/"), target_is_directory=True)
             linked = subprocess.run(
-                [str(BOOTSTRAP), "--runtime-dir", str(symlink_runtime)],
+                [
+                    str(BOOTSTRAP),
+                    "--runtime-dir",
+                    str(symlink_runtime),
+                    *uv_options,
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -125,7 +167,12 @@ fi
                 "RACE_TARGET": str(escape),
             }
             raced = subprocess.run(
-                [str(BOOTSTRAP), "--runtime-dir", str(raced_runtime)],
+                [
+                    str(BOOTSTRAP),
+                    "--runtime-dir",
+                    str(raced_runtime),
+                    *uv_options,
+                ],
                 check=False,
                 capture_output=True,
                 text=True,

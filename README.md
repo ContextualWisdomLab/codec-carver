@@ -147,8 +147,8 @@ codec-carver-library /path/to/recordings describe \
   --path "recording-a.m4a" --path "recording-b.wav"
 codec-carver-library /path/to/recordings plan
 # Every name is compared with the complete SHA-bound name derived from its
-# transcript. These optional selectors retain an explicit audit trail for a
-# reviewed legacy path or all validated semantic-title drift.
+# transcript and drift is reported. Changing an existing standard name requires
+# one of these explicit refresh authorizations.
 codec-carver-library /path/to/recordings plan \
   --refresh-standardized-path "2024-06-24_15-44-11__선유로__old-title__sha256-04d93e2e12fb.m4a"
 codec-carver-library /path/to/recordings plan \
@@ -208,9 +208,10 @@ evidence-backed description when present and retains the deterministic extractor
 as a no-model failure-safe.
 Once semantic analysis has explicitly failed, its reason is checkpointed and
 the unstandardized recording is deferred instead of being renamed from a
-keyword-only fallback. An existing standard name remains stable only when its
-entire basename equals the timestamp, location, transcript-derived
-central-context title, and SHA suffix recomputed from current evidence.
+keyword-only fallback. Planning reports an existing standard name when its
+entire basename differs from the timestamp, location, transcript-derived
+central-context title, and SHA suffix recomputed from current evidence, but a
+durable rename still requires explicit refresh authorization.
 
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
@@ -313,13 +314,16 @@ filenames. For long meetings, the optional Gemma phase records the central idea,
 outcome, confidence, and directly supporting segment IDs before it creates the
 filename title. Generic keyword bundles are rejected, while the deterministic
 corpus-central phrase remains the no-model failure-safe. A structurally valid
-timestamp/location/SHA wrapper does not preserve an arbitrary description: the
-complete expected name must match the transcript-derived title.
+timestamp/location/SHA wrapper cannot hide an arbitrary description: the
+complete expected name is compared and listed in `description_drift_paths`,
+while explicit refresh authorization controls the durable rename.
 Duplicate files move to the recoverable
 `.codec-carver/quarantine/exact-duplicates/` tree; no irreversible deletion is
 performed by default. Inventory, TMK, transcript, and mutation paths are
-validated beneath the canonical library root before Python or Rust receives
-them. Symlinked state/staging roots are refused, and scratch cleanup uses a
+validated beneath the canonical library root at both the public Python bridge
+and Rust boundary. Direct `inspect`, `stage`, and `evict` calls reject absolute,
+parent, non-portable, and symlink-component paths before launching Rust.
+Symlinked state/staging roots are refused, and scratch cleanup uses a
 no-follow directory handle rather than a check-then-unlink pathname.
 Private state paths are created and opened from `/` one component at a time with
 `mkdirat`/`openat`, `O_DIRECTORY`, and `O_NOFOLLOW`; an intermediate ancestor
@@ -354,6 +358,10 @@ materialized. Create the persistent runtime under the local cache instead. The
 bootstrap supports Apple Silicon and installs the complete Python dependency
 graph from `requirements-macos-mlx-lock.txt` with package hashes verified; the
 checkout itself is run directly rather than installed as an editable package.
+The script resets `PATH` before its first helper call, uses fixed system-tool
+paths, and copies the reviewed SHA-256-pinned `uv` executable into the validated
+runtime inode before executing it. A different reviewed `uv` build requires
+both `--uv-bin` and its `--uv-sha256` digest.
 The runtime must be a direct child of the owner-controlled
 `~/Library/Caches/codec-carver/venvs` directory; bootstrap operations stay bound
 to the validated directory inode so a later pathname swap cannot redirect them:

@@ -732,6 +732,9 @@ class RustBackend:
     ) -> dict[str, Any]:
         """Hash and inspect one already-materialized relative path."""
 
+        relative_path = validate_relative_path(
+            Path(root), relative_path, label="backend inspect path"
+        )
         return self._run_json(
             [
                 str(self.binary),
@@ -761,6 +764,9 @@ class RustBackend:
             total_timeout_seconds = timeout_seconds * STAGE_TOTAL_TIMEOUT_MULTIPLIER
         if total_timeout_seconds <= 0:
             raise ValueError("stage total timeout must be positive")
+        relative_path = validate_relative_path(
+            Path(root), relative_path, label="backend stage path"
+        )
         self._assert_binary_integrity()
         command = [
             str(self.binary),
@@ -820,6 +826,9 @@ class RustBackend:
 
         if timeout_seconds <= 0:
             raise ValueError("eviction timeout must be positive")
+        relative_path = validate_relative_path(
+            Path(root), relative_path, label="backend eviction path"
+        )
         return self._run_json(
             [
                 str(self.binary),
@@ -4369,7 +4378,10 @@ class AudioLibrary:
             if not recorded_at:
                 raise ValueError(f"recording time is unknown: {record['path']}")
             desired_name = standard_filename(record, transcript, recorded_at)
-            if Path(record["path"]).name == desired_name:
+            existing_standard = is_existing_standard_filename(record, recorded_at)
+            if Path(record["path"]).name == desired_name or (
+                existing_standard and record["path"] not in refresh_paths
+            ):
                 destination = record["path"]
             else:
                 if transcript.get("filename_description_status") == "deferred":
@@ -4441,8 +4453,6 @@ class AudioLibrary:
                 validate_transcript_record_identity(record, transcript)
             except ValueError:
                 continue
-            if validated_cached_filename_description(transcript) is None:
-                continue
             desired_name = standard_filename(record, transcript, recorded_at)
             if desired_name != Path(record["path"]).name:
                 drift_paths.append(record["path"])
@@ -4461,12 +4471,10 @@ class AudioLibrary:
         manifest = self._load_inventory()
         if not isinstance(refresh_description_drift, bool):
             raise ValueError("refresh_description_drift must be a boolean")
-        description_drift_paths = (
-            self._description_drift_paths(manifest) if refresh_description_drift else []
-        )
+        description_drift_paths = self._description_drift_paths(manifest)
         refresh_paths = sorted(
             {
-                *description_drift_paths,
+                *(description_drift_paths if refresh_description_drift else []),
                 *(
                     validate_relative_path(
                         self.root,
@@ -4674,15 +4682,15 @@ class AudioLibrary:
             )
             validate_sha256(operation.get("sha256"), label=f"mutation SHA-256 {index}")
         manifest = self._load_inventory()
-        expected_description_drift_paths = (
-            self._description_drift_paths(manifest) if refresh_description_drift else []
-        )
+        expected_description_drift_paths = self._description_drift_paths(manifest)
         if description_drift_paths != expected_description_drift_paths:
             raise ValueError(
                 "mutation plan description drift paths are not authorized by the "
                 "current transcripts"
             )
-        if not set(description_drift_paths).issubset(refresh_standardized_paths):
+        if refresh_description_drift and not set(description_drift_paths).issubset(
+            refresh_standardized_paths
+        ):
             raise ValueError(
                 "mutation plan standardized refresh paths omit description drift"
             )
@@ -5344,8 +5352,17 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser = subparsers.add_parser("plan")
     plan_parser.add_argument("--allow-missing-transcripts", action="store_true")
     plan_parser.add_argument("--defer-unready", action="store_true")
-    plan_parser.add_argument("--refresh-description-drift", action="store_true")
-    plan_parser.add_argument("--refresh-standardized-path", action="append", default=[])
+    plan_parser.add_argument(
+        "--refresh-description-drift",
+        action="store_true",
+        help="authorize renaming every reported standardized-name drift path",
+    )
+    plan_parser.add_argument(
+        "--refresh-standardized-path",
+        action="append",
+        default=[],
+        help="authorize renaming one existing standardized relative path",
+    )
     apply_parser = subparsers.add_parser("apply")
     apply_parser.add_argument("--execute", action="store_true")
     return parser
