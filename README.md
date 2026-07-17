@@ -146,12 +146,11 @@ codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
 codec-carver-library /path/to/recordings describe \
   --path "recording-a.m4a" --path "recording-b.wav"
 codec-carver-library /path/to/recordings plan
-# Existing SHA-bound names are preserved by default. Recompute one known-bad
-# standardized name only when its transcript context has been reviewed.
+# Every name is compared with the complete SHA-bound name derived from its
+# transcript. These optional selectors retain an explicit audit trail for a
+# reviewed legacy path or all validated semantic-title drift.
 codec-carver-library /path/to/recordings plan \
   --refresh-standardized-path "2024-06-24_15-44-11__선유로__old-title__sha256-04d93e2e12fb.m4a"
-# Or discover every SHA-bound standard name whose validated sidecar title has
-# changed. Unmaterialized or SHA-unverified sources remain deferred.
 codec-carver-library /path/to/recordings plan \
   --refresh-description-drift --defer-unready
 # When iCloud has not supplied every source, mutate only fully ready recordings
@@ -175,7 +174,9 @@ decoded first by an equivalently approved absolute `ffmpeg` and passed to
 Whisper as an in-memory waveform, so `mlx-whisper` never resolves a bare
 `ffmpeg` from caller-controlled `PATH`. Rust, ffprobe, and ffmpeg children all
 receive a minimal allowlisted environment that excludes `LD_*` and `DYLD_*`
-loader injection controls.
+loader injection controls. MLX-VLM preflight additionally uses Python isolated
+mode, a trusted runtime working directory, and verifies the package origin is
+beneath that interpreter's prefix before importing native model code.
 Whisper repositories are also immutable inputs: MLX accepts only
 `mlx-community/whisper-large-v3-turbo-q4` at revision
 `660c343bbf4e52ac257f0b7d952e5388e6f93bef`, while CUDA resolves
@@ -207,8 +208,9 @@ evidence-backed description when present and retains the deterministic extractor
 as a no-model failure-safe.
 Once semantic analysis has explicitly failed, its reason is checkpointed and
 the unstandardized recording is deferred instead of being renamed from a
-keyword-only fallback.
-Existing SHA-bound standard names remain stable.
+keyword-only fallback. An existing standard name remains stable only when its
+entire basename equals the timestamp, location, transcript-derived
+central-context title, and SHA suffix recomputed from current evidence.
 
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
@@ -302,14 +304,17 @@ Transcripts are keyed by the full SHA-256 under
 accept only canonical 64-hex digest filenames. Every transcript consumer opens
 the final sidecar relative to a verified directory descriptor with
 `O_NOFOLLOW`; symlinks and non-regular sidecars are unavailable evidence, never
-external JSON input. Exact copies are inferred only once. Ultra-short
+external JSON input. Cache, planning, TMK backfill, and inventory reconciliation
+also verify the sidecar's embedded SHA-256 against its inventory record; a
+foreign sidecar cannot suppress GPU inference or supply a filename title. Exact
+copies are inferred only once. Ultra-short
 low-confidence words remain auditable in JSON but do not enter standardized
 filenames. For long meetings, the optional Gemma phase records the central idea,
 outcome, confidence, and directly supporting segment IDs before it creates the
 filename title. Generic keyword bundles are rejected, while the deterministic
-corpus-central phrase remains the no-model failure-safe. Once a name has a valid
-recording timestamp, known location, and matching SHA prefix, later extractor
-improvements preserve it instead of renaming the library again.
+corpus-central phrase remains the no-model failure-safe. A structurally valid
+timestamp/location/SHA wrapper does not preserve an arbitrary description: the
+complete expected name must match the transcript-derived title.
 Duplicate files move to the recoverable
 `.codec-carver/quarantine/exact-duplicates/` tree; no irreversible deletion is
 performed by default. Inventory, TMK, transcript, and mutation paths are
@@ -324,7 +329,9 @@ execution, walks or creates every source/destination parent relative to the
 locked root descriptor with `O_NOFOLLOW`, and performs no-overwrite
 descriptor-relative renames (`RENAME_EXCL` on macOS, `RENAME_NOREPLACE` on
 Linux). Rollback uses the same primitive, so replacing a destination parent
-with a symlink cannot redirect a move outside the library.
+with a symlink cannot redirect a move outside the library. Python refuses
+`apply --execute` for injected or substitute backends; only the concrete,
+descriptor-safe `RustBackend` may cross the mutation boundary.
 Rust returns inventory and mutation-journal JSON on stdout; Python alone commits
 those state files through descriptor-relative atomic replacement. Final-name
 symlinks are never followed, and a partial or schema-invalid mutation journal is

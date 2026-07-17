@@ -1524,6 +1524,10 @@ class NamingTests(unittest.TestCase):
                 run.call_args.kwargs["env"]["PATH"],
                 audio_library.TRUSTED_CHILD_PATH,
             )
+            self.assertEqual(run.call_args.args[0][1], "-I")
+            self.assertEqual(
+                run.call_args.kwargs["cwd"], Path(sys.executable).resolve().parent
+            )
 
             with (
                 patch(
@@ -1553,6 +1557,28 @@ class NamingTests(unittest.TestCase):
                     ),
                 ):
                     audio_library.preflight_mlx_vlm_import()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            hostile = Path(tmp)
+            marker = hostile / "cwd-imported"
+            package = hostile / "mlx_vlm"
+            package.mkdir()
+            (package / "__init__.py").write_text(
+                f"from pathlib import Path\nPath({str(marker)!r}).write_text('owned')\n",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            with patch.dict(sys.modules, {}, clear=False):
+                sys.modules.pop("mlx_vlm", None)
+                try:
+                    os.chdir(hostile)
+                    try:
+                        audio_library.preflight_mlx_vlm_import(timeout_seconds=2)
+                    except audio_library.SemanticDescriptionUnavailableError:
+                        pass
+                finally:
+                    os.chdir(previous_cwd)
+            self.assertFalse(marker.exists())
 
     def test_sanitize_and_standard_filename(self) -> None:
         self.assertEqual(sanitize_component(" a / b ::: ", limit=20), "a-b")
@@ -2588,6 +2614,10 @@ class AudioLibraryTests(unittest.TestCase):
             atomic_json_write(library.state_dir / "inventory.json", current)
             library.plan(defer_unready=True)
             self.assertEqual(library.apply(), {"executed": False})
+            with self.assertRaisesRegex(
+                RuntimeError, "concrete descriptor-safe RustBackend"
+            ):
+                library.apply(execute=True)
 
     def test_unique_records_choose_duplicate_canonical(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2808,7 +2838,9 @@ class AudioLibraryTests(unittest.TestCase):
             plan = library.plan(defer_unready=True)
             self.assertIn("canonical.wav", plan["deferred_paths"])
 
-    def test_plan_rejects_unknown_time_and_skips_standard_names(self) -> None:
+    def test_plan_rejects_unknown_time_and_refreshes_mismatched_standard_names(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".codec-carver"
@@ -2876,11 +2908,14 @@ class AudioLibraryTests(unittest.TestCase):
                     },
                 },
             )
-            plan = AudioLibrary(root, Mock()).plan()
-            self.assertEqual(plan["operations"], [])
             library = AudioLibrary(root, Mock())
             with patch.object(library, "_record_ready_for_mutation", return_value=True):
+                plan = library.plan()
                 refreshed = library.plan(refresh_standardized_paths=[standard])
+            self.assertEqual(
+                [(item["action"], item["source"]) for item in plan["operations"]],
+                [("rename", standard), ("rename", tmk)],
+            )
             self.assertEqual(refreshed["refresh_standardized_paths"], [standard])
             self.assertEqual(
                 [(item["action"], item["source"]) for item in refreshed["operations"]],
@@ -2906,13 +2941,51 @@ class AudioLibraryTests(unittest.TestCase):
             )
             mismatched_transcript["sha256"] = HASH_B
             atomic_json_write(transcript_path, mismatched_transcript)
-            mismatched_drift = library.plan(refresh_description_drift=True)
+            with self.assertRaisesRegex(ValueError, "transcript identity is invalid"):
+                library.plan(refresh_description_drift=True)
+            mismatched_drift = library.plan(
+                refresh_description_drift=True, defer_unready=True
+            )
             self.assertEqual(mismatched_drift["description_drift_paths"], [])
             self.assertEqual(mismatched_drift["operations"], [])
+            self.assertEqual(
+                mismatched_drift["deferred_paths"], sorted([standard, tmk])
+            )
             with self.assertRaisesRegex(ValueError, "must be a boolean"):
                 library.plan(refresh_description_drift="yes")  # type: ignore[arg-type]
             with self.assertRaisesRegex(ValueError, "absent from inventory"):
                 library.plan(refresh_standardized_paths=["unknown.wav"])
+
+    def test_plan_rejects_unbound_transcript_for_unverified_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            record = _record(
+                f"2024-01-02_03-04-00__임의제목__sha256-{HASH_A[:12]}.wav",
+                HASH_A,
+                materialized=False,
+                sha256_verified=False,
+                sha256_source="transcript_sidecar",
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [record],
+                    "duplicate_groups": [],
+                },
+            )
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_A}.json",
+                {"text": "분석가 부족으로 공정 데이터 프로젝트 일정을 조정합니다"},
+            )
+            library = AudioLibrary(root, Mock())
+            with self.assertRaisesRegex(ValueError, "transcript identity is invalid"):
+                library.plan()
+            deferred = library.plan(defer_unready=True)
+            self.assertEqual(deferred["operations"], [])
+            self.assertEqual(deferred["deferred_paths"], [record["path"]])
 
     def test_transcribe_writes_sidecars_and_isolates_bad_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2983,15 +3056,23 @@ class AudioLibraryTests(unittest.TestCase):
             progress.assert_called_once()
             fake.transcribe.assert_not_called()
 
-            (state / "transcripts" / f"{HASH_A}.json").unlink()
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_A}.json",
+                {"sha256": HASH_B, "text": "foreign cached speech"},
+            )
             fake.transcribe.return_value = {
-                "text": "성공",
+                "text": "verified replacement",
                 "segments": [],
                 "language": "ko",
             }
             with patch("audio_library.GpuTranscriber", return_value=fake):
                 summary = library.transcribe(max_files=1)
             self.assertEqual(summary["completed"], 1)
+            rewritten = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(rewritten["sha256"], HASH_A)
+            self.assertEqual(rewritten["text"], "verified replacement")
 
             fake.reset_mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
@@ -3940,6 +4021,25 @@ class AudioLibraryTests(unittest.TestCase):
                 summary = library.stream_transcribe(max_files=1, evict_after=False)
             self.assertEqual(summary["cached"], 1)
             fake.transcribe.assert_not_called()
+
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_B}.json",
+                {"sha256": HASH_A, "text": "foreign cached speech"},
+            )
+            fake.transcribe.side_effect = None
+            fake.transcribe.return_value = {
+                "text": "stream verified replacement",
+                "segments": [],
+                "language": "ko",
+            }
+            with patch("audio_library.GpuTranscriber", return_value=fake):
+                summary = library.stream_transcribe(max_files=1, evict_after=False)
+            self.assertEqual(summary["completed"], 1)
+            rewritten = json.loads(
+                (state / "transcripts" / f"{HASH_B}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(rewritten["sha256"], HASH_B)
+            self.assertEqual(rewritten["text"], "stream verified replacement")
 
     def test_stream_transcribe_selects_explicit_paths_and_rejects_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -78,9 +78,10 @@ preferred interface for recording curation.
   evidence labels. Labeled evidence must be the exact contiguous sequence
   `S001`, `S002`, and so on, and title grounding preserves source token
   boundaries rather than accepting arbitrary cross-token substrings.
-- A name already satisfying the timestamp, known-location, extension, and
-  SHA-prefix contract is stable across rescans. Description extractor upgrades
-  therefore affect only previously unstandardized recordings.
+- A name is stable only when its complete basename equals the timestamp,
+  known-location, transcript-derived description, extension, and SHA suffix
+  recomputed from current evidence. A structurally valid wrapper cannot preserve
+  an arbitrary or stale description.
 - Mutations are dry-run by default. Python recomputes the exact authorized
   operation list from the current inventory and transcript evidence; Rust then
   rehashes every audio and TMK source before any move. Execution rejects
@@ -89,7 +90,8 @@ preferred interface for recording curation.
   library root throughout validation and execution, traverses and creates
   parents relative to no-follow directory descriptors, and uses atomic
   no-overwrite descriptor-relative rename primitives. A failed batch rolls
-  completed moves back in reverse order through the same guarded path.
+  completed moves back in reverse order through the same guarded path. Python
+  permits execution only through the concrete descriptor-safe `RustBackend`.
 - Exact duplicates leave the active library through a recoverable
   `.codec-carver/quarantine/exact-duplicates/<sha256>/...` move. Nothing is
   irreversibly deleted by the default workflow.
@@ -136,8 +138,10 @@ preferred interface for recording curation.
   allowlists. MLX receives the decoded waveform instead of a path, preventing
   its dependency from launching a bare PATH-resolved ffmpeg. Rust, ffprobe, and
   ffmpeg subprocesses receive a minimal environment without dynamic-loader
-  injection variables. Executed mutation-journal hashes remain unverified
-  identity hints until current bytes are hashed again.
+  injection variables. MLX-VLM preflight runs Python in isolated mode from the
+  interpreter directory and verifies the resolved package is beneath that
+  interpreter's prefix before any model import. Executed mutation-journal hashes
+  remain unverified identity hints until current bytes are hashed again.
 - Malformed-journal quarantine creates and opens `recovery` and
   `malformed-journals` relative to one verified state-directory descriptor.
   Each component uses no-follow directory operations, so an intermediate
@@ -194,12 +198,13 @@ cited lines, while title terms are checked directly against the transcript;
 model-authored analysis cannot become its own grounding source. Whisper segment
 newlines are flattened before labels are assigned, labels must remain
 contiguous from `S001`, and compound title validation consumes complete source
-terms without crossing token boundaries. Existing standard names remain
-immutable unless their exact inventory path is supplied to
-`plan --refresh-standardized-path`, or `plan --refresh-description-drift`
-recomputes drift from a SHA-matching sidecar whose contextual or quality-gate
-evidence validates under the current schema. Dataless and SHA-unverified drift
-paths are reported as deferred and never authorize mutation. The only accepted
+terms without crossing token boundaries. Planning always compares the complete
+current expected name, while `plan --refresh-standardized-path` and
+`plan --refresh-description-drift` preserve explicit audit metadata for reviewed
+paths. Drift is computed only from a SHA-matching sidecar whose contextual or
+quality-gate evidence validates under the current schema. Dataless and
+SHA-unverified drift paths are reported as deferred and never authorize
+mutation. The only accepted
 model identifier and immutable Hub revision are
 compiled in, tokenizer `trust_remote_code` is forced off, and old validation
 versions are regenerated rather than relabeled. No Ollama server is used and
@@ -224,7 +229,9 @@ execution opens and locks the library root, reopens and hashes each source
 through `openat`, traverses destination parents without following symlinks, and
 uses macOS `renameatx_np(RENAME_EXCL)` or Linux
 `renameat2(RENAME_NOREPLACE)`; rollback follows the same descriptor-relative
-route.
+route. The Python API rejects mutation execution through mocks, wrappers, or
+other injected backends, so path-name semantics cannot replace this Rust
+boundary.
 
 ## Evidence precedence
 
@@ -261,6 +268,9 @@ The library root contains a generated, excluded state directory:
 Transcripts are keyed by full SHA-256 so a renamed recording or duplicate copy
 does not trigger a second inference run. The directory is `0700` and every
 sidecar is `0600` because transcripts can contain sensitive conversations.
+Consumers validate the embedded transcript SHA against the inventory record
+before cache reuse, title planning, metadata backfill, or reconciliation; a
+foreign sidecar is retried, rejected, or explicitly deferred rather than used.
 Inventory and mutation backends return JSON to Python over stdout; only Python
 persists these files with descriptor-relative atomic replacement. A malformed
 journal is preserved in the recovery tree with a digest-bearing name and a

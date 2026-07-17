@@ -620,6 +620,8 @@ def trusted_child_environment() -> dict[str, str]:
 class RustBackend:
     """One-process-per-batch bridge to the optimized Rust backend."""
 
+    descriptor_safe_mutations = True
+
     def __init__(
         self,
         binary: Path | str | None = None,
@@ -1298,6 +1300,18 @@ def transcript_cache_is_usable(transcript: Any) -> bool:
     return isinstance(flags, list) and any(
         flag in EXPLAINED_EMPTY_TRANSCRIPT_FLAGS for flag in flags
     )
+
+
+def transcript_cache_matches_record(record: dict[str, Any], transcript: Any) -> bool:
+    """Accept cached speech only when its embedded identity matches the record."""
+
+    if not transcript_cache_is_usable(transcript):
+        return False
+    try:
+        validate_transcript_record_identity(record, transcript)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def normalize_segment(segment: dict[str, Any]) -> dict[str, Any]:
@@ -2342,11 +2356,22 @@ def preflight_mlx_vlm_import(
         return
     command = [
         sys.executable,
+        "-I",
         "-c",
         (
-            "from mlx_vlm import generate, load; "
-            "from mlx_vlm.prompt_utils import apply_chat_template; "
-            "from mlx_vlm.utils import load_config"
+            "import importlib.util, pathlib, sys\n"
+            "spec = importlib.util.find_spec('mlx_vlm')\n"
+            "if spec is None or spec.origin is None:\n"
+            "    raise ImportError('mlx_vlm package origin is unavailable')\n"
+            "origin = pathlib.Path(spec.origin).resolve()\n"
+            "prefix = pathlib.Path(sys.prefix).resolve()\n"
+            "try:\n"
+            "    origin.relative_to(prefix)\n"
+            "except ValueError:\n"
+            "    raise RuntimeError(f'untrusted mlx_vlm origin: {origin}')\n"
+            "from mlx_vlm import generate, load\n"
+            "from mlx_vlm.prompt_utils import apply_chat_template\n"
+            "from mlx_vlm.utils import load_config\n"
         ),
     ]
     try:
@@ -2359,6 +2384,7 @@ def preflight_mlx_vlm_import(
             text=True,
             timeout=timeout_seconds,
             env=trusted_child_environment(),
+            cwd=Path(sys.executable).resolve().parent,
         )
     except subprocess.TimeoutExpired as exc:
         raise SemanticDescriptionUnavailableError(
@@ -3475,7 +3501,8 @@ class AudioLibrary:
                 sha256 = validate_sha256(record["sha256"])
                 output = safe_transcript_path(transcript_dir, sha256)
                 text_output = safe_transcript_path(transcript_dir, sha256, ".txt")
-                if transcript_cache_is_usable(read_optional_private_json(output)):
+                cached_transcript = read_optional_private_json(output)
+                if transcript_cache_matches_record(record, cached_transcript):
                     skipped += 1
                     status = "cached"
                 else:
@@ -3636,6 +3663,9 @@ class AudioLibrary:
                                     else None
                                 )
                                 if transcript is not None:
+                                    validate_transcript_record_identity(
+                                        audio_record, transcript
+                                    )
                                     transcript["tmk_marker_count"] = record.get(
                                         "tmk_marker_count"
                                     )
@@ -3897,9 +3927,8 @@ class AudioLibrary:
                 sha256 = validate_sha256(record["sha256"])
                 transcript_path = safe_transcript_path(transcript_dir, sha256)
                 text_path = safe_transcript_path(transcript_dir, sha256, ".txt")
-                if transcript_cache_is_usable(
-                    read_optional_private_json(transcript_path)
-                ):
+                cached_transcript = read_optional_private_json(transcript_path)
+                if transcript_cache_matches_record(record, cached_transcript):
                     cached += 1
                     status = "cached"
                 else:
@@ -4001,13 +4030,6 @@ class AudioLibrary:
         records = []
         for record in unique_audio_records(manifest):
             if requested_paths and record["path"] not in requested_paths:
-                continue
-            recorded_at = record.get("recorded_at")
-            if (
-                recorded_at
-                and is_existing_standard_filename(record, recorded_at)
-                and record["path"] not in requested_paths
-            ):
                 continue
             transcript_path = safe_transcript_path(
                 self.state_dir / "transcripts", record["sha256"]
@@ -4333,13 +4355,21 @@ class AudioLibrary:
             elif transcript is None:
                 missing.append(record["path"])
                 continue
+            else:
+                try:
+                    validate_transcript_record_identity(record, transcript)
+                except (TypeError, ValueError) as exc:
+                    if defer_unready:
+                        defer_record(record)
+                        continue
+                    raise ValueError(
+                        f"transcript identity is invalid for {record['path']}: {exc}"
+                    ) from exc
             recorded_at = earliest_by_hash.get(sha256) or record.get("recorded_at")
             if not recorded_at:
                 raise ValueError(f"recording time is unknown: {record['path']}")
-            if (
-                is_existing_standard_filename(record, recorded_at)
-                and record["path"] not in refresh_paths
-            ):
+            desired_name = standard_filename(record, transcript, recorded_at)
+            if Path(record["path"]).name == desired_name:
                 destination = record["path"]
             else:
                 if transcript.get("filename_description_status") == "deferred":
@@ -4348,11 +4378,7 @@ class AudioLibrary:
                 if not ready(record):
                     defer_record(record)
                     continue
-                destination = str(
-                    Path(record["path"]).with_name(
-                        standard_filename(record, transcript, recorded_at)
-                    )
-                )
+                destination = str(Path(record["path"]).with_name(desired_name))
             tmk_path = record.get("tmk_path")
             tmk_record = None
             tmk_destination = None
@@ -4481,6 +4507,13 @@ class AudioLibrary:
         """Validate by default, or execute only when explicitly requested."""
 
         self._validate_mutation_plan()
+        if execute and (
+            type(self.backend) is not RustBackend
+            or self.backend.descriptor_safe_mutations is not True
+        ):
+            raise RuntimeError(
+                "executing mutations requires the concrete descriptor-safe RustBackend"
+            )
         result = self.backend.apply(
             self.state_dir / "mutation-plan.json", execute=execute
         )
@@ -5171,6 +5204,13 @@ def restore_inventory_evidence(
         transcript_path = safe_transcript_path(transcript_dir, record["sha256"])
         transcript = read_optional_private_json(transcript_path)
         if transcript is None:
+            continue
+        try:
+            validate_transcript_record_identity(record, transcript)
+        except (TypeError, ValueError) as exc:
+            manifest.setdefault("transcript_identity_errors", []).append(
+                {"path": record["path"], "error": str(exc)}
+            )
             continue
         transcript["source_path"] = record["path"]
         transcript["recorded_at"] = record.get("recorded_at")
