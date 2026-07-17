@@ -343,18 +343,21 @@ precedence, filename contract, and primary research/standards sources are in
 On macOS, do not place the MLX environment in an iCloud/File Provider-backed
 repository. Loading native packages such as `tokenizers`, `torch`, and
 `mlx-vlm` can otherwise block inside `dyld` even when the package files appear
-materialized. Create the persistent runtime under the local cache instead:
+materialized. Create the persistent runtime under the local cache instead. The
+bootstrap supports Apple Silicon and installs the complete Python dependency
+graph from `requirements-macos-mlx-lock.txt` with package hashes verified; the
+checkout itself is run directly rather than installed as an editable package:
 
 ```bash
 ./scripts/bootstrap_macos_gpu_runtime.sh
 GPU_PY="$HOME/Library/Caches/codec-carver/venvs/gpu-py312/bin/python"
-"$GPU_PY" audio_library.py /path/to/library inventory
-"$GPU_PY" audio_library.py /path/to/library transcribe --accelerator mlx
-"$GPU_PY" audio_library.py /path/to/library describe
+"$GPU_PY" "$PWD/audio_library.py" /path/to/library inventory
+"$GPU_PY" "$PWD/audio_library.py" /path/to/library transcribe --accelerator mlx
+"$GPU_PY" "$PWD/audio_library.py" /path/to/library describe
 ```
 
-The bootstrap installs the pinned `transcribe-mlx` and `describe-mlx` extras
-into one reusable environment outside File Provider storage. The Python API
+The bootstrap installs the hash-locked dependency sets for `transcribe-mlx` and
+`describe-mlx` into one reusable environment outside File Provider storage. The Python API
 keeps the Whisper and Gemma models resident for batch work, Apple Metal performs
 the model inference without Ollama or CPU fallback, and the Rust backend retains
 streaming SHA-256, TMK parsing, inventory, and mutation work.

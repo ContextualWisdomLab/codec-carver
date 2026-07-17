@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 RUNTIME_DIR="${CODEC_CARVER_GPU_VENV:-$HOME/Library/Caches/codec-carver/venvs/gpu-py312}"
 PYTHON_VERSION="${CODEC_CARVER_GPU_PYTHON:-3.12}"
+LOCK_FILE="$REPO_ROOT/requirements-macos-mlx-lock.txt"
 UV_BIN="${UV_BIN:-}"
 XATTR_BIN="$(command -v xattr || true)"
 
@@ -54,10 +55,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "this bootstrap supports macOS MLX only"
+[[ "$(uname -m)" == "arm64" ]] || fail "this bootstrap supports Apple Silicon arm64 only"
 [[ "$RUNTIME_DIR" == /* ]] || fail "runtime path must be absolute"
 [[ "$RUNTIME_DIR" != "/" && "$RUNTIME_DIR" != "$HOME" ]] || \
     fail "runtime path is too broad"
 [[ -n "$PYTHON_VERSION" ]] || fail "Python version must not be empty"
+[[ -f "$LOCK_FILE" && ! -L "$LOCK_FILE" ]] || \
+    fail "hash-locked macOS MLX requirements are missing"
 case "$RUNTIME_DIR/" in
     "$REPO_ROOT/"*)
         fail "runtime must be outside the repository and its File Provider path"
@@ -90,7 +94,9 @@ if [[ ! -x "$RUNTIME_DIR/bin/python" ]]; then
 fi
 "$UV_BIN" pip install \
     --python "$RUNTIME_DIR/bin/python" \
-    --editable "${REPO_ROOT}[transcribe-mlx,describe-mlx]"
+    --require-hashes \
+    --only-binary :all: \
+    --requirements "$LOCK_FILE"
 
 printf 'GPU_RUNTIME_READY\t%s\n' "$RUNTIME_DIR/bin/python"
-printf 'Run: %q audio_library.py ROOT describe\n' "$RUNTIME_DIR/bin/python"
+printf 'Run: %q %q ROOT describe\n' "$RUNTIME_DIR/bin/python" "$REPO_ROOT/audio_library.py"
