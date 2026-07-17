@@ -8,6 +8,7 @@ metadata on generated files.
 """
 
 import argparse
+import bisect
 import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
@@ -1968,20 +1969,29 @@ def _ensure_not_protected_source_path(
 def _choose_silence_split_point(
     segment_start: float,
     window_end: float,
-    silence_intervals: Iterable[SilenceInterval],
+    silence_intervals: list[SilenceInterval],
 ) -> float | None:
     """Return the latest safe split point inside a silence interval."""
     latest_safe_end = window_end - HARD_SPLIT_EPSILON_SECONDS
-    candidates = [
-        min(interval.end_seconds, latest_safe_end)
-        for interval in silence_intervals
-        if interval.end_seconds > segment_start + HARD_SPLIT_EPSILON_SECONDS
-        and interval.start_seconds < latest_safe_end
-    ]
-    candidates = [
-        candidate for candidate in candidates if segment_start < candidate < window_end
-    ]
-    return max(candidates) if candidates else None
+
+    # Fast path: search backwards from the latest relevant interval using bisect.
+    # The intervals list is guaranteed to be sorted by start_seconds.
+    idx = bisect.bisect_left(silence_intervals, latest_safe_end, key=lambda x: x.start_seconds) - 1
+
+    while idx >= 0:
+        interval = silence_intervals[idx]
+        if interval.end_seconds > segment_start + HARD_SPLIT_EPSILON_SECONDS:
+            # candidate will always be strictly between segment_start and window_end
+            # because interval.end_seconds > segment_start + EPSILON,
+            # and latest_safe_end = window_end - EPSILON.
+            return min(interval.end_seconds, latest_safe_end)
+        else:
+            # We must break once we reach intervals that end before our required
+            # segment_start window to keep the loop bounded.
+            break
+        idx -= 1
+
+    return None
 
 
 def _segment_source_path(source_path: Path, segment: MediaSegment | None) -> Path:

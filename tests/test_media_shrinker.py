@@ -627,6 +627,43 @@ class PlanningTests(unittest.TestCase):
             all(segment.duration_seconds < 14_400.0 for segment in segments)
         )
 
+    def test_choose_silence_early_break_coverage(self) -> None:
+        # A test to ensure that the while loop breaks early when it encounters an interval that ends too early.
+        # This will hit the `else: break` block in `_choose_silence_split_point`
+        split_point = media_shrinker._choose_silence_split_point(
+            segment_start=100.0,
+            window_end=200.0,
+            silence_intervals=[
+                SilenceInterval(start_seconds=10.0, end_seconds=20.0),
+                SilenceInterval(start_seconds=150.0, end_seconds=160.0)
+            ],
+        )
+        self.assertEqual(split_point, 160.0)
+
+        split_point_2 = media_shrinker._choose_silence_split_point(
+            segment_start=100.0,
+            window_end=200.0,
+            silence_intervals=[
+                SilenceInterval(start_seconds=10.0, end_seconds=20.0),
+                SilenceInterval(start_seconds=90.0, end_seconds=100.001), # Needs to fail end_seconds > segment_start + EPSILON
+                SilenceInterval(start_seconds=180.0, end_seconds=300.0) # start < latest_safe_end, but end > latest_safe_end
+            ],
+        )
+        self.assertEqual(split_point_2, 199.999) # latest_safe_end
+
+        split_point_3 = media_shrinker._choose_silence_split_point(
+            segment_start=100.0,
+            window_end=200.0,
+            silence_intervals=[
+                SilenceInterval(start_seconds=10.0, end_seconds=20.0),
+                SilenceInterval(start_seconds=90.0, end_seconds=95.0), # Will hit `break` inside while loop
+                SilenceInterval(start_seconds=300.0, end_seconds=310.0) # Will be skipped by bisect
+            ],
+        )
+        self.assertIsNone(split_point_3)
+
+
+
     def test_spanning_silence_split_advances_near_window_end_not_segment_start(
         self,
     ) -> None:
