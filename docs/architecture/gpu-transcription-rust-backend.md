@@ -48,6 +48,11 @@ preferred interface for recording curation.
   terminating a large source that is still copying and hashing normally. A
   separate absolute deadline at four times the stall setting bounds repeated
   premature-EOF retries even if reported byte progress never stops.
+- Python preserves `subprocess.TimeoutExpired` compatibility with a typed
+  `StageTimeoutError`. Batch checkpoints include the stable
+  `stage_source_stalled` code, timeout, maximum observed staged bytes, and a
+  retryable flag, while the human message names FileProvider/CloudKit as the
+  materialization layer to inspect.
 - After the transcript and inventory checkpoint are durable, the Rust `evict`
   command calls Foundation's `FileManager.evictUbiquitousItem` directly. The
   Python API records a native eviction problem separately in `eviction_failures`;

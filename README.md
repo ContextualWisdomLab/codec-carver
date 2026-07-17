@@ -246,7 +246,11 @@ parallel stages finish, because FileProvider can defer every concurrent request
 while accepting an immediate single request. If that serial canary also fails,
 later timeouts in the same batch skip the otherwise identical long retry; other
 failures are not retried. The run summary records fallback attempts, recoveries,
-and suppressions. Already local files stay local.
+and suppressions. A terminal native-stage stall is checkpointed as
+`error_code: stage_source_stalled` with `timeout_seconds`,
+`stage_progress_bytes`, and `retryable: true`; its readable error points to an
+unhealthy iCloud/FileProvider materialization path instead of exposing only a
+generic subprocess command timeout. Already local files stay local.
 Run `hydrate-tmk`
 first when iCloud holds Sony sidecars:
 it reads the tiny TMK files concurrently, checkpoints each SHA-256 and marker

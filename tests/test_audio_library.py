@@ -1838,6 +1838,34 @@ class RustBackendTests(unittest.TestCase):
             ):
                 backend.stage(root, "a.wav", staging, timeout_seconds=1)
             self.assertIn("STAGE_SOURCE_NOT_READY", raised.exception.stderr)
+            self.assertIsInstance(raised.exception, audio_library.StageTimeoutError)
+            self.assertEqual(raised.exception.error_code, "stage_source_stalled")
+            self.assertEqual(raised.exception.progress_bytes, 0)
+            self.assertIn("FileProvider", str(raised.exception))
+
+            direct_timeout = subprocess.TimeoutExpired(
+                ["core", "stage"], 2, stderr="provider stalled"
+            )
+            direct_timeout.stage_observed_bytes = 7
+            with (
+                patch.object(
+                    RustBackend, "_run_stage_json", side_effect=direct_timeout
+                ),
+                self.assertRaises(audio_library.StageTimeoutError) as direct_raised,
+            ):
+                backend.stage(root, "a.wav", staging, timeout_seconds=2)
+            self.assertEqual(direct_raised.exception.progress_bytes, 7)
+            self.assertEqual(
+                audio_library.failure_entry("a.wav", direct_raised.exception),
+                {
+                    "path": "a.wav",
+                    "error": str(direct_raised.exception),
+                    "error_code": "stage_source_stalled",
+                    "timeout_seconds": 2,
+                    "stage_progress_bytes": 7,
+                    "retryable": True,
+                },
+            )
 
             with self.assertRaisesRegex(ValueError, "must be positive"):
                 backend.stage(root, "a.wav", staging, timeout_seconds=0)

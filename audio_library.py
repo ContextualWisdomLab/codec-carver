@@ -617,6 +617,60 @@ def trusted_child_environment() -> dict[str, str]:
     return environment
 
 
+class StageTimeoutError(subprocess.TimeoutExpired):
+    """Report a bounded native stage stall without losing timeout semantics."""
+
+    error_code = "stage_source_stalled"
+
+    def __init__(
+        self,
+        command: list[str],
+        timeout_seconds: float,
+        *,
+        progress_bytes: int = 0,
+        output: str | bytes | None = None,
+        stderr: str | bytes | None = None,
+    ) -> None:
+        super().__init__(
+            command,
+            timeout_seconds,
+            output=output,
+            stderr=stderr,
+        )
+        self.progress_bytes = max(0, int(progress_bytes))
+
+    def __str__(self) -> str:
+        progress = (
+            "no source bytes became available"
+            if self.progress_bytes == 0
+            else f"progress stopped after {self.progress_bytes} staged bytes"
+        )
+        return (
+            f"native stage stalled for {self.timeout:g} seconds; {progress}; "
+            "the source may be an unmaterialized or unhealthy FileProvider "
+            "placeholder (check iCloud/CloudKit connectivity before retrying)"
+        )
+
+    def failure_fields(self) -> dict[str, Any]:
+        """Return stable machine-readable fields for batch checkpoints."""
+
+        return {
+            "error_code": self.error_code,
+            "timeout_seconds": round(float(self.timeout), 3),
+            "stage_progress_bytes": self.progress_bytes,
+            "retryable": True,
+        }
+
+
+def failure_entry(path: str, exc: Exception) -> dict[str, Any]:
+    """Preserve a readable error plus structured fields for known failures."""
+
+    entry: dict[str, Any] = {"path": path, "error": str(exc)}
+    if isinstance(exc, StageTimeoutError):
+        entry.update(exc.failure_fields())
+    return entry
+
+
 class RustBackend:
     """One-process-per-batch bridge to the optimized Rust backend."""
 
@@ -787,7 +841,11 @@ class RustBackend:
             now = time.monotonic()
             total_remaining = deadline - now
             if total_remaining <= 0:
-                raise subprocess.TimeoutExpired(command, total_timeout_seconds)
+                raise StageTimeoutError(
+                    command,
+                    total_timeout_seconds,
+                    progress_bytes=max_incomplete_bytes,
+                )
             stall_remaining = timeout_seconds - (now - last_progress)
             remaining = max(0.01, min(total_remaining, stall_remaining))
             try:
@@ -796,6 +854,17 @@ class RustBackend:
                     staging_dir,
                     stall_timeout_seconds=remaining,
                 )
+            except subprocess.TimeoutExpired as exc:
+                raise StageTimeoutError(
+                    command,
+                    exc.timeout,
+                    progress_bytes=max(
+                        max_incomplete_bytes,
+                        int(getattr(exc, "stage_observed_bytes", 0)),
+                    ),
+                    output=exc.output,
+                    stderr=exc.stderr,
+                ) from exc
             except subprocess.CalledProcessError as exc:
                 stderr = exc.stderr or ""
                 incomplete = STAGE_SOURCE_NOT_READY_RE.search(stderr)
@@ -809,11 +878,12 @@ class RustBackend:
                 total_remaining = deadline - now
                 stall_remaining = timeout_seconds - (now - last_progress)
                 if total_remaining <= 0 or stall_remaining <= 0:
-                    raise subprocess.TimeoutExpired(
+                    raise StageTimeoutError(
                         command,
                         total_timeout_seconds
                         if total_remaining <= 0
                         else timeout_seconds,
+                        progress_bytes=max_incomplete_bytes,
                         output=exc.output,
                         stderr=stderr,
                     ) from exc
@@ -889,12 +959,16 @@ class RustBackend:
                         continue
                     process.kill()
                     stdout, stderr = process.communicate()
-                    raise subprocess.TimeoutExpired(
+                    timeout_error = subprocess.TimeoutExpired(
                         command,
                         stall_timeout_seconds,
                         output=stdout,
                         stderr=stderr,
-                    ) from exc
+                    )
+                    timeout_error.stage_observed_bytes = sum(
+                        size for _name, size in observed_sizes
+                    )
+                    raise timeout_error from exc
                 if process.returncode != 0:
                     raise subprocess.CalledProcessError(
                         process.returncode,
@@ -3538,7 +3612,7 @@ class AudioLibrary:
             except Exception as exc:  # one corrupt recording must not discard the batch
                 failed += 1
                 status = "failed"
-                failures.append({"path": record["path"], "error": str(exc)})
+                failures.append(failure_entry(record["path"], exc))
             finally:
                 if staged_audio is not None:
                     staged_audio.close()
@@ -3687,7 +3761,7 @@ class AudioLibrary:
                     except Exception as exc:
                         failed += 1
                         record["error"] = str(exc)
-                        failures.append({"path": record["path"], "error": str(exc)})
+                        failures.append(failure_entry(record["path"], exc))
                     finally:
                         rebuild_manifest_summary(manifest)
                         atomic_json_write(self.state_dir / "inventory.json", manifest)
@@ -3972,7 +4046,7 @@ class AudioLibrary:
             except Exception as exc:  # checkpoint the failure and continue the batch
                 failed += 1
                 record["error"] = str(exc)
-                failures.append({"path": record["path"], "error": str(exc)})
+                failures.append(failure_entry(record["path"], exc))
             finally:
                 if staged_audio is not None:
                     staged_audio.close()
