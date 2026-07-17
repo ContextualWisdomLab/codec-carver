@@ -196,8 +196,11 @@ newlines are flattened before labels are assigned, labels must remain
 contiguous from `S001`, and compound title validation consumes complete source
 terms without crossing token boundaries. Existing standard names remain
 immutable unless their exact inventory path is supplied to
-`plan --refresh-standardized-path`. The only accepted model identifier and
-immutable Hub revision are
+`plan --refresh-standardized-path`, or `plan --refresh-description-drift`
+recomputes drift from a SHA-matching sidecar whose contextual or quality-gate
+evidence validates under the current schema. Dataless and SHA-unverified drift
+paths are reported as deferred and never authorize mutation. The only accepted
+model identifier and immutable Hub revision are
 compiled in, tokenizer `trust_remote_code` is forced off, and old validation
 versions are regenerated rather than relabeled. No Ollama server is used and
 transcript text is not sent to a hosted inference API. A failed semantic

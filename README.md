@@ -150,6 +150,10 @@ codec-carver-library /path/to/recordings plan
 # standardized name only when its transcript context has been reviewed.
 codec-carver-library /path/to/recordings plan \
   --refresh-standardized-path "2024-06-24_15-44-11__선유로__old-title__sha256-04d93e2e12fb.m4a"
+# Or discover every SHA-bound standard name whose validated sidecar title has
+# changed. Unmaterialized or SHA-unverified sources remain deferred.
+codec-carver-library /path/to/recordings plan \
+  --refresh-description-drift --defer-unready
 # When iCloud has not supplied every source, mutate only fully ready recordings
 # and preserve the unresolved paths as explicit deferred evidence.
 codec-carver-library /path/to/recordings plan --defer-unready

@@ -2727,18 +2727,19 @@ class GemmaDescriptionGenerator:
         return self.analyze(transcript).title
 
 
-def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> str:
-    """Derive a deterministic, transcript-central filename description."""
+def validated_cached_filename_description(
+    transcript: dict[str, Any], *, limit: int = 48
+) -> str | None:
+    """Return only a current contextual or quality-gate title with valid evidence."""
 
     semantic = transcript.get("filename_description")
-    context = transcript.get("filename_description_context")
-    contextual_cache = (
-        isinstance(semantic, str)
-        and transcript.get("filename_description_validation")
-        == SEMANTIC_DESCRIPTION_VALIDATION
-        and isinstance(context, dict)
-    )
-    if contextual_cache:
+    if not isinstance(semantic, str):
+        return None
+    validation = transcript.get("filename_description_validation")
+    if validation == SEMANTIC_DESCRIPTION_VALIDATION:
+        context = transcript.get("filename_description_context")
+        if not isinstance(context, dict):
+            return None
         try:
             result = validate_contextual_description(
                 title=semantic,
@@ -2753,7 +2754,43 @@ def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> st
                 result.title, outcome=result.outcome
             )
         except ValueError:
-            semantic = None
+            return None
+    if (
+        validation == QUALITY_FLAG_DESCRIPTION_VALIDATION
+        and transcript.get("filename_description_source") == "transcript_quality_gate"
+    ):
+        quality_flags = transcript_quality_flags(transcript)
+        expected = (
+            "배경음-전사불명"
+            if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags
+            else (
+                "무음-또는-전사불명"
+                if any(
+                    flag in EXPLAINED_EMPTY_TRANSCRIPT_FLAGS for flag in quality_flags
+                )
+                else (
+                    "짧은발화-맥락불명"
+                    if INSUFFICIENT_CONTEXT_AUDIO_FLAG in quality_flags
+                    else None
+                )
+            )
+        )
+        return expected if semantic == expected else None
+    return None
+
+
+def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> str:
+    """Derive a deterministic, transcript-central filename description."""
+
+    semantic = transcript.get("filename_description")
+    validated_cache = validated_cached_filename_description(transcript, limit=limit)
+    if validated_cache is not None:
+        return validated_cache
+    if transcript.get("filename_description_validation") in {
+        SEMANTIC_DESCRIPTION_VALIDATION,
+        QUALITY_FLAG_DESCRIPTION_VALIDATION,
+    }:
+        semantic = None
     quality_flags = transcript_quality_flags(transcript)
     if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags:
         return "배경음-전사불명"
@@ -3993,32 +4030,9 @@ class AudioLibrary:
                     raise ValueError("transcript sidecar must be a JSON object")
                 validate_transcript_record_identity(record, loaded_transcript)
                 transcript = loaded_transcript
-                valid_contextual_cache = False
-                context = transcript.get("filename_description_context")
-                if (
-                    isinstance(transcript.get("filename_description"), str)
-                    and transcript.get("filename_description_validation")
-                    == SEMANTIC_DESCRIPTION_VALIDATION
-                    and isinstance(context, dict)
-                ):
-                    try:
-                        excerpt = semantic_transcript_excerpt(transcript)
-                        cached_context = validate_contextual_description(
-                            title=transcript["filename_description"],
-                            central_idea=str(context.get("central_idea", "")),
-                            outcome=str(context.get("outcome", "")),
-                            evidence_segment_ids=context.get(
-                                "evidence_segment_ids", ()
-                            ),
-                            confidence=str(context.get("confidence", "")),
-                            grounding_text=excerpt,
-                        )
-                        validate_contextual_title_specificity(
-                            cached_context.title, outcome=cached_context.outcome
-                        )
-                        valid_contextual_cache = True
-                    except ValueError:
-                        pass
+                valid_evidence_cache = (
+                    validated_cached_filename_description(transcript) is not None
+                )
                 quality_flags = transcript_quality_flags(transcript)
                 repetitive_background = (
                     REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags
@@ -4027,7 +4041,7 @@ class AudioLibrary:
                     flag in EXPLAINED_EMPTY_TRANSCRIPT_FLAGS for flag in quality_flags
                 )
                 insufficient_context = INSUFFICIENT_CONTEXT_AUDIO_FLAG in quality_flags
-                if valid_contextual_cache:
+                if valid_evidence_cache:
                     cached += 1
                     status = "cached"
                 elif repetitive_background or explained_empty or insufficient_context:
@@ -4367,24 +4381,67 @@ class AudioLibrary:
             )
         return operations, sorted(set(missing)) if defer_unready else []
 
+    def _description_drift_paths(self, manifest: dict[str, Any]) -> list[str]:
+        """Find SHA-bound standard names that differ from validated sidecar titles."""
+
+        earliest_by_hash = {
+            group["sha256"]: group.get("earliest_recorded_at")
+            for group in manifest["duplicate_groups"]
+        }
+        drift_paths = []
+        for record in unique_audio_records(manifest):
+            sha256 = validate_sha256(record["sha256"])
+            recorded_at = earliest_by_hash.get(sha256) or record.get("recorded_at")
+            if not recorded_at or not is_existing_standard_filename(
+                record, recorded_at
+            ):
+                continue
+            transcript = read_optional_private_json(
+                safe_transcript_path(self.state_dir / "transcripts", sha256)
+            )
+            if (
+                transcript is None
+                or transcript.get("filename_description_status") == "deferred"
+            ):
+                continue
+            try:
+                validate_transcript_record_identity(record, transcript)
+            except ValueError:
+                continue
+            if validated_cached_filename_description(transcript) is None:
+                continue
+            desired_name = standard_filename(record, transcript, recorded_at)
+            if desired_name != Path(record["path"]).name:
+                drift_paths.append(record["path"])
+        return sorted(drift_paths)
+
     def plan(
         self,
         *,
         allow_missing_transcripts: bool = False,
         defer_unready: bool = False,
         refresh_standardized_paths: Iterable[str] = (),
+        refresh_description_drift: bool = False,
     ) -> dict[str, Any]:
         """Create a collision-resistant duplicate quarantine and rename plan."""
 
         manifest = self._load_inventory()
+        if not isinstance(refresh_description_drift, bool):
+            raise ValueError("refresh_description_drift must be a boolean")
+        description_drift_paths = (
+            self._description_drift_paths(manifest) if refresh_description_drift else []
+        )
         refresh_paths = sorted(
             {
-                validate_relative_path(
-                    self.root,
-                    path,
-                    label="standardized refresh path",
-                )
-                for path in refresh_standardized_paths
+                *description_drift_paths,
+                *(
+                    validate_relative_path(
+                        self.root,
+                        path,
+                        label="standardized refresh path",
+                    )
+                    for path in refresh_standardized_paths
+                ),
             }
         )
         operations, deferred_paths = self._build_mutation_operations(
@@ -4406,6 +4463,8 @@ class AudioLibrary:
             "deferred_paths": deferred_paths,
             "allow_missing_transcripts": allow_missing_transcripts,
             "defer_unready": defer_unready,
+            "refresh_description_drift": refresh_description_drift,
+            "description_drift_paths": description_drift_paths,
             "refresh_standardized_paths": refresh_paths,
         }
         atomic_json_write(self.state_dir / "mutation-plan.json", plan)
@@ -4525,10 +4584,27 @@ class AudioLibrary:
             raise ValueError("mutation plan operations must be a list")
         allow_missing_transcripts = plan.get("allow_missing_transcripts", False)
         defer_unready = plan.get("defer_unready", False)
-        if not isinstance(allow_missing_transcripts, bool) or not isinstance(
-            defer_unready, bool
+        refresh_description_drift = plan.get("refresh_description_drift", False)
+        if not all(
+            isinstance(value, bool)
+            for value in (
+                allow_missing_transcripts,
+                defer_unready,
+                refresh_description_drift,
+            )
         ):
             raise ValueError("mutation plan options must be booleans")
+        description_drift_paths = plan.get("description_drift_paths", [])
+        if not isinstance(description_drift_paths, list):
+            raise ValueError("mutation plan description drift paths must be a list")
+        description_drift_paths = [
+            validate_relative_path(
+                self.root,
+                path,
+                label=f"description drift path {index}",
+            )
+            for index, path in enumerate(description_drift_paths)
+        ]
         refresh_standardized_paths = plan.get("refresh_standardized_paths", [])
         if not isinstance(refresh_standardized_paths, list):
             raise ValueError("mutation plan standardized refresh paths must be a list")
@@ -4558,6 +4634,18 @@ class AudioLibrary:
             )
             validate_sha256(operation.get("sha256"), label=f"mutation SHA-256 {index}")
         manifest = self._load_inventory()
+        expected_description_drift_paths = (
+            self._description_drift_paths(manifest) if refresh_description_drift else []
+        )
+        if description_drift_paths != expected_description_drift_paths:
+            raise ValueError(
+                "mutation plan description drift paths are not authorized by the "
+                "current transcripts"
+            )
+        if not set(description_drift_paths).issubset(refresh_standardized_paths):
+            raise ValueError(
+                "mutation plan standardized refresh paths omit description drift"
+            )
         expected_operations, expected_deferred = self._build_mutation_operations(
             manifest,
             allow_missing_transcripts=allow_missing_transcripts,
@@ -5209,6 +5297,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser = subparsers.add_parser("plan")
     plan_parser.add_argument("--allow-missing-transcripts", action="store_true")
     plan_parser.add_argument("--defer-unready", action="store_true")
+    plan_parser.add_argument("--refresh-description-drift", action="store_true")
     plan_parser.add_argument("--refresh-standardized-path", action="append", default=[])
     apply_parser = subparsers.add_parser("apply")
     apply_parser.add_argument("--execute", action="store_true")
@@ -5273,6 +5362,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             allow_missing_transcripts=args.allow_missing_transcripts,
             defer_unready=args.defer_unready,
             refresh_standardized_paths=args.refresh_standardized_path,
+            refresh_description_drift=args.refresh_description_drift,
         )
     else:
         result = library.apply(execute=args.execute)

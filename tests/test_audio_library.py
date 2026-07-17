@@ -2853,8 +2853,27 @@ class AudioLibraryTests(unittest.TestCase):
             atomic_json_write(
                 state / "transcripts" / f"{HASH_A}.json",
                 {
-                    "text": "나중에 개선된 완전히 다른 대표 주제",
-                    "segments": [{"text": "나중에 개선된 완전히 다른 대표 주제"}],
+                    "sha256": HASH_A,
+                    "text": (
+                        "설비 데이터 통합으로 경영 의사결정 지연. "
+                        "설비 데이터 통합 추진."
+                    ),
+                    "segments": [
+                        {"text": "설비 데이터 통합으로 경영 의사결정 지연"},
+                        {"text": "설비 데이터 통합 추진"},
+                    ],
+                    "filename_description": "설비데이터통합-경영의사결정지연",
+                    "filename_description_validation": (
+                        audio_library.SEMANTIC_DESCRIPTION_VALIDATION
+                    ),
+                    "filename_description_context": {
+                        "central_idea": (
+                            "설비 데이터 통합으로 경영 의사결정 지연을 해결합니다."
+                        ),
+                        "outcome": "설비 데이터 통합을 추진합니다.",
+                        "evidence_segment_ids": ["S001", "S002"],
+                        "confidence": "high",
+                    },
                 },
             )
             plan = AudioLibrary(root, Mock()).plan()
@@ -2868,9 +2887,30 @@ class AudioLibraryTests(unittest.TestCase):
                 [("rename", standard), ("rename", tmk)],
             )
             self.assertIn(
-                "나중에-개선된-완전히-다른-대표-주제",
+                "설비데이터통합-경영의사결정지연",
                 refreshed["operations"][0]["destination"],
             )
+            with patch.object(library, "_record_ready_for_mutation", return_value=True):
+                drift_refreshed = library.plan(refresh_description_drift=True)
+                library._validate_mutation_plan()
+            self.assertTrue(drift_refreshed["refresh_description_drift"])
+            self.assertEqual(drift_refreshed["description_drift_paths"], [standard])
+            self.assertEqual(drift_refreshed["refresh_standardized_paths"], [standard])
+            self.assertEqual(
+                [item["action"] for item in drift_refreshed["operations"]],
+                ["rename", "rename"],
+            )
+            transcript_path = state / "transcripts" / f"{HASH_A}.json"
+            mismatched_transcript = json.loads(
+                transcript_path.read_text(encoding="utf-8")
+            )
+            mismatched_transcript["sha256"] = HASH_B
+            atomic_json_write(transcript_path, mismatched_transcript)
+            mismatched_drift = library.plan(refresh_description_drift=True)
+            self.assertEqual(mismatched_drift["description_drift_paths"], [])
+            self.assertEqual(mismatched_drift["operations"], [])
+            with self.assertRaisesRegex(ValueError, "must be a boolean"):
+                library.plan(refresh_description_drift="yes")  # type: ignore[arg-type]
             with self.assertRaisesRegex(ValueError, "absent from inventory"):
                 library.plan(refresh_standardized_paths=["unknown.wav"])
 
@@ -4505,6 +4545,7 @@ class CliTests(unittest.TestCase):
                 ".",
                 "plan",
                 "--defer-unready",
+                "--refresh-description-drift",
                 "--refresh-standardized-path",
                 "a.wav",
             ],
@@ -4551,6 +4592,7 @@ class CliTests(unittest.TestCase):
             allow_missing_transcripts=False,
             defer_unready=True,
             refresh_standardized_paths=["a.wav"],
+            refresh_description_drift=True,
         )
         library.apply.assert_called_once_with(execute=True)
 
@@ -6092,6 +6134,18 @@ class CliTests(unittest.TestCase):
                 ({**valid, "inventory_sha256": HASH_A}, "inventory changed"),
                 ({**valid, "operations": {}}, "must be a list"),
                 ({**valid, "defer_unready": "yes"}, "options must be booleans"),
+                (
+                    {**valid, "refresh_description_drift": "yes"},
+                    "options must be booleans",
+                ),
+                (
+                    {**valid, "description_drift_paths": "safe.wav"},
+                    "drift paths must be a list",
+                ),
+                (
+                    {**valid, "description_drift_paths": ["safe.wav"]},
+                    "drift paths are not authorized",
+                ),
                 (
                     {**valid, "refresh_standardized_paths": "safe.wav"},
                     "refresh paths must be a list",
