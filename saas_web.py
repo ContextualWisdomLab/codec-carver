@@ -240,13 +240,20 @@ HTML_TEMPLATE = """
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
+                const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
+                buttons.forEach(btn => btn.setAttribute('aria-pressed', 'false'));
+
+                if (this.value === '') {
+                    preview.innerText = '';
+                    return;
+                }
+
+                const val = parseInt(this.value, 10);
                 preview.style.color = '#1e7e34';
 
-                const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
                 buttons.forEach(btn => {
                     const presetValue = Number.parseInt(btn.dataset.bytes, 10);
                     btn.setAttribute(
@@ -267,13 +274,20 @@ HTML_TEMPLATE = """
             });
 
             document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
                 const preview = document.getElementById('batch_target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
+                const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
+                buttons.forEach(btn => btn.setAttribute('aria-pressed', 'false'));
+
+                if (this.value === '') {
+                    preview.innerText = '';
+                    return;
+                }
+
+                const val = parseInt(this.value, 10);
                 preview.style.color = '#1e7e34';
 
-                const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
                 buttons.forEach(btn => {
                     const presetValue = Number.parseInt(btn.dataset.bytes, 10);
                     btn.setAttribute(
