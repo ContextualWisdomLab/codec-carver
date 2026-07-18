@@ -67,6 +67,9 @@ def tokenize(text: str) -> list[str]:
     Returns:
         List of lowercase tokens (possibly empty).
     """
+    # Fast path: skip regex if text is purely alphanumeric and spaces
+    if text.replace(" ", "").isalnum():
+        return text.lower().split()
     return _WORD_RE.findall(text.lower())
 
 
