@@ -1,5 +1,6 @@
 """FastAPI upload UI for shrinking one media file through Codec Carver."""
 
+import functools
 import json
 import hmac
 import logging
@@ -83,6 +84,12 @@ async def limit_request_size(request: Request, call_next):
     except RequestTooLarge:
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
+@functools.lru_cache(maxsize=1)
+def _parse_api_keys(raw: str) -> tuple[str, ...]:
+    """Parse comma-separated API keys, cached to prevent per-request overhead."""
+    return tuple(key.strip() for key in raw.split(",") if key.strip())
+
+
 def get_configured_api_keys():
     """Return the API keys configured via the CODEC_CARVER_API_KEYS env var.
 
@@ -95,7 +102,7 @@ def get_configured_api_keys():
     """
 
     raw = os.environ.get("CODEC_CARVER_API_KEYS", "")
-    return [key.strip() for key in raw.split(",") if key.strip()]
+    return _parse_api_keys(raw)
 
 
 @app.middleware("http")

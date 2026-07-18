@@ -702,10 +702,10 @@ class TestApiKeyAuth(unittest.TestCase):
 
     def test_get_configured_api_keys_parsing(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " a ,, b ,"}):
-            self.assertEqual(saas_web.get_configured_api_keys(), ["a", "b"])
+            self.assertEqual(saas_web.get_configured_api_keys(), ("a", "b"))
         with patch.dict(os.environ):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
-            self.assertEqual(saas_web.get_configured_api_keys(), [])
+            self.assertEqual(saas_web.get_configured_api_keys(), ())
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
