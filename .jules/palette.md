@@ -1,3 +1,7 @@
+## 2024-07-14 - 파일 업로드 크기 제한 클라이언트 검증 추가
+**Learning:** 사용자가 백엔드의 최대 파일 업로드 제한(예: 5 GiB)을 초과하는 대용량 파일을 일괄 업로드 폼에서 선택했을 때, 클라이언트 측에서 즉각적인 경고가 없다면 사용자는 긴 업로드 시간을 소모한 뒤에야 서버로부터 에러를 반환받게 되어 매우 나쁜 사용자 경험(UX)을 겪습니다. 특히 여러 파일을 선택하는 경우 크기 합산을 직관적으로 인지하기 어렵습니다.
+**Action:** 파일 업로드 폼(특히 multiple 속성이 있는 일괄 업로드 폼)에서는 항상 JavaScript의 `onchange` 이벤트를 통해 선택된 파일들의 총 크기를 합산하고, 백엔드의 제한 크기(예: `MAX_UPLOAD_BYTES`)와 비교해야 합니다. 제한을 초과할 경우 `setCustomValidity`를 통한 커스텀 에러 메시지 설정, `aria-invalid="true"`를 통한 접근성 피드백, 그리고 명확한 텍스트 및 색상 변화를 활용한 인라인 에러 미리보기를 제공하여 제출 전 즉각적인 피드백을 제공하십시오.
+
 ## 2024-07-12 - Intercepting batch form submissions for testing visual loading states
 **Learning:** Extending the learning from 2024-06-13, intercepting form submissions using `e.preventDefault()` via `page.evaluate()` is essential for capturing screenshot and video evidence of loading states (e.g., button disabling, spinner appearing) on forms like batch upload where the submission would normally reload the page or download an archive.
 **Action:** When testing visual loading states with Playwright, always inject an event listener using `page.evaluate()` to call `e.preventDefault()` on the form's `submit` event to freeze the UI in its loading state for verification.
