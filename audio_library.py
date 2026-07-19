@@ -672,6 +672,22 @@ def failure_entry(path: str, exc: Exception) -> dict[str, Any]:
     entry: dict[str, Any] = {"path": path, "error": str(exc)}
     if isinstance(exc, StageTimeoutError):
         entry.update(exc.failure_fields())
+    elif isinstance(exc, subprocess.CalledProcessError):
+        stderr = exc.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        detail = str(stderr).strip()[-2_000:]
+        entry.update(
+            {
+                "error": (
+                    f"backend command exited with status {exc.returncode}: "
+                    f"{detail or 'no diagnostic output'}"
+                ),
+                "error_code": "backend_command_failed",
+                "backend_returncode": int(exc.returncode),
+                "backend_stderr": detail,
+            }
+        )
     return entry
 
 
@@ -4082,8 +4098,9 @@ class AudioLibrary:
                 record["error"] = None
             except Exception as exc:  # checkpoint the failure and continue the batch
                 failed += 1
-                record["error"] = str(exc)
-                failures.append(failure_entry(record["path"], exc))
+                failure = failure_entry(record["path"], exc)
+                record["error"] = failure["error"]
+                failures.append(failure)
             finally:
                 if staged_audio is not None:
                     staged_audio.close()

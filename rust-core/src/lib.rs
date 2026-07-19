@@ -599,10 +599,22 @@ fn process_file(pending: &PendingFile) -> FileRecord {
 
 #[cfg(target_os = "macos")]
 fn request_icloud_download_if_needed(path: &Path, materialized: bool) -> Result<()> {
+    request_icloud_download_if_needed_with(path, materialized, request_icloud_download)
+}
+
+#[cfg(target_os = "macos")]
+fn request_icloud_download_if_needed_with<F>(
+    path: &Path,
+    materialized: bool,
+    request: F,
+) -> Result<()>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
     if materialized {
         return Ok(());
     }
-    request_icloud_download(path)
+    request(path)
 }
 
 #[cfg(target_os = "macos")]
@@ -2099,7 +2111,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn native_icloud_request_reports_non_file_provider_paths() {
+    fn native_icloud_request_routes_only_dataless_paths() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
 
@@ -2107,12 +2119,19 @@ mod tests {
         let local_file = root.join("local.wav");
         fs::write(&local_file, b"audio").unwrap();
 
-        request_icloud_download_if_needed(&local_file, true).unwrap();
-        let error = request_icloud_download_if_needed(&local_file, false).unwrap_err();
+        request_icloud_download_if_needed_with(&local_file, true, |_| {
+            panic!("materialized files must not contact the iCloud helper")
+        })
+        .unwrap();
+        let error = request_icloud_download_if_needed_with(&local_file, false, |path| {
+            assert_eq!(path, local_file);
+            Err(anyhow!("synthetic iCloud helper failure"))
+        })
+        .unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("cannot request iCloud materialization")
+                .contains("synthetic iCloud helper failure")
         );
         let invalid = Path::new(OsStr::from_bytes(b"/tmp/invalid\0path"));
         assert!(

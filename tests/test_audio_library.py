@@ -1899,6 +1899,27 @@ class RustBackendTests(unittest.TestCase):
                 },
             )
 
+            backend_failure = subprocess.CalledProcessError(
+                2,
+                ["core", "stage"],
+                stderr=b"native FileProvider request failed: not authenticated\n",
+            )
+            self.assertEqual(
+                audio_library.failure_entry("missing.wav", backend_failure),
+                {
+                    "path": "missing.wav",
+                    "error": (
+                        "backend command exited with status 2: native FileProvider "
+                        "request failed: not authenticated"
+                    ),
+                    "error_code": "backend_command_failed",
+                    "backend_returncode": 2,
+                    "backend_stderr": (
+                        "native FileProvider request failed: not authenticated"
+                    ),
+                },
+            )
+
             with self.assertRaisesRegex(ValueError, "must be positive"):
                 backend.stage(root, "a.wav", staging, timeout_seconds=0)
 
@@ -4226,6 +4247,12 @@ class AudioLibraryTests(unittest.TestCase):
                 summary = library.stream_transcribe(max_files=1, evict_after=False)
             self.assertEqual(summary["failed"], 1)
             self.assertIn("bad audio", summary["failures"][0]["error"])
+            checkpoint = json.loads(
+                (state / "inventory.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                checkpoint["files"][0]["error"], summary["failures"][0]["error"]
+            )
 
             atomic_json_write(
                 state / "transcripts" / f"{HASH_B}.json", {"text": "cached"}
