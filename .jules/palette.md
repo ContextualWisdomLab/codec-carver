@@ -74,3 +74,9 @@
 ## 2024-07-13 - 일괄 업로드 폼에 프리셋 버튼 및 파일 크기 미리보기 추가
 **Learning:** 일괄 파일 업로드 폼에서 대상 바이트(target_bytes) 입력 필드만 제공하면 사용자가 원하는 용량을 바이트 단위로 정확히 계산하기 어려워 사용성이 떨어집니다. 사용자가 여러 파일을 업로드할 때 총 파일 크기를 파악하지 못해 업로드 제한을 초과하거나 잘못된 대상 바이트를 설정할 위험이 큽니다.
 **Action:** 일괄 파일 업로드 폼에도 단일 파일 업로드 폼과 동일하게 대상 바이트를 쉽게 선택할 수 있는 빠른 프리셋 버튼을 추가하고, `onchange` 이벤트 발생 시 선택된 모든 파일의 크기를 합산하여 사람이 읽기 쉬운 단위(MiB, GiB 등)로 미리보기를 제공하도록 JavaScript 로직을 개선했습니다.
+## 2024-07-20 - Inline Validation for Empty Numeric Inputs
+**Learning:** When implementing JavaScript inline validation for numeric inputs, parsing an empty string (`parseInt('')`) yields `NaN`. This prematurely triggers custom validation errors before native HTML5 constraints (like `required`) take effect, leading to a confusing user experience where clearing an input field immediately shows an error.
+**Action:** Explicitly handle the empty string state (e.g., `if (this.value === '')`) in the validation logic to clear custom errors and `aria-invalid` attributes, allowing native validation to manage the empty state gracefully.
+## 2024-07-20 - 빈 숫자 입력 필드에 대한 인라인 유효성 검사 처리 개선
+**Learning:** 숫자 입력 필드에서 JavaScript 인라인 유효성 검사를 구현할 때, 빈 문자열을 파싱(`parseInt('')`)하면 `NaN`이 반환됩니다. 이로 인해 기본 HTML5 제약 조건(예: `required`)이 적용되기도 전에 사용자 지정 유효성 검사 오류가 조기에 발생하여, 사용자가 입력 필드를 지울 때 즉시 오류가 나타나는 혼란스러운 사용자 경험을 초래합니다.
+**Action:** 빈 문자열 상태(예: `if (this.value === '')`)를 유효성 검사 로직에서 명시적으로 처리하여 사용자 지정 오류 및 `aria-invalid` 속성을 해제하고, 빈 상태를 기본 유효성 검사가 자연스럽게 관리하도록 구현하십시오.
