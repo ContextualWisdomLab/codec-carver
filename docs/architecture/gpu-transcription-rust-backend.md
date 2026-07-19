@@ -32,7 +32,10 @@ preferred interface for recording curation.
   checkpoints each hash/marker result, and never refetches a sidecar whose
   metadata is already complete even if iCloud restores its dataless flag.
   Its four-worker, 60-second defaults bound File Provider backpressure; reruns
-  select only sidecars still lacking a hash or marker count.
+  select only sidecars still lacking a hash or marker count. A separate
+  idempotent synchronization pass propagates already verified markers into
+  linked transcript sidecars without rehashing them, and rejects transcript
+  SHA-256 mismatches instead of overwriting foreign evidence.
 - `stream-transcribe` consumes only checkpointed TMK metadata. An unresolved
   sidecar is retained as `tmk_error` evidence and cannot block GPU audio work.
 - Streaming order is based on the live macOS dataless flag rather than stale

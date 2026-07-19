@@ -259,7 +259,9 @@ does not cause the same TMK to be downloaded again. Four workers and a 60-second
 per-file timeout are the defaults because higher iCloud File Provider concurrency
 can delay every placeholder; rerunning resumes only unresolved sidecars. Repeat
 `--path` to verify only the TMKs paired with the bounded audio batch instead of
-waking every iCloud placeholder.
+waking every iCloud placeholder. Already verified TMKs also repair stale linked
+transcript metadata without rehashing; `synced_transcripts` and `sync_failed`
+report that idempotent pass separately from new TMK hydration.
 `stream-transcribe` never blocks an audio recording on an unresolved TMK: it uses
 hydrated markers when present and records `tmk_error` evidence otherwise.
 Inventory validation also requires every audio `tmk_path` to reference a record

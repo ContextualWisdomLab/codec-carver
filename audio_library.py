@@ -3657,12 +3657,16 @@ class AudioLibrary:
                 "TMK paths are absent from inventory: "
                 + ", ".join(sorted(missing_paths))
             )
-        records = [
+        candidate_records = [
             record
             for record in manifest["files"]
             if record["kind"] == "tmk"
             and (not requested_paths or record["path"] in requested_paths)
-            and (
+        ]
+        records = [
+            record
+            for record in candidate_records
+            if (
                 not record.get("sha256")
                 or record.get("tmk_marker_count") is None
                 or not record_sha_is_verified(record)
@@ -3670,6 +3674,61 @@ class AudioLibrary:
         ]
         completed = failed = 0
         failures = []
+        synced_transcripts = sync_failed = 0
+        sync_failures = []
+        sync_attempted_record_ids: set[int] = set()
+
+        def sync_tmk_metadata(record: dict[str, Any]) -> int:
+            """Propagate one verified TMK record into audio and transcript metadata."""
+
+            marker_count = record.get("tmk_marker_count")
+            if not record_sha_is_verified(record) or marker_count is None:
+                return 0
+            last_marker_seconds = record.get("tmk_last_marker_seconds")
+            changed_transcripts = 0
+            for audio_record in manifest["files"]:
+                if (
+                    audio_record["kind"] != "audio"
+                    or audio_record.get("tmk_path") != record["path"]
+                ):
+                    continue
+                audio_record["tmk_marker_count"] = marker_count
+                audio_record["tmk_last_marker_seconds"] = last_marker_seconds
+                audio_sha256 = audio_record.get("sha256")
+                if not audio_sha256:
+                    continue
+                transcript_path = safe_transcript_path(
+                    self.state_dir / "transcripts", audio_sha256
+                )
+                transcript = read_optional_private_json(transcript_path)
+                if transcript is None:
+                    continue
+                validate_transcript_record_identity(audio_record, transcript)
+                desired_metadata = {
+                    "tmk_path": record["path"],
+                    "tmk_marker_count": marker_count,
+                    "tmk_last_marker_seconds": last_marker_seconds,
+                }
+                if all(
+                    transcript.get(key) == value
+                    for key, value in desired_metadata.items()
+                ):
+                    continue
+                transcript.update(desired_metadata)
+                atomic_json_write(transcript_path, transcript)
+                changed_transcripts += 1
+            return changed_transcripts
+
+        def sync_one(record: dict[str, Any]) -> None:
+            """Synchronize independently so a foreign sidecar cannot fail hydration."""
+
+            nonlocal synced_transcripts, sync_failed
+            sync_attempted_record_ids.add(id(record))
+            try:
+                synced_transcripts += sync_tmk_metadata(record)
+            except Exception as exc:
+                sync_failed += 1
+                sync_failures.append(failure_entry(record["path"], exc))
 
         def inspect_one(record: dict[str, Any]) -> dict[str, Any]:
             """Fetch and inspect one unresolved TMK record in an isolated worker."""
@@ -3721,41 +3780,7 @@ class AudioLibrary:
                         record["sha256_verified"] = True
                         record["sha256_source"] = "content"
                         record["error"] = None
-                        for audio_record in manifest["files"]:
-                            if (
-                                audio_record["kind"] == "audio"
-                                and audio_record.get("tmk_path") == record["path"]
-                            ):
-                                audio_record["tmk_marker_count"] = record.get(
-                                    "tmk_marker_count"
-                                )
-                                audio_record["tmk_last_marker_seconds"] = record.get(
-                                    "tmk_last_marker_seconds"
-                                )
-                                audio_sha256 = audio_record.get("sha256")
-                                transcript_path = (
-                                    safe_transcript_path(
-                                        self.state_dir / "transcripts", audio_sha256
-                                    )
-                                    if audio_sha256
-                                    else None
-                                )
-                                transcript = (
-                                    read_optional_private_json(transcript_path)
-                                    if transcript_path
-                                    else None
-                                )
-                                if transcript is not None:
-                                    validate_transcript_record_identity(
-                                        audio_record, transcript
-                                    )
-                                    transcript["tmk_marker_count"] = record.get(
-                                        "tmk_marker_count"
-                                    )
-                                    transcript["tmk_last_marker_seconds"] = record.get(
-                                        "tmk_last_marker_seconds"
-                                    )
-                                    atomic_json_write(transcript_path, transcript)
+                        sync_one(record)
                         completed += 1
                         status = "completed"
                     except Exception as exc:
@@ -3767,6 +3792,11 @@ class AudioLibrary:
                         atomic_json_write(self.state_dir / "inventory.json", manifest)
                     if progress:
                         progress(index, len(records), record["path"], status)
+        for record in candidate_records:
+            if id(record) not in sync_attempted_record_ids:
+                sync_one(record)
+        rebuild_manifest_summary(manifest)
+        atomic_json_write(self.state_dir / "inventory.json", manifest)
         summary = {
             "schema_version": 1,
             "mode": "tmk_hydration",
@@ -3774,6 +3804,9 @@ class AudioLibrary:
             "completed": completed,
             "failed": failed,
             "failures": failures,
+            "synced_transcripts": synced_transcripts,
+            "sync_failed": sync_failed,
+            "sync_failures": sync_failures,
         }
         atomic_json_write(self.state_dir / "tmk-hydration-run.json", summary)
         return summary

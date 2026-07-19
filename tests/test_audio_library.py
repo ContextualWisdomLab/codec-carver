@@ -3334,6 +3334,84 @@ class AudioLibraryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "absent from inventory"):
                 library.hydrate_tmk_metadata(relative_paths=["missing.tmk"])
 
+    def test_hydrate_tmk_syncs_cached_transcript_without_rehash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            tmk = {
+                "path": "cached.tmk",
+                "kind": "tmk",
+                "extension": "tmk",
+                "size_bytes": len(TMK_BYTES),
+                "sha256": TMK_HASH,
+                "sha256_verified": True,
+                "sha256_source": "content",
+                "materialized": True,
+                "tmk_marker_count": 21,
+                "tmk_last_marker_seconds": 6300.0,
+            }
+            audio = _record(
+                "cached.wav",
+                HASH_A,
+                tmk_path="cached.tmk",
+                tmk_marker_count=21,
+                tmk_last_marker_seconds=6300.0,
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [audio, tmk],
+                    "duplicate_groups": [],
+                },
+            )
+            transcript_path = state / "transcripts" / f"{HASH_A}.json"
+            atomic_json_write(
+                transcript_path,
+                {
+                    "sha256": HASH_A,
+                    "source_path": "cached.wav",
+                    "text": "cached transcript",
+                    "tmk_marker_count": 0,
+                    "tmk_last_marker_seconds": None,
+                },
+            )
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+
+            result = library.hydrate_tmk_metadata(relative_paths=["cached.tmk"])
+
+            self.assertEqual(result["selected"], 0)
+            self.assertEqual(result["completed"], 0)
+            self.assertEqual(result["synced_transcripts"], 1)
+            self.assertEqual(result["sync_failed"], 0)
+            backend.inspect.assert_not_called()
+            backend.stage.assert_not_called()
+            transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+            self.assertEqual(transcript["tmk_path"], "cached.tmk")
+            self.assertEqual(transcript["tmk_marker_count"], 21)
+            self.assertEqual(transcript["tmk_last_marker_seconds"], 6300.0)
+
+            repeated = library.hydrate_tmk_metadata(relative_paths=["cached.tmk"])
+            self.assertEqual(repeated["selected"], 0)
+            self.assertEqual(repeated["synced_transcripts"], 0)
+
+            transcript["sha256"] = HASH_B
+            transcript["tmk_marker_count"] = 0
+            atomic_json_write(transcript_path, transcript)
+            mismatched = library.hydrate_tmk_metadata(relative_paths=["cached.tmk"])
+            self.assertEqual(mismatched["selected"], 0)
+            self.assertEqual(mismatched["synced_transcripts"], 0)
+            self.assertEqual(mismatched["sync_failed"], 1)
+            self.assertIn(
+                "does not match",
+                mismatched["sync_failures"][0]["error"],
+            )
+            unchanged = json.loads(transcript_path.read_text(encoding="utf-8"))
+            self.assertEqual(unchanged["sha256"], HASH_B)
+            self.assertEqual(unchanged["tmk_marker_count"], 0)
+
     def test_stream_transcribe_reuses_pre_hydrated_dataless_tmk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
