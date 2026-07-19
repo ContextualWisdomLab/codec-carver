@@ -631,6 +631,8 @@ class StageTimeoutError(subprocess.TimeoutExpired):
         output: str | bytes | None = None,
         stderr: str | bytes | None = None,
     ) -> None:
+        """Create a timeout with the last observed staged-byte progress."""
+
         super().__init__(
             command,
             timeout_seconds,
@@ -640,6 +642,8 @@ class StageTimeoutError(subprocess.TimeoutExpired):
         self.progress_bytes = max(0, int(progress_bytes))
 
     def __str__(self) -> str:
+        """Return an actionable File Provider stall explanation."""
+
         progress = (
             "no source bytes became available"
             if self.progress_bytes == 0

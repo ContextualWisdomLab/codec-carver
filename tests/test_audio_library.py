@@ -259,6 +259,38 @@ class NamingTests(unittest.TestCase):
             audio_library.transcript_quality_flags(repeated_background),
         )
         self.assertEqual(transcript_description(repeated_background), "배경음-전사불명")
+        invalid_current_cache = {
+            "filename_description": "불완전",
+            "filename_description_validation": (
+                audio_library.SEMANTIC_DESCRIPTION_VALIDATION
+            ),
+            "filename_description_context": [],
+            "text": "프로젝트 일정 검토",
+            "segments": [{"text": "프로젝트 일정 검토"}],
+        }
+        self.assertIsNone(
+            audio_library.validated_cached_filename_description(invalid_current_cache)
+        )
+        self.assertEqual(
+            transcript_description(invalid_current_cache), "프로젝트-일정-검토"
+        )
+        with patch("audio_library.transcript_quality_flags", return_value=[]):
+            self.assertEqual(
+                transcript_description(
+                    {"segments": [{"text": "다음 영상에서 만나요"}]}
+                ),
+                "무음-또는-전사불명",
+            )
+            self.assertEqual(
+                transcript_description(
+                    {
+                        "text": "감사합니다",
+                        "duration_seconds": 5,
+                        "segments": [],
+                    }
+                ),
+                "무음-또는-전사불명",
+            )
         stock_background = {"segments": [{"text": "다음 영상에서 만나요."}] * 2}
         self.assertIn(
             audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
@@ -2725,6 +2757,14 @@ class AudioLibraryTests(unittest.TestCase):
                 {"text": "장소 없는 검증 회의", "segments": []},
             )
             atomic_json_write(
+                state / "transcripts" / f"{'e' * 64}.json",
+                {
+                    "sha256": HASH_A,
+                    "text": "다른 녹음에 속한 전사",
+                    "segments": [],
+                },
+            )
+            atomic_json_write(
                 state / "mutation-journal.json",
                 {"executed": False, "completed": []},
             )
@@ -2739,6 +2779,9 @@ class AudioLibraryTests(unittest.TestCase):
                 (state / "transcripts" / f"{TMK_HASH}.json").read_text()
             )
             self.assertEqual(native_transcript["source_path"], "native.wav")
+            self.assertEqual(
+                manifest["transcript_identity_errors"][0]["path"], "orphan.wav"
+            )
 
             previous_manifest = {
                 "files": [
@@ -2996,6 +3039,13 @@ class AudioLibraryTests(unittest.TestCase):
                 [item["action"] for item in drift_refreshed["operations"]],
                 ["rename", "rename"],
             )
+            plan_path = state / "mutation-plan.json"
+            tampered_refresh = json.loads(plan_path.read_text(encoding="utf-8"))
+            tampered_refresh["refresh_standardized_paths"] = []
+            atomic_json_write(plan_path, tampered_refresh)
+            with self.assertRaisesRegex(ValueError, "omit description drift"):
+                library._validate_mutation_plan()
+            atomic_json_write(plan_path, drift_refreshed)
             transcript_path = state / "transcripts" / f"{HASH_A}.json"
             mismatched_transcript = json.loads(
                 transcript_path.read_text(encoding="utf-8")
@@ -3012,6 +3062,20 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(
                 mismatched_drift["deferred_paths"], sorted([standard, tmk])
             )
+            transcript_path.unlink()
+            current_manifest = json.loads(
+                (state / "inventory.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(library._description_drift_paths(current_manifest), [])
+            atomic_json_write(
+                transcript_path,
+                {
+                    "sha256": HASH_A,
+                    "text": "원래 제목",
+                    "segments": [{"text": "원래 제목"}],
+                },
+            )
+            self.assertEqual(library._description_drift_paths(current_manifest), [])
             with self.assertRaisesRegex(ValueError, "must be a boolean"):
                 library.plan(refresh_description_drift="yes")  # type: ignore[arg-type]
             with self.assertRaisesRegex(ValueError, "absent from inventory"):
@@ -3357,12 +3421,19 @@ class AudioLibraryTests(unittest.TestCase):
                 tmk_marker_count=21,
                 tmk_last_marker_seconds=6300.0,
             )
+            hashless_audio = _record(
+                "hashless.wav",
+                "",
+                tmk_path="cached.tmk",
+                tmk_marker_count=None,
+                tmk_last_marker_seconds=None,
+            )
             atomic_json_write(
                 state / "inventory.json",
                 {
                     "schema_version": 1,
                     "root": str(root),
-                    "files": [audio, tmk],
+                    "files": [audio, hashless_audio, tmk],
                     "duplicate_groups": [],
                 },
             )
@@ -3392,6 +3463,10 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(transcript["tmk_path"], "cached.tmk")
             self.assertEqual(transcript["tmk_marker_count"], 21)
             self.assertEqual(transcript["tmk_last_marker_seconds"], 6300.0)
+            inventory = json.loads(
+                (state / "inventory.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(inventory["files"][1]["tmk_marker_count"], 21)
 
             repeated = library.hydrate_tmk_metadata(relative_paths=["cached.tmk"])
             self.assertEqual(repeated["selected"], 0)
@@ -4574,6 +4649,16 @@ class CliTests(unittest.TestCase):
                     relative_paths=["a.wav"],
                 )
             self.assertEqual(third["cached"], 1)
+            with (
+                patch(
+                    "audio_library.validated_cached_filename_description",
+                    return_value=None,
+                ),
+                patch("audio_library.GemmaDescriptionGenerator") as generator_class,
+            ):
+                secondary_semantic_cache = library.describe(relative_paths=["a.wav"])
+            self.assertEqual(secondary_semantic_cache["cached"], 1)
+            generator_class.assert_not_called()
 
             manual_a = json.loads(
                 audio_library.safe_transcript_path(transcript_dir, HASH_A).read_text(
@@ -4700,6 +4785,18 @@ class CliTests(unittest.TestCase):
             with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
                 cached_background = library.describe(relative_paths=["background.wav"])
             self.assertEqual(cached_background["cached"], 1)
+            generator_class.assert_not_called()
+            with (
+                patch(
+                    "audio_library.validated_cached_filename_description",
+                    return_value=None,
+                ),
+                patch("audio_library.GemmaDescriptionGenerator") as generator_class,
+            ):
+                secondary_quality_cache = library.describe(
+                    relative_paths=["background.wav"]
+                )
+            self.assertEqual(secondary_quality_cache["cached"], 1)
             generator_class.assert_not_called()
 
             with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
@@ -5946,6 +6043,25 @@ class CliTests(unittest.TestCase):
                 )
 
     def test_private_directory_descriptor_failure_cleanup(self) -> None:
+        path_with_parent = Path("/private/../escaped")
+        with (
+            patch.object(
+                audio_library.Path,
+                "absolute",
+                side_effect=[path_with_parent, Path("/tmp")],
+            ),
+            patch.object(audio_library.Path, "resolve", return_value=Path("/tmp")),
+            self.assertRaisesRegex(ValueError, "parent traversal"),
+        ):
+            audio_library.normalized_private_absolute_path(Path("safe"))
+        with (
+            patch(
+                "audio_library.normalized_private_absolute_path",
+                return_value=path_with_parent,
+            ),
+            self.assertRaisesRegex(ValueError, "unsafe components"),
+        ):
+            audio_library.open_private_directory(Path("safe"))
         with (
             patch("audio_library.tempfile.gettempdir", return_value="/tmp-alias"),
             patch(
