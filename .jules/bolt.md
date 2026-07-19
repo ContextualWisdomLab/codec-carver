@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2024-05-18 - [Optimize list_jobs query with SQLite Indices]
+**Learning:** `list_jobs` filtered by status and sorted by `created_at, id` caused a full table scan and an expensive sort operation in SQLite due to a lack of indices on the `jobs` table. Using `executescript` allows appending `CREATE INDEX` queries efficiently to schema initialization strings.
+**Action:** Always verify if database queries that perform ordering or filtering have backing indices. Use `executescript()` when executing multi-statement schema setups in Python `sqlite3`.

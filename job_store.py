@@ -44,7 +44,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     output_name TEXT,
     error       TEXT,
     temp_dir    TEXT
-)
+);
+-- ⚡ Bolt: Performance optimization added to prevent full table scans and expensive sorting
+-- during list_jobs calls. The indices reduce query complexity from O(N log N) to O(log N).
+CREATE INDEX IF NOT EXISTS idx_jobs_created_at_id ON jobs (created_at, id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at_id ON jobs (status, created_at, id);
 """
 
 _COLUMNS = (
@@ -95,7 +99,7 @@ class JobStore:
         self._db_path = str(db_path)
         self._lock = threading.Lock()
         with self._connect() as conn:
-            conn.execute(_SCHEMA)
+            conn.executescript(_SCHEMA)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
