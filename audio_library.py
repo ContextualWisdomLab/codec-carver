@@ -88,6 +88,13 @@ QUALITY_FLAG_DESCRIPTION_VALIDATION = "quality_flag_title_v1"
 MANUAL_DESCRIPTION_SOURCE = "manual_transcript_context_review"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COPY_SUFFIX_RE = re.compile(r"(?i)(?:\s*\(\d+\)|\s+\d+)$")
+TMK_CHUNK_HINT_FIELDS = (
+    "tmk_chunk_hint_path",
+    "tmk_chunk_hint_sha256",
+    "tmk_chunk_hint_marker_count",
+    "tmk_chunk_hint_last_marker_seconds",
+    "tmk_chunk_hint_markers_seconds",
+)
 STANDARD_NAME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:__[^/]+)*__sha256-[0-9a-f]{12}$"
 )
@@ -4084,6 +4091,7 @@ class AudioLibrary:
         prefetch_fallback_suppressed = 0
         prefetch_fallback_allowed = True
         prefetch_transcription_overlaps = 0
+        tmk_chunk_hints_used = 0
         completed = cached = failed = 0
         failures = []
         eviction_failures = []
@@ -4129,6 +4137,8 @@ class AudioLibrary:
             )
             status = "failed"
             try:
+                for field in TMK_CHUNK_HINT_FIELDS:
+                    record.pop(field, None)
                 tmk_path = record.get("tmk_path")
                 tmk_record = records_by_path.get(tmk_path, {}) if tmk_path else {}
                 tmk_needs_metadata = bool(
@@ -4149,7 +4159,12 @@ class AudioLibrary:
                         record["tmk_marker_count"] = None
                         record["tmk_last_marker_seconds"] = None
                         record["tmk_markers_seconds"] = None
+                        tmk_chunk_hint = verified_sibling_tmk_chunk_hint(
+                            record, records_by_path
+                        )
+                        record.update(tmk_chunk_hint)
                     else:
+                        tmk_chunk_hint = {}
                         record.pop("tmk_error", None)
                         record["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
                         record["tmk_last_marker_seconds"] = tmk_record.get(
@@ -4158,6 +4173,8 @@ class AudioLibrary:
                         record["tmk_markers_seconds"] = tmk_record.get(
                             "tmk_markers_seconds"
                         )
+                else:
+                    tmk_chunk_hint = {}
                 known_sha256 = record.get("sha256")
                 if was_dataless:
                     preserved_tmk = {
@@ -4248,7 +4265,11 @@ class AudioLibrary:
                         audio_input = staged_audio
                     if any(not pending.done() for pending in prefetch_futures.values()):
                         prefetch_transcription_overlaps += 1
-                    markers_seconds = record.get("tmk_markers_seconds")
+                    markers_seconds = record.get("tmk_markers_seconds") or (
+                        tmk_chunk_hint.get("tmk_chunk_hint_markers_seconds")
+                    )
+                    if tmk_chunk_hint:
+                        tmk_chunk_hints_used += 1
                     result = (
                         transcriber.transcribe(
                             audio_input,
@@ -4271,6 +4292,7 @@ class AudioLibrary:
                             ),
                             "tmk_markers_seconds": record.get("tmk_markers_seconds"),
                             "tmk_error": record.get("tmk_error"),
+                            **tmk_chunk_hint,
                         }
                     )
                     atomic_json_write(transcript_path, result)
@@ -4315,6 +4337,7 @@ class AudioLibrary:
             "prefetch_fallback_recovered": prefetch_fallback_recovered,
             "prefetch_fallback_suppressed": prefetch_fallback_suppressed,
             "prefetch_transcription_overlaps": prefetch_transcription_overlaps,
+            "tmk_chunk_hints_used": tmk_chunk_hints_used,
             "recordings_selected": len(records),
             "completed": completed,
             "cached": cached,
@@ -5140,6 +5163,79 @@ def record_sha_is_verified(record: dict[str, Any]) -> bool:
         and record.get("sha256_source") == "content"
         and SHA256_RE.fullmatch(str(record.get("sha256", ""))) is not None
     )
+
+
+def verified_sibling_tmk_chunk_hint(
+    audio_record: dict[str, Any], records_by_path: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """Return an auditable marker hint from a verified copy-named TMK sibling."""
+
+    primary_path = str(audio_record.get("tmk_path") or "")
+    primary_record = records_by_path.get(primary_path, {})
+    primary = Path(primary_path)
+    primary_size = primary_record.get("size_bytes")
+    recorded_at = audio_record.get("recorded_at")
+    normalized_primary_stem = COPY_SUFFIX_RE.sub("", primary.stem)
+
+    def candidate_is_safe(candidate: dict[str, Any]) -> bool:
+        """Accept only a content-bound, structurally equivalent marker vector."""
+
+        markers = candidate.get("tmk_markers_seconds")
+        markers_are_numeric = bool(markers) and isinstance(markers, list) and all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and float(value) > 0
+            for value in markers
+        )
+        normalized_markers = (
+            tuple(float(value) for value in markers) if markers_are_numeric else ()
+        )
+        candidate_path = Path(str(candidate.get("path") or ""))
+        return bool(
+            primary_path
+            and primary_record.get("kind") == "tmk"
+            and recorded_at
+            and primary_record.get("recorded_at") == recorded_at
+            and isinstance(primary_size, int)
+            and not isinstance(primary_size, bool)
+            and primary_size > 0
+            and candidate.get("kind") == "tmk"
+            and candidate.get("path") != primary_path
+            and record_sha_is_verified(candidate)
+            and candidate.get("recorded_at") == recorded_at
+            and candidate.get("size_bytes") == primary_size
+            and candidate_path.parent == primary.parent
+            and COPY_SUFFIX_RE.sub("", candidate_path.stem)
+            == normalized_primary_stem
+            and markers_are_numeric
+            and normalized_markers == tuple(sorted(set(normalized_markers)))
+            and candidate.get("tmk_marker_count") == len(normalized_markers)
+            and candidate.get("tmk_last_marker_seconds") == normalized_markers[-1]
+        )
+
+    candidates = sorted(
+        (
+            candidate
+            for candidate in records_by_path.values()
+            if candidate_is_safe(candidate)
+        ),
+        key=lambda candidate: (
+            bool(COPY_SUFFIX_RE.search(Path(candidate["path"]).stem)),
+            candidate["path"],
+        ),
+    )
+    if not candidates:
+        return {}
+    candidate = candidates[0]
+    markers = [float(value) for value in candidate["tmk_markers_seconds"]]
+    return {
+        "tmk_chunk_hint_path": candidate["path"],
+        "tmk_chunk_hint_sha256": validate_sha256(candidate["sha256"]),
+        "tmk_chunk_hint_marker_count": len(markers),
+        "tmk_chunk_hint_last_marker_seconds": markers[-1],
+        "tmk_chunk_hint_markers_seconds": markers,
+    }
 
 
 def validate_transcript_record_identity(

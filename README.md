@@ -274,6 +274,13 @@ transcript metadata without rehashing; `synced_transcripts` and `sync_failed`
 report that idempotent pass separately from new TMK hydration.
 `stream-transcribe` never blocks an audio recording on an unresolved TMK: it uses
 hydrated markers when present and records `tmk_error` evidence otherwise.
+If that primary sidecar is still remote but a same-directory, same-time,
+same-size TMK with an equivalent copy-normalized stem has a content-verified SHA
+and valid ordered markers, streaming may use it only as a bounded decode hint.
+The transcript keeps the unresolved primary `tmk_path` and separately records
+the hint path, SHA-256, marker count, last marker, and full vector; it never
+presents the sibling as the primary sidecar. `tmk_chunk_hints_used` reports this
+performance fallback per run.
 Inventory validation also requires every audio `tmk_path` to reference a record
 whose kind is exactly `tmk`; a crafted audio-to-audio link cannot authorize
 quarantining canonical audio as if it were a duplicate sidecar.

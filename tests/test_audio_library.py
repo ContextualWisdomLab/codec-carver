@@ -4515,6 +4515,87 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertIsNone(transcript["tmk_markers_seconds"])
             self.assertEqual(fake.transcribe.call_args.kwargs, {})
 
+    def test_stream_transcribe_uses_verified_copy_tmk_as_chunk_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            recorded_at = "2023-10-18T10:18:00+09:00"
+            audio = _record(
+                "FOLDER01/231018_1018.wav",
+                HASH_A,
+                materialized=True,
+                recorded_at=recorded_at,
+                tmk_path="FOLDER01/231018_1018.tmk",
+            )
+            primary_tmk = {
+                "path": "FOLDER01/231018_1018.tmk",
+                "kind": "tmk",
+                "extension": "tmk",
+                "size_bytes": 243,
+                "sha256": None,
+                "sha256_verified": False,
+                "sha256_source": None,
+                "recorded_at": recorded_at,
+                "tmk_marker_count": None,
+                "tmk_last_marker_seconds": None,
+                "tmk_markers_seconds": None,
+                "error": "dataless",
+            }
+            copy_tmk = {
+                **primary_tmk,
+                "path": "FOLDER01/231018_1018(1).tmk",
+                "sha256": TMK_HASH,
+                "sha256_verified": True,
+                "sha256_source": "content",
+                "tmk_marker_count": 2,
+                "tmk_last_marker_seconds": 60.0,
+                "tmk_markers_seconds": [30.0, 60.0],
+                "error": None,
+            }
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [audio, primary_tmk, copy_tmk],
+                    "duplicate_groups": [],
+                },
+            )
+            (root / "FOLDER01").mkdir()
+            (root / audio["path"]).write_bytes(AUDIO_A_BYTES)
+            backend = Mock()
+            backend.inspect.return_value = audio
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {audio["path"]: HASH_A})
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "marker 기반 회의 전사",
+                "segments": [],
+                "language": "ko",
+            }
+            with patch("audio_library.GpuTranscriber", return_value=fake):
+                summary = library.stream_transcribe(evict_after=False)
+            self.assertEqual(summary["completed"], 1)
+            self.assertEqual(summary["tmk_chunk_hints_used"], 1)
+            self.assertEqual(
+                fake.transcribe.call_args.kwargs["tmk_markers_seconds"],
+                [30.0, 60.0],
+            )
+            transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(transcript["tmk_path"], primary_tmk["path"])
+            self.assertIsNone(transcript["tmk_markers_seconds"])
+            self.assertEqual(
+                transcript["tmk_chunk_hint_path"], copy_tmk["path"]
+            )
+            self.assertEqual(transcript["tmk_chunk_hint_sha256"], TMK_HASH)
+            self.assertEqual(
+                transcript["tmk_chunk_hint_markers_seconds"], [30.0, 60.0]
+            )
+
     def test_stream_transcribe_uses_cached_hash_and_isolates_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
