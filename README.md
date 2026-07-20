@@ -146,6 +146,10 @@ codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
 codec-carver-library /path/to/recordings describe \
   --path "recording-a.m4a" --path "recording-b.wav"
 codec-carver-library /path/to/recordings plan
+# Bound both planning and later apply-time revalidation to one audio record and
+# its linked TMK. Repeat --path for an explicitly selected batch.
+codec-carver-library /path/to/recordings plan \
+  --path "FOLDER01/231018_1018.wav"
 # Every name is compared with the complete SHA-bound name derived from its
 # transcript and drift is reported. Changing an existing standard name requires
 # one of these explicit refresh authorizations.
@@ -281,6 +285,11 @@ The transcript keeps the unresolved primary `tmk_path` and separately records
 the hint path, SHA-256, marker count, last marker, and full vector; it never
 presents the sibling as the primary sidecar. `tmk_chunk_hints_used` reports this
 performance fallback per run.
+Gemma title generation also keeps its two-to-six-token quality gate. If a final
+literal-evidence repair still exceeds that bound, codec-carver deterministically
+rebuilds a subject-purpose title only from the already validated central idea,
+outcome, cited transcript evidence, and transcript-grounded terms instead of
+accepting or blindly truncating the model output.
 Inventory validation also requires every audio `tmk_path` to reference a record
 whose kind is exactly `tmk`; a crafted audio-to-audio link cannot authorize
 quarantining canonical audio as if it were a duplicate sidecar.
@@ -313,7 +322,10 @@ non-zero process status when any selected file is recorded in `failures`.
 Planning rejects recordings without SHA-256 or transcript evidence by default.
 `--defer-unready` keeps those paths unchanged and lists them in
 `deferred_paths`, allowing verified subsets to proceed without inventing a
-placeholder description.
+placeholder description. `plan --path` narrows quarantine and rename operations
+to the selected audio paths and their linked TMKs; the same selection is stored
+in the private plan and recomputed at apply time, while omitting it preserves the
+whole-library batch behavior.
 Every rescan archives the previous inventory by its SHA-256. If iCloud evicts a
 previously hashed recording, same-path/same-size evidence and transcript
 sidecars restore its full hash only as an explicitly unverified identity hint.

@@ -763,6 +763,15 @@ class NamingTests(unittest.TestCase):
                 literal_candidate.format(evidence="S001,S999"),
                 grounding_text=literal_grounding,
             )
+        literal_overlong = audio_library.literal_evidence_contextual_description(
+            literal_candidate.format(evidence="S001,S002").replace(
+                "설비데이터-경영보고지연",
+                "설비-데이터-기준-통합-경영-보고-지연",
+            ),
+            grounding_text=literal_grounding,
+        )
+        self.assertEqual(literal_overlong.title, "설비기준-경영지연줄입니다")
+        self.assertEqual(literal_overlong.evidence_segment_ids, ("S001", "S002"))
         self.assertEqual(
             audio_library.contextual_fallback_title(
                 title_hint="관계없는제목",
@@ -3030,12 +3039,40 @@ class AudioLibraryTests(unittest.TestCase):
             library = AudioLibrary(root, Mock())
             with patch.object(library, "_record_ready_for_mutation", return_value=True):
                 plan = library.plan()
+                bounded = library.plan(relative_paths=["canonical.wav"])
+                library._validate_mutation_plan()
             actions = [(item["action"], item["source"]) for item in plan["operations"]]
             self.assertIn(("quarantine", "copies/duplicate.wav"), actions)
             self.assertIn(("quarantine", "copies/duplicate.tmk"), actions)
             self.assertIn(("rename", "canonical.wav"), actions)
             self.assertIn(("rename", "canonical.tmk"), actions)
             self.assertTrue((state / "mutation-plan.json").is_file())
+            self.assertEqual(bounded["selected_audio_paths"], ["canonical.wav"])
+            self.assertEqual(
+                [item["source"] for item in bounded["operations"]],
+                ["canonical.wav", "canonical.tmk"],
+            )
+            with self.assertRaisesRegex(ValueError, "selected audio paths are absent"):
+                library.plan(relative_paths=["unknown.wav"])
+            with self.assertRaisesRegex(ValueError, "selected audio paths are absent"):
+                library._build_mutation_operations(
+                    manifest,
+                    allow_missing_transcripts=False,
+                    defer_unready=False,
+                    verify_sources=False,
+                    selected_audio_paths=["unknown.wav"],
+                )
+            with self.assertRaisesRegex(
+                ValueError, "must be included in selected audio paths"
+            ):
+                library._build_mutation_operations(
+                    manifest,
+                    allow_missing_transcripts=False,
+                    defer_unready=False,
+                    verify_sources=False,
+                    refresh_standardized_paths=["second.wav"],
+                    selected_audio_paths=["canonical.wav"],
+                )
 
     def test_plan_requires_transcripts_unless_override_is_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5278,6 +5315,8 @@ class CliTests(unittest.TestCase):
                 ".",
                 "plan",
                 "--defer-unready",
+                "--path",
+                "a.wav",
                 "--refresh-description-drift",
                 "--refresh-standardized-path",
                 "a.wav",
@@ -5327,6 +5366,7 @@ class CliTests(unittest.TestCase):
             defer_unready=True,
             refresh_standardized_paths=["a.wav"],
             refresh_description_drift=True,
+            relative_paths=["a.wav"],
         )
         library.apply.assert_called_once_with(execute=True)
 
@@ -6914,6 +6954,10 @@ class CliTests(unittest.TestCase):
                 (
                     {**valid, "refresh_standardized_paths": "safe.wav"},
                     "refresh paths must be a list",
+                ),
+                (
+                    {**valid, "selected_audio_paths": "safe.wav"},
+                    "selected audio paths must be a list",
                 ),
                 ({**valid, "deferred_paths": ["forged"]}, "deferred paths"),
                 ({**valid, "operations": ["bad"]}, "invalid mutation"),

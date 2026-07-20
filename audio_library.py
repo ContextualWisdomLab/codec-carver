@@ -2417,10 +2417,18 @@ def literal_evidence_contextual_description(
         segments=segments,
     )
 
-    title = validate_semantic_description(
-        fields["DESCRIPTION"],
-        grounding_text=grounding_text,
-    )
+    try:
+        title = validate_semantic_description(
+            fields["DESCRIPTION"],
+            grounding_text=grounding_text,
+        )
+    except ValueError:
+        title = contextual_fallback_title(
+            title_hint=fields["DESCRIPTION"],
+            central_idea=central_idea,
+            outcome=outcome,
+            grounding_text=grounding_text,
+        )
     validate_contextual_title_specificity(title, outcome=outcome)
     return validate_contextual_description(
         title=title,
@@ -4589,6 +4597,7 @@ class AudioLibrary:
         defer_unready: bool,
         verify_sources: bool,
         refresh_standardized_paths: Iterable[str] = (),
+        selected_audio_paths: Iterable[str] = (),
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """Derive the only authorized operations from current inventory evidence."""
 
@@ -4598,14 +4607,25 @@ class AudioLibrary:
             )
         records_by_path = {record["path"]: record for record in manifest["files"]}
         refresh_paths = set(refresh_standardized_paths)
+        selected_paths = set(selected_audio_paths)
         audio_paths = {
             record["path"] for record in manifest["files"] if record["kind"] == "audio"
         }
+        unknown_selected_paths = selected_paths - audio_paths
+        if unknown_selected_paths:
+            raise ValueError(
+                "selected audio paths are absent from inventory: "
+                + ", ".join(sorted(unknown_selected_paths))
+            )
         unknown_refresh_paths = refresh_paths - audio_paths
         if unknown_refresh_paths:
             raise ValueError(
                 "standardized refresh paths are absent from inventory: "
                 + ", ".join(sorted(unknown_refresh_paths))
+            )
+        if selected_paths and not refresh_paths.issubset(selected_paths):
+            raise ValueError(
+                "standardized refresh paths must be included in selected audio paths"
             )
         earliest_by_hash = {
             group["sha256"]: group.get("earliest_recorded_at")
@@ -4617,7 +4637,9 @@ class AudioLibrary:
         missing = [
             record["path"]
             for record in manifest["files"]
-            if record["kind"] == "audio" and not record.get("sha256")
+            if record["kind"] == "audio"
+            and not record.get("sha256")
+            and (not selected_paths or record["path"] in selected_paths)
         ]
 
         def ready(record: dict[str, Any]) -> bool:
@@ -4655,6 +4677,8 @@ class AudioLibrary:
 
         for group in manifest["duplicate_groups"]:
             for duplicate in group["duplicate_paths"]:
+                if selected_paths and duplicate not in selected_paths:
+                    continue
                 record = records_by_path[duplicate]
                 if not ready(record):
                     defer_record(record)
@@ -4687,6 +4711,8 @@ class AudioLibrary:
                     moved_tmk.add(tmk_path)
 
         for record in unique_audio_records(manifest):
+            if selected_paths and record["path"] not in selected_paths:
+                continue
             sha256 = validate_sha256(record["sha256"])
             transcript_path = safe_transcript_path(
                 self.state_dir / "transcripts", sha256
@@ -4801,13 +4827,35 @@ class AudioLibrary:
         defer_unready: bool = False,
         refresh_standardized_paths: Iterable[str] = (),
         refresh_description_drift: bool = False,
+        relative_paths: Iterable[str] = (),
     ) -> dict[str, Any]:
         """Create a collision-resistant duplicate quarantine and rename plan."""
 
         manifest = self._load_inventory()
         if not isinstance(refresh_description_drift, bool):
             raise ValueError("refresh_description_drift must be a boolean")
-        description_drift_paths = self._description_drift_paths(manifest)
+        selected_audio_paths = sorted(
+            {
+                validate_relative_path(
+                    self.root, path, label="selected mutation audio path"
+                )
+                for path in relative_paths
+            }
+        )
+        audio_paths = {
+            record["path"] for record in manifest["files"] if record["kind"] == "audio"
+        }
+        unknown_selected_paths = set(selected_audio_paths) - audio_paths
+        if unknown_selected_paths:
+            raise ValueError(
+                "selected audio paths are absent from inventory: "
+                + ", ".join(sorted(unknown_selected_paths))
+            )
+        description_drift_paths = [
+            path
+            for path in self._description_drift_paths(manifest)
+            if not selected_audio_paths or path in selected_audio_paths
+        ]
         refresh_paths = sorted(
             {
                 *(description_drift_paths if refresh_description_drift else []),
@@ -4827,6 +4875,7 @@ class AudioLibrary:
             defer_unready=defer_unready,
             verify_sources=True,
             refresh_standardized_paths=refresh_paths,
+            selected_audio_paths=selected_audio_paths,
         )
         rebuild_manifest_summary(manifest)
         atomic_json_write(self.state_dir / "inventory.json", manifest)
@@ -4843,6 +4892,7 @@ class AudioLibrary:
             "refresh_description_drift": refresh_description_drift,
             "description_drift_paths": description_drift_paths,
             "refresh_standardized_paths": refresh_paths,
+            "selected_audio_paths": selected_audio_paths,
         }
         atomic_json_write(self.state_dir / "mutation-plan.json", plan)
         return plan
@@ -5001,6 +5051,19 @@ class AudioLibrary:
             )
             for index, path in enumerate(refresh_standardized_paths)
         ]
+        selected_audio_paths = plan.get("selected_audio_paths", [])
+        if not isinstance(selected_audio_paths, list):
+            raise ValueError("mutation plan selected audio paths must be a list")
+        selected_audio_paths = sorted(
+            {
+                validate_relative_path(
+                    self.root,
+                    path,
+                    label=f"selected mutation audio path {index}",
+                )
+                for index, path in enumerate(selected_audio_paths)
+            }
+        )
         for index, operation in enumerate(operations):
             if not isinstance(operation, dict) or operation.get("action") not in {
                 "rename",
@@ -5019,7 +5082,11 @@ class AudioLibrary:
             )
             validate_sha256(operation.get("sha256"), label=f"mutation SHA-256 {index}")
         manifest = self._load_inventory()
-        expected_description_drift_paths = self._description_drift_paths(manifest)
+        expected_description_drift_paths = [
+            path
+            for path in self._description_drift_paths(manifest)
+            if not selected_audio_paths or path in selected_audio_paths
+        ]
         if description_drift_paths != expected_description_drift_paths:
             raise ValueError(
                 "mutation plan description drift paths are not authorized by the "
@@ -5037,6 +5104,7 @@ class AudioLibrary:
             defer_unready=defer_unready,
             verify_sources=True,
             refresh_standardized_paths=refresh_standardized_paths,
+            selected_audio_paths=selected_audio_paths,
         )
         if operations != expected_operations:
             raise ValueError(
@@ -5764,6 +5832,12 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument("--allow-missing-transcripts", action="store_true")
     plan_parser.add_argument("--defer-unready", action="store_true")
     plan_parser.add_argument(
+        "--path",
+        action="append",
+        default=[],
+        help="plan only this audio path and its linked TMK; repeat for a batch",
+    )
+    plan_parser.add_argument(
         "--refresh-description-drift",
         action="store_true",
         help="authorize renaming every reported standardized-name drift path",
@@ -5839,6 +5913,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             defer_unready=args.defer_unready,
             refresh_standardized_paths=args.refresh_standardized_path,
             refresh_description_drift=args.refresh_description_drift,
+            relative_paths=args.path,
         )
     else:
         result = library.apply(execute=args.execute)
