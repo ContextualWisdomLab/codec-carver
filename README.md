@@ -216,6 +216,10 @@ durable rename still requires explicit refresh authorization.
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
 that local stage, and Python atomically checkpoints before removing the stage.
+The default selection order keeps already-materialized recordings ahead of
+remote placeholders for throughput. Add `--oldest-first` when lineage work must
+select the globally earliest `recorded_at` across nested directories before
+path order or local availability; the run checkpoint records the chosen order.
 Already-materialized recordings follow the same byte-binding rule: Rust opens
 each path component with no-follow descriptors, copies and hashes the opened
 file into private scratch, and the GPU reads only that verified copy. A pathname

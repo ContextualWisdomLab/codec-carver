@@ -4338,8 +4338,65 @@ class AudioLibraryTests(unittest.TestCase):
             ):
                 summary = AudioLibrary(root, backend).stream_transcribe(max_files=1)
             self.assertEqual(summary["cached"], 1)
+            self.assertEqual(summary["selection_order"], "materialized_first")
             backend.stage.assert_not_called()
             fake.transcribe.assert_not_called()
+
+    def test_stream_transcribe_can_select_globally_oldest_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            remote = _record(
+                "nested/remote.wav",
+                HASH_A,
+                materialized=False,
+                recorded_at="2024-01-01T00:00:00+09:00",
+            )
+            local = _record(
+                "local.wav",
+                HASH_B,
+                materialized=True,
+                recorded_at="2024-01-02T00:00:00+09:00",
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [local, remote],
+                    "duplicate_groups": [],
+                },
+            )
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            staged = library.staging_dir / f"{HASH_A}.wav"
+            staged.write_bytes(AUDIO_A_BYTES)
+            backend.stage.return_value = {
+                "record": {**remote, "size_bytes": len(AUDIO_A_BYTES)},
+                "staged_path": str(staged),
+            }
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "가장 이른 녹음",
+                "segments": [],
+                "language": "ko",
+            }
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=lambda path: path.name == "remote.wav",
+                ),
+            ):
+                summary = library.stream_transcribe(
+                    max_files=1,
+                    oldest_first=True,
+                    evict_after=False,
+                )
+            self.assertEqual(summary["selection_order"], "oldest_first")
+            backend.stage.assert_called_once()
+            self.assertEqual(backend.stage.call_args.args[1], "nested/remote.wav")
+            fake.transcribe.assert_called_once()
 
     def test_stream_transcribe_skips_unresolved_tmk_and_streams_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5063,6 +5120,7 @@ class CliTests(unittest.TestCase):
                 "stream-transcribe",
                 "--max-files",
                 "1",
+                "--oldest-first",
                 "--path",
                 "a.wav",
                 "--stage-stall-timeout-seconds",
@@ -5111,6 +5169,7 @@ class CliTests(unittest.TestCase):
         )
         self.assertTrue(library.transcribe.call_args.args[0].word_timestamps)
         library.stream_transcribe.assert_called_once()
+        self.assertTrue(library.stream_transcribe.call_args.kwargs["oldest_first"])
         self.assertFalse(library.stream_transcribe.call_args.kwargs["evict_after"])
         self.assertEqual(
             library.stream_transcribe.call_args.kwargs["relative_paths"], ["a.wav"]

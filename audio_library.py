@@ -3992,6 +3992,7 @@ class AudioLibrary:
         *,
         max_files: int | None = None,
         relative_paths: Iterable[str] | None = None,
+        oldest_first: bool = False,
         inspect_timeout_seconds: float = 14_400,
         stage_stall_timeout_seconds: float = DEFAULT_STAGE_STALL_TIMEOUT_SECONDS,
         prefetch_workers: int = 1,
@@ -4015,14 +4016,20 @@ class AudioLibrary:
             record["path"]: is_icloud_dataless(self.root / record["path"])
             for record in audio_records
         }
-        records = sorted(
-            audio_records,
-            key=lambda record: (
+        def selection_key(record: dict[str, Any]) -> tuple[Any, ...]:
+            """Order candidates by the requested lineage or throughput policy."""
+
+            if oldest_first:
+                return (
+                    record.get("recorded_at") or "9999",
+                    record["path"],
+                )
+            return (
                 runtime_dataless[record["path"]],
                 record.get("recorded_at") or "9999",
                 record["path"],
-            ),
-        )
+            )
+        records = sorted(audio_records, key=selection_key)
         requested_paths = set(relative_paths or [])
         if requested_paths:
             available_paths = {record["path"] for record in records}
@@ -4296,6 +4303,9 @@ class AudioLibrary:
             "accelerator": transcriber.accelerator,
             "model": transcriber.model,
             "model_revision": vars(transcriber).get("model_revision"),
+            "selection_order": (
+                "oldest_first" if oldest_first else "materialized_first"
+            ),
             "prefetch_workers": prefetch_workers,
             "prefetched": len(candidates),
             "prefetch_bytes": prefetch_bytes,
@@ -5627,6 +5637,7 @@ def build_parser() -> argparse.ArgumentParser:
     stream_parser.add_argument("--language", default="ko")
     stream_parser.add_argument("--max-files", type=int)
     stream_parser.add_argument("--path", action="append", default=[])
+    stream_parser.add_argument("--oldest-first", action="store_true")
     stream_parser.add_argument("--inspect-timeout-seconds", type=float, default=14_400)
     stream_parser.add_argument(
         "--stage-stall-timeout-seconds",
@@ -5709,6 +5720,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             ),
             max_files=args.max_files,
             relative_paths=args.path,
+            oldest_first=args.oldest_first,
             inspect_timeout_seconds=args.inspect_timeout_seconds,
             stage_stall_timeout_seconds=args.stage_stall_timeout_seconds,
             prefetch_workers=args.prefetch_workers,
