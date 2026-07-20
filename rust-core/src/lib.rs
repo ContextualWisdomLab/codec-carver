@@ -73,6 +73,7 @@ pub struct FileRecord {
     pub tmk_path: Option<String>,
     pub tmk_marker_count: Option<usize>,
     pub tmk_last_marker_seconds: Option<f64>,
+    pub tmk_markers_seconds: Option<Vec<f64>>,
     pub error: Option<String>,
 }
 
@@ -321,6 +322,7 @@ fn inspect_pending_file(
         tmk_path: None,
         tmk_marker_count: (kind == FileKind::Tmk).then_some(markers.len()),
         tmk_last_marker_seconds: markers.last().copied(),
+        tmk_markers_seconds: (kind == FileKind::Tmk).then_some(markers),
         error: None,
     })
 }
@@ -409,6 +411,7 @@ pub fn stage_relative(
             tmk_path: None,
             tmk_marker_count: (kind == FileKind::Tmk).then_some(markers.len()),
             tmk_last_marker_seconds: markers.last().copied(),
+            tmk_markers_seconds: (kind == FileKind::Tmk).then_some(markers),
             error: None,
         },
         staged_path: staged_path.to_string_lossy().nfc().collect(),
@@ -593,6 +596,7 @@ fn process_file(pending: &PendingFile) -> FileRecord {
         tmk_path: None,
         tmk_marker_count: (pending.kind == FileKind::Tmk).then_some(markers.len()),
         tmk_last_marker_seconds: markers.last().copied(),
+        tmk_markers_seconds: (pending.kind == FileKind::Tmk).then_some(markers),
         error,
     }
 }
@@ -898,6 +902,8 @@ fn parse_tmk_markers(bytes: &[u8]) -> Vec<f64> {
 }
 
 fn correlate_tmk(files: &mut [FileRecord]) {
+    type TmkDetails = (Option<usize>, Option<f64>, Option<Vec<f64>>);
+
     let mut exact = HashMap::new();
     let mut normalized = HashMap::new();
     for record in files.iter().filter(|record| record.kind == FileKind::Tmk) {
@@ -907,13 +913,17 @@ fn correlate_tmk(files: &mut [FileRecord]) {
             .entry(sidecar_key(path, true))
             .or_insert_with(|| record.path.clone());
     }
-    let tmk_details: HashMap<String, (Option<usize>, Option<f64>)> = files
+    let tmk_details: HashMap<String, TmkDetails> = files
         .iter()
         .filter(|record| record.kind == FileKind::Tmk)
         .map(|record| {
             (
                 record.path.clone(),
-                (record.tmk_marker_count, record.tmk_last_marker_seconds),
+                (
+                    record.tmk_marker_count,
+                    record.tmk_last_marker_seconds,
+                    record.tmk_markers_seconds.clone(),
+                ),
             )
         })
         .collect();
@@ -927,9 +937,10 @@ fn correlate_tmk(files: &mut [FileRecord]) {
             .or_else(|| normalized.get(&sidecar_key(path, true)));
         if let Some(tmk_path) = matched {
             record.tmk_path = Some(tmk_path.clone());
-            if let Some((count, last)) = tmk_details.get(tmk_path) {
+            if let Some((count, last, markers)) = tmk_details.get(tmk_path) {
                 record.tmk_marker_count = *count;
                 record.tmk_last_marker_seconds = *last;
+                record.tmk_markers_seconds = markers.clone();
             }
         }
     }
@@ -1615,6 +1626,7 @@ mod tests {
             tmk_path: None,
             tmk_marker_count: None,
             tmk_last_marker_seconds: None,
+            tmk_markers_seconds: None,
             error: None,
         }
     }
@@ -1796,6 +1808,7 @@ mod tests {
         let tmk: StageResult = serde_json::from_str(&tmk).unwrap();
         assert_eq!(tmk.record.tmk_marker_count, Some(2));
         assert_eq!(tmk.record.tmk_last_marker_seconds, Some(62.5));
+        assert_eq!(tmk.record.tmk_markers_seconds, Some(vec![1.25, 62.5]));
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -1913,6 +1926,12 @@ mod tests {
                 .unwrap()
                 .tmk_marker_count,
             Some(2)
+        );
+        assert_eq!(
+            serde_json::from_str::<FileRecord>(&inspected)
+                .unwrap()
+                .tmk_markers_seconds,
+            Some(vec![1.25, 62.5])
         );
         assert!(default_hash_threads() >= 1);
         fs::remove_dir_all(root).unwrap();

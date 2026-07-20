@@ -70,6 +70,7 @@ def _record(path: str, sha256: str, **updates):
         "tmk_path": None,
         "tmk_marker_count": None,
         "tmk_last_marker_seconds": None,
+        "tmk_markers_seconds": None,
         "error": None,
     }
     record.update(updates)
@@ -2277,6 +2278,95 @@ class GpuTranscriberTests(unittest.TestCase):
             str(Path("/models") / audio_library.DEFAULT_MLX_MODEL_REVISION),
         )
 
+    def test_mlx_uses_tmk_markers_for_bounded_overlapping_chunks(self) -> None:
+        package, _, whisper = self._mlx_modules()
+        whisper.transcribe.side_effect = [
+            {
+                "text": "첫째",
+                "language": "ko",
+                "segments": [
+                    {"start": 10, "end": 11, "text": "첫째"},
+                    {"start": 300.2, "end": 300.4, "text": "다음 청크 중복"},
+                ],
+            },
+            {
+                "text": "둘째",
+                "language": "ko",
+                "segments": [
+                    {"start": 0.2, "end": 0.4, "text": "경계 중복"},
+                    {"start": 2, "end": 3, "text": "둘째"},
+                ],
+            },
+            {"text": "셋째", "language": "ko", "segments": []},
+        ]
+        decoded = [object(), object(), object()]
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=620.0),
+            patch("audio_library.decode_audio_for_mlx", side_effect=decoded) as decode,
+        ):
+            result = GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(
+                Path("long.m4a"),
+                tmk_markers_seconds=[
+                    300.0,
+                    600.0,
+                    float("nan"),
+                    -1.0,
+                    700.0,
+                    "invalid",
+                    True,
+                ],
+            )
+        self.assertEqual(
+            decode.call_args_list,
+            [
+                call(
+                    Path("long.m4a"),
+                    start_seconds=0.0,
+                    duration_seconds=301.0,
+                ),
+                call(
+                    Path("long.m4a"),
+                    start_seconds=299.0,
+                    duration_seconds=302.0,
+                ),
+                call(
+                    Path("long.m4a"),
+                    start_seconds=599.0,
+                    duration_seconds=21.0,
+                ),
+            ],
+        )
+        self.assertEqual(whisper.transcribe.call_count, 3)
+        self.assertEqual(result["text"], "첫째 둘째 셋째")
+        self.assertEqual(
+            [(segment["start"], segment["end"]) for segment in result["segments"]],
+            [(10.0, 11.0), (301.0, 302.0)],
+        )
+        self.assertTrue(result["tmk_chunked"])
+        self.assertEqual(result["transcription_chunks"], 3)
+
+    def test_tmk_chunk_ranges_reject_bad_offsets_and_merge_tiny_edges(self) -> None:
+        self.assertEqual(audio_library.tmk_chunk_ranges(None, 10.0), [])
+        self.assertEqual(
+            audio_library.tmk_chunk_ranges(
+                [True, "bad", float("nan"), -1.0, 10.0], 10.0
+            ),
+            [],
+        )
+        self.assertEqual(
+            audio_library.tmk_chunk_ranges([0.1, 5.0, 9.8], 10.0),
+            [(0.0, 5.0), (5.0, 10.0)],
+        )
+        self.assertEqual(audio_library.tmk_chunk_ranges([9.8], 10.0), [])
+
     def test_too_short_audio_skips_model_inference(self) -> None:
         package, _, whisper = self._mlx_modules()
         with (
@@ -2455,6 +2545,26 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertNotIn("DYLD_INSERT_LIBRARIES", environment)
         numpy.frombuffer.assert_called_once_with(b"\0\0", numpy.int16)
 
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": core, "numpy": numpy},
+            ),
+            patch(
+                "audio_library.trusted_ffmpeg_binary",
+                return_value=Path("/usr/bin/ffmpeg"),
+            ),
+            patch("audio_library.subprocess.run", return_value=completed) as run,
+        ):
+            audio_library.decode_audio_for_mlx(
+                Path("recording.wav"), start_seconds=299.0, duration_seconds=302.0
+            )
+        command = run.call_args.args[0]
+        self.assertEqual(
+            command[command.index("-ss") : command.index("-ss") + 4],
+            ["-ss", "299.000000", "-t", "302.000000"],
+        )
+
         handle = tempfile.TemporaryFile("w+b")
         handle.write(b"seekable-media")
         metadata = os.fstat(handle.fileno())
@@ -2494,6 +2604,17 @@ class GpuTranscriberTests(unittest.TestCase):
                 GpuTranscriptionUnavailableError, "approved system path"
             ):
                 audio_library.decode_audio_for_mlx(Path("recording.wav"))
+        with patch(
+            "audio_library.trusted_ffmpeg_binary", return_value=Path("/usr/bin/ffmpeg")
+        ):
+            with self.assertRaisesRegex(ValueError, "finite non-negative"):
+                audio_library.decode_audio_for_mlx(
+                    Path("recording.wav"), start_seconds=float("nan")
+                )
+            with self.assertRaisesRegex(ValueError, "finite positive"):
+                audio_library.decode_audio_for_mlx(
+                    Path("recording.wav"), duration_seconds=0.0
+                )
         failed = subprocess.CalledProcessError(1, ["ffmpeg"], stderr=b"decode failed")
         with (
             patch(
@@ -3138,6 +3259,15 @@ class AudioLibraryTests(unittest.TestCase):
             root = Path(tmp)
             state = root / ".codec-carver"
             manifest = _manifest(root)
+            manifest["files"][3].update(
+                {
+                    "sha256_verified": True,
+                    "sha256_source": "content",
+                    "tmk_marker_count": 1,
+                    "tmk_last_marker_seconds": 5.0,
+                    "tmk_markers_seconds": [5.0],
+                }
+            )
             atomic_json_write(state / "inventory.json", manifest)
             (root / "canonical.wav").write_bytes(b"one")
             (root / "second.wav").write_bytes(b"two")
@@ -3180,6 +3310,11 @@ class AudioLibraryTests(unittest.TestCase):
                     for call in fake.transcribe.call_args_list
                 )
             )
+            self.assertEqual(
+                fake.transcribe.call_args_list[0].kwargs["tmk_markers_seconds"],
+                [5.0],
+            )
+            self.assertEqual(fake.transcribe.call_args_list[1].kwargs, {})
 
     def test_transcribe_honors_cache_and_max_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3299,6 +3434,7 @@ class AudioLibraryTests(unittest.TestCase):
                         "size_bytes": len(TMK_BYTES),
                         "tmk_marker_count": 2,
                         "tmk_last_marker_seconds": 600.0,
+                        "tmk_markers_seconds": [300.0, 600.0],
                     },
                     "staged_path": str(staged),
                 },
@@ -3309,6 +3445,7 @@ class AudioLibraryTests(unittest.TestCase):
                 "sha256": HASH_B,
                 "tmk_marker_count": 1,
                 "tmk_last_marker_seconds": 30.0,
+                "tmk_markers_seconds": [30.0],
             }
             progress = Mock()
             with patch(
@@ -3350,6 +3487,7 @@ class AudioLibraryTests(unittest.TestCase):
                     "size_bytes": len(AUDIO_A_BYTES),
                     "tmk_marker_count": 0,
                     "tmk_last_marker_seconds": None,
+                    "tmk_markers_seconds": [],
                 },
                 "staged_path": str(resumed_staged),
             }
@@ -3375,6 +3513,7 @@ class AudioLibraryTests(unittest.TestCase):
                 "materialized": False,
                 "tmk_marker_count": 0,
                 "tmk_last_marker_seconds": None,
+                "tmk_markers_seconds": [],
             }
             atomic_json_write(
                 state / "inventory.json",
@@ -3434,6 +3573,7 @@ class AudioLibraryTests(unittest.TestCase):
                 "materialized": True,
                 "tmk_marker_count": 21,
                 "tmk_last_marker_seconds": 6300.0,
+                "tmk_markers_seconds": [300.0 * index for index in range(1, 22)],
             }
             audio = _record(
                 "cached.wav",
@@ -3467,6 +3607,7 @@ class AudioLibraryTests(unittest.TestCase):
                     "text": "cached transcript",
                     "tmk_marker_count": 0,
                     "tmk_last_marker_seconds": None,
+                    "tmk_markers_seconds": [],
                 },
             )
             backend = Mock()
@@ -3519,9 +3660,12 @@ class AudioLibraryTests(unittest.TestCase):
                 "extension": "tmk",
                 "size_bytes": 20,
                 "sha256": TMK_HASH,
+                "sha256_verified": True,
+                "sha256_source": "content",
                 "materialized": False,
                 "tmk_marker_count": 3,
                 "tmk_last_marker_seconds": 90.0,
+                "tmk_markers_seconds": [30.0, 60.0, 90.0],
                 "error": None,
             }
             atomic_json_write(
@@ -3565,6 +3709,11 @@ class AudioLibraryTests(unittest.TestCase):
             )
             self.assertEqual(transcript["tmk_marker_count"], 3)
             self.assertEqual(transcript["tmk_last_marker_seconds"], 90.0)
+            self.assertEqual(transcript["tmk_markers_seconds"], [30.0, 60.0, 90.0])
+            self.assertEqual(
+                fake.transcribe.call_args.kwargs["tmk_markers_seconds"],
+                [30.0, 60.0, 90.0],
+            )
 
     def test_stream_transcribe_prefetches_bounded_parallel_batch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4181,7 +4330,16 @@ class AudioLibraryTests(unittest.TestCase):
                 {"sha256": None, "materialized": False, "error": "dataless"}
             )
             manifest["files"][1].update(
-                {"sha256": None, "materialized": False, "error": "dataless"}
+                {
+                    "sha256": TMK_HASH,
+                    "sha256_verified": False,
+                    "sha256_source": "previous_inventory",
+                    "materialized": False,
+                    "tmk_marker_count": 1,
+                    "tmk_last_marker_seconds": 30.0,
+                    "tmk_markers_seconds": [30.0],
+                    "error": "dataless",
+                }
             )
             manifest["duplicate_groups"] = []
             atomic_json_write(state / "inventory.json", manifest)
@@ -4226,6 +4384,8 @@ class AudioLibraryTests(unittest.TestCase):
                 (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
             )
             self.assertEqual(transcript["tmk_error"], "dataless")
+            self.assertIsNone(transcript["tmk_markers_seconds"])
+            self.assertEqual(fake.transcribe.call_args.kwargs, {})
 
     def test_stream_transcribe_uses_cached_hash_and_isolates_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

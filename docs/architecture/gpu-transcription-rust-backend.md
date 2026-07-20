@@ -24,7 +24,8 @@ preferred interface for recording curation.
 - Exact duplicates are grouped only by the full content hash. The earliest
   available recording time is retained on the group.
 - Sony TMK markers such as `[00075:00.00]` are interpreted as minute-based
-  offsets and joined to audio by directory and normalized stem.
+  offsets and joined to audio by directory and normalized stem. Rust preserves
+  the complete ordered offset vector, not only its count and final value.
 - An audio record's `tmk_path` must resolve to an inventory record whose kind is
   exactly `tmk`; TMK records cannot themselves carry `tmk_path`. This typed
   relationship prevents a crafted sidecar link from authorizing an audio move.
@@ -38,6 +39,10 @@ preferred interface for recording curation.
   SHA-256 mismatches instead of overwriting foreign evidence.
 - `stream-transcribe` consumes only checkpointed TMK metadata. An unresolved
   sidecar is retained as `tmk_error` evidence and cannot block GPU audio work.
+- On MLX, verified internal TMK offsets divide a long recording into bounded
+  decode ranges with one-second overlap. The persistent pinned model processes
+  those ranges serially on Metal; segment midpoint ownership removes overlap
+  duplicates and converts timestamps back to the recording-global timeline.
 - Streaming order is based on the live macOS dataless flag rather than stale
   inventory state, so locally resident audio reaches the GPU before iCloud work.
 - Before a dataless stage, Rust calls Foundation's supported
@@ -182,6 +187,11 @@ generation.
 
 MLX Whisper caches the loaded model within the process, so the library API keeps
 one `GpuTranscriber` alive for the entire run.
+
+For long Sony recordings, the Rust-provided TMK vector bounds each MLX waveform
+decode instead of materializing the entire recording as one float array. This
+reduces peak memory without reloading the model or switching away from GPU
+inference; overlap protects speech at synthetic marker boundaries.
 
 Both backends disable previous-window conditioning to avoid repetition loops
 and use greedy decoding (`temperature=0` on MLX, beam/best-of 1 on CUDA) to

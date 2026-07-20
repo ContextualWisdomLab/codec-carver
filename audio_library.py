@@ -14,6 +14,7 @@ import errno
 import hashlib
 import inspect
 import json
+import math
 import os
 import platform
 import re
@@ -76,6 +77,8 @@ MACOS_SF_DATALESS = 0x40000000
 MACOS_F_GETPATH = 50
 MACOS_PATH_MAX = 1024
 MIN_TRANSCRIBABLE_SECONDS = 0.5
+TMK_CHUNK_OVERLAP_SECONDS = 1.0
+MAX_TMK_CHUNK_MARKERS = 4096
 EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
     {"no_speech_detected", "too_short_for_reliable_speech"}
 )
@@ -1140,7 +1143,12 @@ class GpuTranscriber:
                 "faster-whisper could not initialize an NVIDIA CUDA GPU"
             ) from exc
 
-    def transcribe(self, audio_source: Path | VerifiedStagedArtifact) -> dict[str, Any]:
+    def transcribe(
+        self,
+        audio_source: Path | VerifiedStagedArtifact,
+        *,
+        tmk_markers_seconds: Any = None,
+    ) -> dict[str, Any]:
         """Transcribe one recording while retaining timestamps and language metadata."""
 
         started = time.perf_counter()
@@ -1165,25 +1173,81 @@ class GpuTranscriber:
         if self.accelerator == "mlx":
             import mlx_whisper  # type: ignore[import-not-found]
 
-            decoded_audio = decode_audio_for_mlx(audio_source)
-            raw = mlx_whisper.transcribe(
-                decoded_audio,
-                path_or_hf_repo=str(self.model_path),
-                language=self.config.language,
-                word_timestamps=self.config.word_timestamps,
-                condition_on_previous_text=False,
-                temperature=0.0,
-                hallucination_silence_threshold=(
-                    2.0 if self.config.word_timestamps else None
-                ),
-                verbose=None,
-            )
-            segments = [
-                normalize_segment(segment) for segment in raw.get("segments", [])
-            ]
-            text = trusted_transcript_text(segments, fallback=str(raw.get("text", "")))
-            language = raw.get("language")
+            chunk_ranges = tmk_chunk_ranges(tmk_markers_seconds, duration_seconds)
+
+            def infer(decoded_audio: Any) -> dict[str, Any]:
+                """Run the already-loaded MLX model with deterministic settings."""
+
+                return mlx_whisper.transcribe(
+                    decoded_audio,
+                    path_or_hf_repo=str(self.model_path),
+                    language=self.config.language,
+                    word_timestamps=self.config.word_timestamps,
+                    condition_on_previous_text=False,
+                    temperature=0.0,
+                    hallucination_silence_threshold=(
+                        2.0 if self.config.word_timestamps else None
+                    ),
+                    verbose=None,
+                )
+
+            if chunk_ranges:
+                segments = []
+                chunk_texts = []
+                language = None
+                assert duration_seconds is not None
+                for chunk_index, (logical_start, logical_end) in enumerate(
+                    chunk_ranges
+                ):
+                    decode_start = max(0.0, logical_start - TMK_CHUNK_OVERLAP_SECONDS)
+                    decode_end = min(
+                        duration_seconds,
+                        logical_end + TMK_CHUNK_OVERLAP_SECONDS,
+                    )
+                    raw = infer(
+                        decode_audio_for_mlx(
+                            audio_source,
+                            start_seconds=decode_start,
+                            duration_seconds=decode_end - decode_start,
+                        )
+                    )
+                    language = language or raw.get("language")
+                    normalized_chunk = [
+                        normalize_segment(segment)
+                        for segment in raw.get("segments", [])
+                    ]
+                    accepted_chunk = []
+                    is_last = chunk_index == len(chunk_ranges) - 1
+                    for segment in normalized_chunk:
+                        segment["start"] += decode_start
+                        segment["end"] += decode_start
+                        midpoint = (segment["start"] + segment["end"]) / 2.0
+                        if midpoint < logical_start:
+                            continue
+                        if midpoint >= logical_end and not (
+                            is_last and midpoint <= duration_seconds
+                        ):
+                            continue
+                        segments.append(segment)
+                        accepted_chunk.append(segment)
+                    chunk_text = trusted_transcript_text(
+                        accepted_chunk, fallback=str(raw.get("text", ""))
+                    )
+                    if chunk_text:
+                        chunk_texts.append(chunk_text)
+                segments.sort(key=lambda segment: (segment["start"], segment["end"]))
+                text = " ".join(chunk_texts)
+            else:
+                raw = infer(decode_audio_for_mlx(audio_source))
+                segments = [
+                    normalize_segment(segment) for segment in raw.get("segments", [])
+                ]
+                text = trusted_transcript_text(
+                    segments, fallback=str(raw.get("text", ""))
+                )
+                language = raw.get("language")
         else:
+            chunk_ranges = []
             raw_segments, info = self._cuda_model.transcribe(
                 (
                     audio_source.rewind()
@@ -1225,6 +1289,8 @@ class GpuTranscriber:
             "model": self.model,
             "model_revision": self.model_revision,
             "duration_seconds": duration_seconds,
+            "tmk_chunked": bool(chunk_ranges),
+            "transcription_chunks": len(chunk_ranges) if chunk_ranges else 1,
             "quality_flags": quality_flags,
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         }
@@ -1327,8 +1393,48 @@ def audio_duration_seconds(
         return None
 
 
+def tmk_chunk_ranges(
+    markers: Any, duration_seconds: float | None
+) -> list[tuple[float, float]]:
+    """Turn verified Sony TMK offsets into complete, bounded MLX work ranges."""
+
+    if (
+        not isinstance(markers, (list, tuple))
+        or not markers
+        or duration_seconds is None
+        or not math.isfinite(duration_seconds)
+        or duration_seconds <= MIN_TRANSCRIBABLE_SECONDS
+    ):
+        return []
+    boundaries = []
+    for raw in markers[:MAX_TMK_CHUNK_MARKERS]:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            continue
+        value = float(raw)
+        if not math.isfinite(value) or value <= 0.0 or value >= duration_seconds:
+            continue
+        boundaries.append(value)
+    boundaries = sorted(set(boundaries))
+    if not boundaries:
+        return []
+    ranges = []
+    start = 0.0
+    for end in [*boundaries, float(duration_seconds)]:
+        if end - start < MIN_TRANSCRIBABLE_SECONDS and end < duration_seconds:
+            continue
+        if end - start < MIN_TRANSCRIBABLE_SECONDS and ranges:
+            ranges[-1] = (ranges[-1][0], float(duration_seconds))
+            break
+        ranges.append((start, end))
+        start = end
+    return ranges if len(ranges) > 1 else []
+
+
 def decode_audio_for_mlx(
     audio_source: Path | VerifiedStagedArtifact,
+    *,
+    start_seconds: float | None = None,
+    duration_seconds: float | None = None,
 ) -> Any:
     """Decode one recording through an approved absolute ffmpeg into an MLX array."""
 
@@ -1341,6 +1447,14 @@ def decode_audio_for_mlx(
         raise GpuTranscriptionUnavailableError(
             "MLX GPU transcription requires ffmpeg at an approved system path"
         )
+    if start_seconds is not None and (
+        not math.isfinite(start_seconds) or start_seconds < 0.0
+    ):
+        raise ValueError("MLX decode start must be a finite non-negative value")
+    if duration_seconds is not None and (
+        not math.isfinite(duration_seconds) or duration_seconds <= 0.0
+    ):
+        raise ValueError("MLX decode duration must be a finite positive value")
     try:
         media_input = str(audio_path)
         inherited_fds: tuple[int, ...] = ()
@@ -1348,12 +1462,13 @@ def decode_audio_for_mlx(
             descriptor = artifact.rewind().fileno()
             media_input = f"/dev/fd/{descriptor}"
             inherited_fds = (descriptor,)
-        completed = subprocess.run(
-            [
-                str(ffmpeg),
-                "-nostdin",
-                "-i",
-                media_input,
+        command = [str(ffmpeg), "-nostdin", "-i", media_input]
+        if start_seconds is not None:
+            command.extend(("-ss", f"{start_seconds:.6f}"))
+        if duration_seconds is not None:
+            command.extend(("-t", f"{duration_seconds:.6f}"))
+        command.extend(
+            (
                 "-threads",
                 "0",
                 "-f",
@@ -1365,7 +1480,10 @@ def decode_audio_for_mlx(
                 "-ar",
                 "16000",
                 "-",
-            ],
+            )
+        )
+        completed = subprocess.run(
+            command,
             check=True,
             capture_output=True,
             shell=False,
@@ -3589,6 +3707,7 @@ class AudioLibrary:
         """Transcribe each unique SHA-256 once with a persistent GPU model."""
 
         manifest = self._load_inventory()
+        records_by_path = {record["path"]: record for record in manifest["files"]}
         records = unique_audio_records(manifest)
         if max_files is not None:
             records = records[:max_files]
@@ -3610,7 +3729,19 @@ class AudioLibrary:
                     status = "cached"
                 else:
                     staged_audio = self._stage_materialized_record(record)
-                    result = transcriber.transcribe(staged_audio)
+                    tmk_record = records_by_path.get(record.get("tmk_path"), {})
+                    verified_tmk = record_sha_is_verified(tmk_record)
+                    markers_seconds = (
+                        tmk_record.get("tmk_markers_seconds") if verified_tmk else None
+                    )
+                    result = (
+                        transcriber.transcribe(
+                            staged_audio,
+                            tmk_markers_seconds=markers_seconds,
+                        )
+                        if markers_seconds
+                        else transcriber.transcribe(staged_audio)
+                    )
                     result.update(
                         {
                             "schema_version": 1,
@@ -3619,10 +3750,15 @@ class AudioLibrary:
                             "recorded_at": record.get("recorded_at"),
                             "location": record.get("location"),
                             "tmk_path": record.get("tmk_path"),
-                            "tmk_marker_count": record.get("tmk_marker_count"),
-                            "tmk_last_marker_seconds": record.get(
+                            "tmk_marker_count": tmk_record.get("tmk_marker_count")
+                            if verified_tmk
+                            else None,
+                            "tmk_last_marker_seconds": tmk_record.get(
                                 "tmk_last_marker_seconds"
-                            ),
+                            )
+                            if verified_tmk
+                            else None,
+                            "tmk_markers_seconds": markers_seconds,
                         }
                     )
                     atomic_json_write(output, result)
@@ -3689,6 +3825,7 @@ class AudioLibrary:
             if (
                 not record.get("sha256")
                 or record.get("tmk_marker_count") is None
+                or record.get("tmk_markers_seconds") is None
                 or not record_sha_is_verified(record)
             )
         ]
@@ -3705,6 +3842,7 @@ class AudioLibrary:
             if not record_sha_is_verified(record) or marker_count is None:
                 return 0
             last_marker_seconds = record.get("tmk_last_marker_seconds")
+            markers_seconds = record.get("tmk_markers_seconds")
             changed_transcripts = 0
             for audio_record in manifest["files"]:
                 if (
@@ -3714,6 +3852,7 @@ class AudioLibrary:
                     continue
                 audio_record["tmk_marker_count"] = marker_count
                 audio_record["tmk_last_marker_seconds"] = last_marker_seconds
+                audio_record["tmk_markers_seconds"] = markers_seconds
                 audio_sha256 = audio_record.get("sha256")
                 if not audio_sha256:
                     continue
@@ -3728,6 +3867,7 @@ class AudioLibrary:
                     "tmk_path": record["path"],
                     "tmk_marker_count": marker_count,
                     "tmk_last_marker_seconds": last_marker_seconds,
+                    "tmk_markers_seconds": markers_seconds,
                 }
                 if all(
                     transcript.get(key) == value
@@ -3972,6 +4112,8 @@ class AudioLibrary:
                     and (
                         not tmk_record.get("sha256")
                         or tmk_record.get("tmk_marker_count") is None
+                        or tmk_record.get("tmk_markers_seconds") is None
+                        or not record_sha_is_verified(tmk_record)
                     )
                 )
                 if tmk_path:
@@ -3980,12 +4122,18 @@ class AudioLibrary:
                             "TMK metadata unresolved; run hydrate-tmk before "
                             "stream-transcribe"
                         )
+                        record["tmk_marker_count"] = None
+                        record["tmk_last_marker_seconds"] = None
+                        record["tmk_markers_seconds"] = None
                     else:
                         record.pop("tmk_error", None)
-                    record["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
-                    record["tmk_last_marker_seconds"] = tmk_record.get(
-                        "tmk_last_marker_seconds"
-                    )
+                        record["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
+                        record["tmk_last_marker_seconds"] = tmk_record.get(
+                            "tmk_last_marker_seconds"
+                        )
+                        record["tmk_markers_seconds"] = tmk_record.get(
+                            "tmk_markers_seconds"
+                        )
                 known_sha256 = record.get("sha256")
                 if was_dataless:
                     preserved_tmk = {
@@ -3994,6 +4142,7 @@ class AudioLibrary:
                         "tmk_last_marker_seconds": record.get(
                             "tmk_last_marker_seconds"
                         ),
+                        "tmk_markers_seconds": record.get("tmk_markers_seconds"),
                         "tmk_error": record.get("tmk_error"),
                     }
                     prefetch_future = prefetch_futures.pop(record["path"], None)
@@ -4075,7 +4224,15 @@ class AudioLibrary:
                         audio_input = staged_audio
                     if any(not pending.done() for pending in prefetch_futures.values()):
                         prefetch_transcription_overlaps += 1
-                    result = transcriber.transcribe(audio_input)
+                    markers_seconds = record.get("tmk_markers_seconds")
+                    result = (
+                        transcriber.transcribe(
+                            audio_input,
+                            tmk_markers_seconds=markers_seconds,
+                        )
+                        if markers_seconds
+                        else transcriber.transcribe(audio_input)
+                    )
                     result.update(
                         {
                             "schema_version": 1,
@@ -4088,6 +4245,7 @@ class AudioLibrary:
                             "tmk_last_marker_seconds": record.get(
                                 "tmk_last_marker_seconds"
                             ),
+                            "tmk_markers_seconds": record.get("tmk_markers_seconds"),
                             "tmk_error": record.get("tmk_error"),
                         }
                     )
@@ -4688,6 +4846,7 @@ class AudioLibrary:
                 "tmk_path",
                 "tmk_marker_count",
                 "tmk_last_marker_seconds",
+                "tmk_markers_seconds",
                 "tmk_error",
             )
         }
@@ -5355,6 +5514,7 @@ def restore_inventory_evidence(
         transcript["tmk_path"] = record.get("tmk_path")
         transcript["tmk_marker_count"] = record.get("tmk_marker_count")
         transcript["tmk_last_marker_seconds"] = record.get("tmk_last_marker_seconds")
+        transcript["tmk_markers_seconds"] = record.get("tmk_markers_seconds")
         atomic_json_write(transcript_path, transcript)
     rebuild_manifest_summary(manifest)
     manifest["restored_sha256_count"] = restored
