@@ -332,6 +332,27 @@ class NamingTests(unittest.TestCase):
             audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
             audio_library.transcript_quality_flags(repeated_chunk),
         )
+        long_meeting_with_one_repeated_chunk = {
+            "duration_seconds": 6_549.0,
+            "quality_flags": [
+                audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            ],
+            "segments": [
+                {
+                    "text": (
+                        f"VOC 후속 조치 {index}를 시스템에서 계속 추적합니다"
+                    )
+                }
+                for index in range(24)
+            ]
+            + [{"text": "흐흐흐흐흐흐흐흐흐흐"}],
+        }
+        self.assertNotIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(
+                long_meeting_with_one_repeated_chunk
+            ),
+        )
         long_stock_fragment = {
             "duration_seconds": 145.0,
             "segments": [

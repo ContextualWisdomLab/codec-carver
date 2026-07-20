@@ -1581,7 +1581,15 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
     flags = (
         list(
             dict.fromkeys(
-                str(flag) for flag in existing if isinstance(flag, str) and flag
+                str(flag)
+                for flag in existing
+                if isinstance(flag, str)
+                and flag
+                and flag
+                not in {
+                    REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+                    INSUFFICIENT_CONTEXT_AUDIO_FLAG,
+                }
             )
         )
         if isinstance(existing, list)
@@ -1605,6 +1613,9 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
     ]
     stock_count = sum(
         bool(STOCK_HALLUCINATION_RE.search(value)) for value in normalized_segments
+    )
+    repeated_chunk_count = sum(
+        bool(REPEATED_KOREAN_CHUNK_RE.search(value)) for value in segment_texts
     )
     token_groups = [
         [token.casefold() for token in DESCRIPTION_TOKEN_RE.findall(value)]
@@ -1643,7 +1654,11 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
         or stock_count >= 1
         and duration_seconds >= 30.0
         and len(lexical_tokens) < 20
-        or any(REPEATED_KOREAN_CHUNK_RE.search(value) for value in segment_texts)
+        or repeated_chunk_count >= 1
+        and (
+            repeated_chunk_count == len(segment_texts)
+            or repeated_chunk_count * 8 >= len(segment_texts)
+        )
         or len(lexical_tokens) >= 12
         and dominant_token_count * 3 >= len(lexical_tokens)
         and len(token_counts) * 4 <= len(lexical_tokens)
