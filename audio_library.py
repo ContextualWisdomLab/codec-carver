@@ -87,6 +87,7 @@ INSUFFICIENT_CONTEXT_AUDIO_FLAG = "insufficient_context_for_filename"
 QUALITY_FLAG_DESCRIPTION_VALIDATION = "quality_flag_title_v1"
 MANUAL_DESCRIPTION_SOURCE = "manual_transcript_context_review"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+COPY_SUFFIX_RE = re.compile(r"(?i)(?:\s*\(\d+\)|\s+\d+)$")
 STANDARD_NAME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:__[^/]+)*__sha256-[0-9a-f]{12}$"
 )
@@ -4022,6 +4023,7 @@ class AudioLibrary:
             if oldest_first:
                 return (
                     record.get("recorded_at") or "9999",
+                    bool(COPY_SUFFIX_RE.search(Path(record["path"]).stem)),
                     record["path"],
                 )
             return (
@@ -5173,14 +5175,13 @@ def rebuild_manifest_summary(manifest: dict[str, Any]) -> None:
         if record.get("sha256") and record_sha_is_verified(record):
             by_hash.setdefault(record["sha256"], []).append(record)
     groups = []
-    copy_suffix = re.compile(r"(?i)(?:\s*\(\d+\)|\s+\d+)$")
     for sha256, records in sorted(by_hash.items()):
         if len(records) < 2:
             continue
         records.sort(
             key=lambda record: (
                 record.get("recorded_at") or "9999",
-                bool(copy_suffix.search(Path(record["path"]).stem)),
+                bool(COPY_SUFFIX_RE.search(Path(record["path"]).stem)),
                 not bool(record.get("tmk_path")),
                 not bool(record.get("location")),
                 len(Path(record["path"]).parts),

@@ -219,7 +219,8 @@ that local stage, and Python atomically checkpoints before removing the stage.
 The default selection order keeps already-materialized recordings ahead of
 remote placeholders for throughput. Add `--oldest-first` when lineage work must
 select the globally earliest `recorded_at` across nested directories before
-path order or local availability; the run checkpoint records the chosen order.
+local availability. When timestamps tie, an original-looking path is selected
+before numbered copy suffixes; the run checkpoint records the chosen order.
 Already-materialized recordings follow the same byte-binding rule: Rust opens
 each path component with no-follow descriptors, copies and hashes the opened
 file into private scratch, and the GPU reads only that verified copy. A pathname

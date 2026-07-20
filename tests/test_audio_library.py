@@ -4398,6 +4398,56 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(backend.stage.call_args.args[1], "nested/remote.wav")
             fake.transcribe.assert_called_once()
 
+    def test_stream_transcribe_oldest_first_prefers_original_name_on_tie(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            copy = _record(
+                "FOLDER01/231018_1018(1).wav",
+                HASH_A,
+                materialized=False,
+                recorded_at="2023-10-18T10:18:00+09:00",
+            )
+            original = _record(
+                "FOLDER01/231018_1018.wav",
+                HASH_B,
+                materialized=True,
+                recorded_at="2023-10-18T10:18:00+09:00",
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [copy, original],
+                    "duplicate_groups": [],
+                },
+            )
+            atomic_json_write(
+                state / "transcripts" / f"{HASH_B}.json",
+                {"text": "원본 이름을 우선 선택"},
+            )
+            (root / "FOLDER01").mkdir()
+            (root / original["path"]).write_bytes(b"original")
+            backend = Mock()
+            backend.inspect.return_value = original
+            fake = Mock(accelerator="mlx", model="model")
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=lambda path: path.name.endswith("(1).wav"),
+                ),
+            ):
+                summary = AudioLibrary(root, backend).stream_transcribe(
+                    max_files=1,
+                    oldest_first=True,
+                )
+            self.assertEqual(summary["selection_order"], "oldest_first")
+            self.assertEqual(summary["cached"], 1)
+            backend.stage.assert_not_called()
+            fake.transcribe.assert_not_called()
+
     def test_stream_transcribe_skips_unresolved_tmk_and_streams_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
