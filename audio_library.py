@@ -912,9 +912,11 @@ class RustBackend:
                 if total_remaining <= 0 or stall_remaining <= 0:
                     raise StageTimeoutError(
                         command,
-                        total_timeout_seconds
-                        if total_remaining <= 0
-                        else timeout_seconds,
+                        (
+                            total_timeout_seconds
+                            if total_remaining <= 0
+                            else timeout_seconds
+                        ),
                         progress_bytes=max_incomplete_bytes,
                         output=exc.output,
                         stderr=stderr,
@@ -1210,9 +1212,7 @@ class GpuTranscriber:
                     completed_chunks, chunk_ranges, duration_seconds
                 )
                 segments = [
-                    segment
-                    for chunk in resumed_chunks
-                    for segment in chunk["segments"]
+                    segment for chunk in resumed_chunks for segment in chunk["segments"]
                 ]
                 chunk_texts = [
                     chunk["text"] for chunk in resumed_chunks if chunk["text"]
@@ -3929,14 +3929,16 @@ class AudioLibrary:
                             "recorded_at": record.get("recorded_at"),
                             "location": record.get("location"),
                             "tmk_path": record.get("tmk_path"),
-                            "tmk_marker_count": tmk_record.get("tmk_marker_count")
-                            if verified_tmk
-                            else None,
-                            "tmk_last_marker_seconds": tmk_record.get(
-                                "tmk_last_marker_seconds"
-                            )
-                            if verified_tmk
-                            else None,
+                            "tmk_marker_count": (
+                                tmk_record.get("tmk_marker_count")
+                                if verified_tmk
+                                else None
+                            ),
+                            "tmk_last_marker_seconds": (
+                                tmk_record.get("tmk_last_marker_seconds")
+                                if verified_tmk
+                                else None
+                            ),
                             "tmk_markers_seconds": markers_seconds,
                         }
                     )
@@ -4180,6 +4182,7 @@ class AudioLibrary:
             record["path"]: is_icloud_dataless(self.root / record["path"])
             for record in audio_records
         }
+
         def selection_key(record: dict[str, Any]) -> tuple[Any, ...]:
             """Order candidates by the requested lineage or throughput policy."""
 
@@ -4194,6 +4197,7 @@ class AudioLibrary:
                 record.get("recorded_at") or "9999",
                 record["path"],
             )
+
         records = sorted(audio_records, key=selection_key)
         requested_paths = set(relative_paths or [])
         if requested_paths:
@@ -4441,9 +4445,13 @@ class AudioLibrary:
                             "model_revision": vars(transcriber).get("model_revision"),
                             "language": config.language,
                             "word_timestamps": config.word_timestamps,
-                            "tmk_markers_seconds": canonical_tmk_markers(markers_seconds),
+                            "tmk_markers_seconds": canonical_tmk_markers(
+                                markers_seconds
+                            ),
                         }
-                        existing_checkpoint = read_optional_private_json(checkpoint_path)
+                        existing_checkpoint = read_optional_private_json(
+                            checkpoint_path
+                        )
                         completed_checkpoint_chunks = []
                         if existing_checkpoint and all(
                             existing_checkpoint.get(key) == expected
@@ -5114,10 +5122,80 @@ class AudioLibrary:
         atomic_json_write(self.state_dir / "mutation-plan.json", plan)
         return plan
 
-    def apply(self, *, execute: bool = False) -> dict[str, Any]:
-        """Validate by default, or execute only when explicitly requested."""
+    def _reconcile_executed_mutation_state(
+        self, plan: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        """Advance inventory and transcript paths after native mutations succeed."""
 
-        self._validate_mutation_plan()
+        operations = plan["operations"]
+        if (
+            result.get("executed") is not True
+            or result.get("operation_count") != len(operations)
+            or result.get("completed") != operations
+        ):
+            raise RuntimeError(
+                "native mutation result does not attest every planned operation"
+            )
+
+        manifest = self._load_inventory()
+        operations_by_source = {
+            operation["source"]: operation for operation in operations
+        }
+        rename_paths = {
+            operation["source"]: operation["destination"]
+            for operation in operations
+            if operation["action"] == "rename"
+        }
+        quarantined_paths = {
+            operation["source"]
+            for operation in operations
+            if operation["action"] == "quarantine"
+        }
+        reconciled_files = []
+        for current in manifest["files"]:
+            record = dict(current)
+            operation = operations_by_source.get(record["path"])
+            if operation is not None and operation["action"] == "quarantine":
+                continue
+            if operation is not None:
+                record["path"] = operation["destination"]
+            tmk_path = record.get("tmk_path")
+            if tmk_path in rename_paths:
+                record["tmk_path"] = rename_paths[tmk_path]
+            elif tmk_path in quarantined_paths:
+                record["tmk_path"] = None
+                record["tmk_marker_count"] = None
+                record["tmk_last_marker_seconds"] = None
+                record["tmk_markers_seconds"] = None
+            reconciled_files.append(record)
+        manifest["files"] = sorted(reconciled_files, key=lambda record: record["path"])
+        rebuild_manifest_summary(manifest)
+        manifest["generated_at"] = datetime.now().astimezone().isoformat()
+        manifest["mutation_state_reconciled"] = True
+
+        transcript_dir = self.state_dir / "transcripts"
+        for record in unique_audio_records(manifest):
+            transcript_path = safe_transcript_path(transcript_dir, record["sha256"])
+            transcript = read_optional_private_json(transcript_path)
+            if transcript is not None:
+                validate_transcript_record_identity(record, transcript)
+                transcript["source_path"] = record["path"]
+                transcript["recorded_at"] = record.get("recorded_at")
+                if record.get("location"):
+                    transcript["location"] = record["location"]
+                transcript["tmk_path"] = record.get("tmk_path")
+                transcript["tmk_marker_count"] = record.get("tmk_marker_count")
+                transcript["tmk_last_marker_seconds"] = record.get(
+                    "tmk_last_marker_seconds"
+                )
+                transcript["tmk_markers_seconds"] = record.get("tmk_markers_seconds")
+                atomic_json_write(transcript_path, transcript)
+        atomic_json_write(self.state_dir / "inventory.json", manifest)
+
+    def apply(self, *, execute: bool = False) -> dict[str, Any]:
+        """Validate by default, or execute and reconcile durable state."""
+
+        plan = self._validate_mutation_plan()
         if execute and (
             type(self.backend) is not RustBackend
             or self.backend.descriptor_safe_mutations is not True
@@ -5129,6 +5207,8 @@ class AudioLibrary:
             self.state_dir / "mutation-plan.json", execute=execute
         )
         atomic_json_write(self.state_dir / "mutation-journal.json", result)
+        if execute:
+            self._reconcile_executed_mutation_state(plan, result)
         return result
 
     def _ensure_secure_state_dir(self) -> None:
@@ -5209,7 +5289,7 @@ class AudioLibrary:
             return True
         return False
 
-    def _validate_mutation_plan(self) -> None:
+    def _validate_mutation_plan(self) -> dict[str, Any]:
         """Reject a tampered plan before it reaches even a mocked/native backend."""
 
         self._ensure_secure_state_dir()
@@ -5331,6 +5411,7 @@ class AudioLibrary:
             raise ValueError(
                 "mutation plan deferred paths are not authorized by the current inventory"
             )
+        return plan
 
     def _load_inventory(self) -> dict[str, Any]:
         """Load the previously generated inventory or fail with a precise instruction."""
@@ -5466,12 +5547,16 @@ def verified_sibling_tmk_chunk_hint(
         """Accept only a content-bound, structurally equivalent marker vector."""
 
         markers = candidate.get("tmk_markers_seconds")
-        markers_are_numeric = bool(markers) and isinstance(markers, list) and all(
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and math.isfinite(float(value))
-            and float(value) > 0
-            for value in markers
+        markers_are_numeric = (
+            bool(markers)
+            and isinstance(markers, list)
+            and all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and float(value) > 0
+                for value in markers
+            )
         )
         normalized_markers = (
             tuple(float(value) for value in markers) if markers_are_numeric else ()
@@ -5491,8 +5576,7 @@ def verified_sibling_tmk_chunk_hint(
             and candidate.get("recorded_at") == recorded_at
             and candidate.get("size_bytes") == primary_size
             and candidate_path.parent == primary.parent
-            and COPY_SUFFIX_RE.sub("", candidate_path.stem)
-            == normalized_primary_stem
+            and COPY_SUFFIX_RE.sub("", candidate_path.stem) == normalized_primary_stem
             and markers_are_numeric
             and normalized_markers == tuple(sorted(set(normalized_markers)))
             and candidate.get("tmk_marker_count") == len(normalized_markers)

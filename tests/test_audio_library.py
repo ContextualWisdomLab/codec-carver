@@ -338,11 +338,7 @@ class NamingTests(unittest.TestCase):
                 audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
             ],
             "segments": [
-                {
-                    "text": (
-                        f"VOC 후속 조치 {index}를 시스템에서 계속 추적합니다"
-                    )
-                }
+                {"text": (f"VOC 후속 조치 {index}를 시스템에서 계속 추적합니다")}
                 for index in range(24)
             ]
             + [{"text": "흐흐흐흐흐흐흐흐흐흐"}],
@@ -2512,7 +2508,16 @@ class GpuTranscriberTests(unittest.TestCase):
             (["bad"], "must be an object"),
             ([{**base, "chunk_index": 1}], "must be contiguous"),
             ([{**base, "chunk_total": 2}], "total changed"),
-            ([{key: value for key, value in base.items() if key != "logical_end_seconds"}], "range is invalid"),
+            (
+                [
+                    {
+                        key: value
+                        for key, value in base.items()
+                        if key != "logical_end_seconds"
+                    }
+                ],
+                "range is invalid",
+            ),
             ([{**base, "logical_end_seconds": 29.0}], "boundaries changed"),
             ([{**base, "segments": {}}], "segments must be a list"),
             ([{**base, "segments": ["bad"]}], "segment must be an object"),
@@ -2524,8 +2529,9 @@ class GpuTranscriberTests(unittest.TestCase):
             ([{**base, "text": None}], "text is invalid"),
         ]
         for value, message in invalid_cases:
-            with self.subTest(message=message), self.assertRaisesRegex(
-                ValueError, message
+            with (
+                self.subTest(message=message),
+                self.assertRaisesRegex(ValueError, message),
             ):
                 audio_library.validated_completed_transcription_chunks(
                     value, ranges, 30.0
@@ -2926,9 +2932,11 @@ class GpuTranscriberTests(unittest.TestCase):
                 self.assertEqual(model_path.name, revision)
                 self.assertEqual(
                     model,
-                    audio_library.DEFAULT_MLX_MODEL
-                    if accelerator == "mlx"
-                    else audio_library.DEFAULT_CUDA_MODEL,
+                    (
+                        audio_library.DEFAULT_MLX_MODEL
+                        if accelerator == "mlx"
+                        else audio_library.DEFAULT_CUDA_MODEL
+                    ),
                 )
                 hub.snapshot_download.assert_called_once_with(
                     repo_id=repository, revision=revision
@@ -3060,6 +3068,137 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(library.apply(), {"executed": False})
             with self.assertRaisesRegex(
                 RuntimeError, "concrete descriptor-safe RustBackend"
+            ):
+                library.apply(execute=True)
+
+    def test_execute_apply_reconciles_inventory_and_transcript_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "old.wav").write_bytes(AUDIO_A_BYTES)
+            (root / "old.tmk").write_bytes(TMK_BYTES)
+            (root / "without.wav").write_bytes(AUDIO_B_BYTES)
+            (root / "drop.tmk").write_bytes(TMK_BYTES)
+            binary = root / "core"
+            binary.write_bytes(b"")
+            backend = _test_backend(binary)
+            library = AudioLibrary(root, backend)
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [
+                    _record(
+                        "old.wav",
+                        HASH_A,
+                        size_bytes=len(AUDIO_A_BYTES),
+                        tmk_path="old.tmk",
+                        tmk_marker_count=1,
+                        tmk_last_marker_seconds=300.0,
+                        tmk_markers_seconds=[300.0],
+                    ),
+                    {
+                        **_record("old.tmk", TMK_HASH, size_bytes=len(TMK_BYTES)),
+                        "kind": "tmk",
+                        "extension": "tmk",
+                        "tmk_path": None,
+                    },
+                    _record(
+                        "without.wav",
+                        HASH_B,
+                        size_bytes=len(AUDIO_B_BYTES),
+                        tmk_path="drop.tmk",
+                        tmk_marker_count=1,
+                        tmk_last_marker_seconds=300.0,
+                        tmk_markers_seconds=[300.0],
+                    ),
+                    {
+                        **_record("drop.tmk", TMK_HASH, size_bytes=len(TMK_BYTES)),
+                        "kind": "tmk",
+                        "extension": "tmk",
+                        "tmk_path": None,
+                    },
+                ],
+                "duplicate_groups": [],
+            }
+            atomic_json_write(library.state_dir / "inventory.json", manifest)
+            atomic_json_write(
+                library.state_dir / "transcripts" / f"{HASH_A}.json",
+                {
+                    "sha256": HASH_A,
+                    "source_path": "old.wav",
+                    "tmk_path": "old.tmk",
+                    "text": "진료병원 접수",
+                    "segments": [{"text": "진료병원 접수"}],
+                },
+            )
+            operations = [
+                mutation("rename", "old.wav", "renamed.wav", HASH_A),
+                mutation("rename", "old.tmk", "renamed.tmk", TMK_HASH),
+                mutation(
+                    "quarantine",
+                    "drop.tmk",
+                    ".codec-carver/quarantine/drop.tmk",
+                    TMK_HASH,
+                ),
+            ]
+            plan = {"operations": operations}
+            result = {
+                "schema_version": 1,
+                "root": str(root),
+                "executed": True,
+                "operation_count": 3,
+                "completed": operations,
+            }
+
+            def execute_native(_plan_path, *, execute):
+                self.assertTrue(execute)
+                (root / "old.wav").rename(root / "renamed.wav")
+                (root / "old.tmk").rename(root / "renamed.tmk")
+                quarantine = root / ".codec-carver/quarantine/drop.tmk"
+                quarantine.parent.mkdir(parents=True, exist_ok=True)
+                (root / "drop.tmk").rename(quarantine)
+                return result
+
+            with (
+                patch.object(library, "_validate_mutation_plan", return_value=plan),
+                patch.object(backend, "apply", side_effect=execute_native),
+            ):
+                self.assertEqual(library.apply(execute=True), result)
+
+            stored = json.loads(
+                (library.state_dir / "inventory.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                [record["path"] for record in stored["files"]],
+                ["renamed.tmk", "renamed.wav", "without.wav"],
+            )
+            audio = next(
+                record for record in stored["files"] if record["kind"] == "audio"
+            )
+            self.assertEqual(audio["tmk_path"], "renamed.tmk")
+            without = next(
+                record for record in stored["files"] if record["path"] == "without.wav"
+            )
+            self.assertIsNone(without["tmk_path"])
+            self.assertIsNone(without["tmk_marker_count"])
+            self.assertIsNone(without["tmk_last_marker_seconds"])
+            self.assertIsNone(without["tmk_markers_seconds"])
+            self.assertTrue(stored["mutation_state_reconciled"])
+            transcript = json.loads(
+                (library.state_dir / "transcripts" / f"{HASH_A}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(transcript["source_path"], "renamed.wav")
+            self.assertEqual(transcript["tmk_path"], "renamed.tmk")
+
+            with (
+                patch.object(library, "_validate_mutation_plan", return_value=plan),
+                patch.object(
+                    backend,
+                    "apply",
+                    return_value={"executed": False, "completed": []},
+                ),
+                self.assertRaisesRegex(RuntimeError, "does not attest"),
             ):
                 library.apply(execute=True)
 
@@ -4797,19 +4936,13 @@ class AudioLibraryTests(unittest.TestCase):
                 [30.0, 60.0],
             )
             transcript = json.loads(
-                (state / "transcripts" / f"{HASH_A}.json").read_text(
-                    encoding="utf-8"
-                )
+                (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
             )
             self.assertEqual(transcript["tmk_path"], primary_tmk["path"])
             self.assertIsNone(transcript["tmk_markers_seconds"])
-            self.assertEqual(
-                transcript["tmk_chunk_hint_path"], copy_tmk["path"]
-            )
+            self.assertEqual(transcript["tmk_chunk_hint_path"], copy_tmk["path"])
             self.assertEqual(transcript["tmk_chunk_hint_sha256"], TMK_HASH)
-            self.assertEqual(
-                transcript["tmk_chunk_hint_markers_seconds"], [30.0, 60.0]
-            )
+            self.assertEqual(transcript["tmk_chunk_hint_markers_seconds"], [30.0, 60.0])
 
     def test_stream_transcribe_persists_and_removes_tmk_chunk_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4884,15 +5017,11 @@ class AudioLibraryTests(unittest.TestCase):
             first.transcribe.side_effect = interrupted
             progress = Mock()
             with patch("audio_library.GpuTranscriber", return_value=first):
-                failed = library.stream_transcribe(
-                    evict_after=False, progress=progress
-                )
+                failed = library.stream_transcribe(evict_after=False, progress=progress)
             self.assertEqual(failed["failed"], 1)
             self.assertEqual(failed["transcription_checkpoints_written"], 1)
             self.assertEqual(progress.call_args_list[0].args[3], "chunk_completed:1/2")
-            checkpoint_path = (
-                state / "transcripts" / f"{HASH_A}.partial.json"
-            )
+            checkpoint_path = state / "transcripts" / f"{HASH_A}.partial.json"
             checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
             self.assertEqual(checkpoint["completed_chunks"], [chunk_zero])
 
@@ -4922,9 +5051,7 @@ class AudioLibraryTests(unittest.TestCase):
             ](chunk_zero)
             with patch("audio_library.GpuTranscriber", return_value=bad_order):
                 rejected_order = library.stream_transcribe(evict_after=False)
-            self.assertIn(
-                "not contiguous", rejected_order["failures"][0]["error"]
-            )
+            self.assertIn("not contiguous", rejected_order["failures"][0]["error"])
 
             def resumed(_audio_input, **kwargs):
                 self.assertEqual(kwargs["completed_chunks"], [chunk_zero])
@@ -4949,9 +5076,7 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(completed["transcription_checkpoints_written"], 1)
             self.assertFalse(checkpoint_path.exists())
             transcript = json.loads(
-                (state / "transcripts" / f"{HASH_A}.json").read_text(
-                    encoding="utf-8"
-                )
+                (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
             )
             self.assertEqual(transcript["text"], "첫째 둘째")
 
