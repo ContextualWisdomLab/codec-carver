@@ -94,7 +94,11 @@ def _content_words(sentence):
     """
     words = []
     for raw in sentence.split():
-        token = _TOKEN_STRIP_RE.sub("", raw).lower()
+        # ⚡ Bolt: Fast-path for purely alphanumeric words bypasses heavy regex overhead
+        if raw.isalnum():
+            token = raw.lower()
+        else:
+            token = _TOKEN_STRIP_RE.sub("", raw).lower()
         if token and token not in _STOPWORDS:
             words.append(token)
     return words
