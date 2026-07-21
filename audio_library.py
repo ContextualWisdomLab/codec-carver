@@ -87,6 +87,8 @@ REPETITIVE_OR_BACKGROUND_AUDIO_FLAG = "repetitive_or_background_audio"
 INSUFFICIENT_CONTEXT_AUDIO_FLAG = "insufficient_context_for_filename"
 QUALITY_FLAG_DESCRIPTION_VALIDATION = "quality_flag_title_v1"
 MANUAL_DESCRIPTION_SOURCE = "manual_transcript_context_review"
+MANUAL_REVIEW_EVIDENCE_FIELD = "filename_description_reviewed_evidence"
+MANUAL_REVIEW_EVIDENCE_METHOD = "manual_review_of_mlx_word_timestamps"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COPY_SUFFIX_RE = re.compile(r"(?i)(?:\s*\(\d+\)|\s+\d+)$")
 TMK_CHUNK_HINT_FIELDS = (
@@ -2654,10 +2656,27 @@ def validate_semantic_description(
         def is_grounded(token: str) -> bool:
             """Accept a literal, particle-normalized, or source-only compound term."""
 
-            candidates = tuple(
+            base_candidates = tuple(
                 dict.fromkeys(
                     [token.casefold()]
                     + [key for _display, key in description_terms(token)]
+                )
+            )
+            candidates = tuple(
+                dict.fromkeys(
+                    [
+                        candidate
+                        for value in base_candidates
+                        for candidate in (
+                            value,
+                            *(
+                                value[: -len(marker)]
+                                for marker in CONTEXT_TITLE_RELATION_MARKERS
+                                if value.endswith(marker) and len(value) > len(marker)
+                            ),
+                        )
+                        if len(candidate) >= 2
+                    ]
                 )
             )
             for candidate in candidates:
@@ -3139,13 +3158,20 @@ def validated_cached_filename_description(
         if not isinstance(context, dict):
             return None
         try:
+            grounding_text = semantic_transcript_excerpt(transcript)
+            if (
+                transcript.get("filename_description_source")
+                == MANUAL_DESCRIPTION_SOURCE
+                and MANUAL_REVIEW_EVIDENCE_FIELD in transcript
+            ):
+                grounding_text = validated_manual_review_grounding(transcript)
             result = validate_contextual_description(
                 title=semantic,
                 central_idea=str(context.get("central_idea", "")),
                 outcome=str(context.get("outcome", "")),
                 evidence_segment_ids=context.get("evidence_segment_ids", ()),
                 confidence=str(context.get("confidence", "")),
-                grounding_text=semantic_transcript_excerpt(transcript),
+                grounding_text=grounding_text,
                 limit=limit,
             )
             return validate_contextual_title_specificity(
@@ -3175,6 +3201,105 @@ def validated_cached_filename_description(
         )
         return expected if semantic == expected else None
     return None
+
+
+def validated_manual_review_grounding(transcript: dict[str, Any]) -> str:
+    """Validate time-bound MLX review evidence without replacing the raw transcript."""
+
+    evidence = transcript.get(MANUAL_REVIEW_EVIDENCE_FIELD)
+    if not isinstance(evidence, dict) or evidence.get("schema_version") != 1:
+        raise ValueError("manual review evidence must use schema version 1")
+    if evidence.get("method") != MANUAL_REVIEW_EVIDENCE_METHOD:
+        raise ValueError("manual review evidence method is unsupported")
+    for field in ("model", "model_revision"):
+        value = evidence.get(field)
+        if not isinstance(value, str) or not value or value != transcript.get(field):
+            raise ValueError(
+                f"manual review evidence {field} does not match transcript"
+            )
+
+    raw_segments = transcript.get("segments")
+    items = evidence.get("items")
+    if not isinstance(raw_segments, list) or not isinstance(items, list):
+        raise ValueError("manual review evidence requires transcript-backed items")
+    if not 2 <= len(items) <= 64:
+        raise ValueError("manual review evidence must contain two to 64 items")
+    duration = transcript.get("duration_seconds")
+    if (
+        isinstance(duration, bool)
+        or not isinstance(duration, (int, float))
+        or not math.isfinite(float(duration))
+        or float(duration) <= 0
+    ):
+        raise ValueError("manual review evidence requires a finite transcript duration")
+
+    lines = []
+    previous_start = -1.0
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise ValueError("manual review evidence items must be objects")
+        start = item.get("start")
+        end = item.get("end")
+        if (
+            isinstance(start, bool)
+            or isinstance(end, bool)
+            or not isinstance(start, (int, float))
+            or not isinstance(end, (int, float))
+        ):
+            raise ValueError("manual review evidence timestamps must be numeric")
+        start_value = float(start)
+        end_value = float(end)
+        if (
+            not math.isfinite(start_value)
+            or not math.isfinite(end_value)
+            or start_value < previous_start
+            or start_value < 0
+            or end_value <= start_value
+            or end_value > float(duration) + 0.01
+        ):
+            raise ValueError("manual review evidence timestamps are invalid")
+        previous_start = start_value
+
+        text = item.get("text")
+        if not isinstance(text, str):
+            raise ValueError("manual review evidence text must be a string")
+        normalized_text = SPACE_RE.sub(" ", text).strip()
+        if not normalized_text or len(normalized_text) > 500:
+            raise ValueError("manual review evidence text is empty or too long")
+
+        source_ids = item.get("source_segment_ids")
+        if (
+            not isinstance(source_ids, list)
+            or not source_ids
+            or any(
+                isinstance(source_id, bool)
+                or not isinstance(source_id, int)
+                or not 1 <= source_id <= len(raw_segments)
+                for source_id in source_ids
+            )
+        ):
+            raise ValueError("manual review evidence source segment ids are invalid")
+        source_ranges = []
+        for source_id in dict.fromkeys(source_ids):
+            source = raw_segments[source_id - 1]
+            if not isinstance(source, dict):
+                raise ValueError("manual review evidence source segment is invalid")
+            source_start = source.get("start")
+            source_end = source.get("end")
+            if (
+                isinstance(source_start, bool)
+                or isinstance(source_end, bool)
+                or not isinstance(source_start, (int, float))
+                or not isinstance(source_end, (int, float))
+            ):
+                raise ValueError("manual review evidence source timestamps are invalid")
+            source_ranges.append((float(source_start), float(source_end)))
+        source_start = min(value[0] for value in source_ranges)
+        source_end = max(value[1] for value in source_ranges)
+        if start_value < source_start - 2.0 or end_value > source_end + 2.0:
+            raise ValueError("manual review evidence is outside its source segments")
+        lines.append(f"[S{index:03d}] {normalized_text}")
+    return "\n".join(lines)
 
 
 def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> str:

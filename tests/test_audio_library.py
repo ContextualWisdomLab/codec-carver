@@ -1099,6 +1099,129 @@ class NamingTests(unittest.TestCase):
             transcript_description(contextual_transcript),
             "설비데이터통합-경영의사결정지연",
         )
+        manual_reviewed_title = "버스도착부터-차량승차-안방불켜줘부터-꺼줘까지"
+        manually_reviewed_transcript = {
+            "model": "mlx-community/whisper-large-v3-turbo-q4",
+            "model_revision": "reviewed-revision",
+            "duration_seconds": 12_173.23,
+            "filename_description": manual_reviewed_title,
+            "filename_description_source": (audio_library.MANUAL_DESCRIPTION_SOURCE),
+            "filename_description_validation": (
+                audio_library.SEMANTIC_DESCRIPTION_VALIDATION
+            ),
+            "filename_description_context": {
+                "central_idea": (
+                    "버스 도착, 차량승차, 안방불 켜줘부터 안방불 꺼줘까지 확인합니다."
+                ),
+                "outcome": "안방불 켜줘부터 안방불 꺼줘까지 확인합니다.",
+                "evidence_segment_ids": ["S001", "S002", "S003", "S004"],
+                "confidence": "medium",
+            },
+            "filename_description_reviewed_evidence": {
+                "schema_version": 1,
+                "method": audio_library.MANUAL_REVIEW_EVIDENCE_METHOD,
+                "model": "mlx-community/whisper-large-v3-turbo-q4",
+                "model_revision": "reviewed-revision",
+                "items": [
+                    {
+                        "start": 4800.44,
+                        "end": 4806.14,
+                        "text": "15번 1502번 버스가 잠시 후 도착 예정입니다.",
+                        "source_segment_ids": [1],
+                    },
+                    {
+                        "start": 5762.38,
+                        "end": 5776.94,
+                        "text": "차량 출발 및 정차 시 손잡이와 하차문 차량승차 위험 안내입니다.",
+                        "source_segment_ids": [2],
+                    },
+                    {
+                        "start": 6094.34,
+                        "end": 6148.56,
+                        "text": "10층입니다. 안방불 켜줘.",
+                        "source_segment_ids": [3],
+                    },
+                    {
+                        "start": 9092.06,
+                        "end": 9120.68,
+                        "text": "시리야, 안방불 꺼줘. 주방불 꺼줘.",
+                        "source_segment_ids": [4],
+                    },
+                ],
+            },
+            "segments": [
+                {"start": 4799, "end": 4859, "text": "15번 1502번 버스"},
+                {"start": 5759, "end": 5819, "text": "차량 안전 안내"},
+                {"start": 6089, "end": 6179, "text": "안방볼 켜줘"},
+                {"start": 9089, "end": 9149, "text": "암방 물 꺼줘"},
+            ],
+        }
+        self.assertEqual(
+            transcript_description(manually_reviewed_transcript),
+            manual_reviewed_title,
+        )
+        tampered_review = json.loads(json.dumps(manually_reviewed_transcript))
+        tampered_review["filename_description_reviewed_evidence"]["model_revision"] = (
+            "different-revision"
+        )
+        self.assertIsNone(
+            audio_library.validated_cached_filename_description(tampered_review)
+        )
+        out_of_range_review = json.loads(json.dumps(manually_reviewed_transcript))
+        out_of_range_review["filename_description_reviewed_evidence"]["items"][0][
+            "start"
+        ] = 4700
+        self.assertIsNone(
+            audio_library.validated_cached_filename_description(out_of_range_review)
+        )
+        malformed_manual_reviews = []
+
+        def malformed_review(label: str) -> dict[str, object]:
+            value = json.loads(json.dumps(manually_reviewed_transcript))
+            malformed_manual_reviews.append((label, value))
+            return value
+
+        invalid_schema = malformed_review("schema")
+        invalid_schema["filename_description_reviewed_evidence"] = None
+        invalid_method = malformed_review("method")
+        invalid_method["filename_description_reviewed_evidence"]["method"] = "other"
+        missing_segments = malformed_review("segments")
+        missing_segments["segments"] = None
+        too_few_items = malformed_review("item count")
+        too_few_items["filename_description_reviewed_evidence"]["items"] = [
+            too_few_items["filename_description_reviewed_evidence"]["items"][0]
+        ]
+        invalid_duration = malformed_review("duration")
+        invalid_duration["duration_seconds"] = 0
+        invalid_item = malformed_review("item object")
+        invalid_item["filename_description_reviewed_evidence"]["items"][0] = None
+        invalid_timestamp_type = malformed_review("timestamp type")
+        invalid_timestamp_type["filename_description_reviewed_evidence"]["items"][0][
+            "start"
+        ] = "bad"
+        invalid_timestamp_value = malformed_review("timestamp value")
+        invalid_timestamp_value["filename_description_reviewed_evidence"]["items"][0][
+            "start"
+        ] = -3
+        invalid_text_type = malformed_review("text type")
+        invalid_text_type["filename_description_reviewed_evidence"]["items"][0][
+            "text"
+        ] = 7
+        invalid_text_value = malformed_review("text value")
+        invalid_text_value["filename_description_reviewed_evidence"]["items"][0][
+            "text"
+        ] = ""
+        invalid_source_ids = malformed_review("source ids")
+        invalid_source_ids["filename_description_reviewed_evidence"]["items"][0][
+            "source_segment_ids"
+        ] = []
+        invalid_source_segment = malformed_review("source segment")
+        invalid_source_segment["segments"][0] = "bad"
+        invalid_source_timestamp = malformed_review("source timestamp")
+        invalid_source_timestamp["segments"][0]["start"] = "bad"
+        for label, malformed in malformed_manual_reviews:
+            with self.subTest(manual_review=label), self.assertRaises(ValueError):
+                audio_library.validated_manual_review_grounding(malformed)
         self.assertEqual(
             transcript_description(
                 {
