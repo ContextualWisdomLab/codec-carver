@@ -325,6 +325,16 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
+
+                if (totalSize > MAX_UPLOAD_BYTES) {
+                    const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
+                    input.setCustomValidity('Total size exceeds ' + limitText + ' limit.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ', exceeds ' + limitText + ' limit)';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+
                 preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
             }
 
