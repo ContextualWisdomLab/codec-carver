@@ -79,6 +79,7 @@ MACOS_PATH_MAX = 1024
 MIN_TRANSCRIBABLE_SECONDS = 0.5
 TMK_CHUNK_OVERLAP_SECONDS = 1.0
 MAX_TMK_CHUNK_MARKERS = 4096
+TRANSCRIPTION_CHECKPOINT_SCHEMA_VERSION = 1
 EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
     {"no_speech_detected", "too_short_for_reliable_speech"}
 )
@@ -1156,8 +1157,10 @@ class GpuTranscriber:
         audio_source: Path | VerifiedStagedArtifact,
         *,
         tmk_markers_seconds: Any = None,
+        completed_chunks: Any = None,
+        chunk_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
-        """Transcribe one recording while retaining timestamps and language metadata."""
+        """Transcribe one recording, checkpointing complete TMK-bounded chunks."""
 
         started = time.perf_counter()
         duration_seconds = audio_duration_seconds(audio_source)
@@ -1178,6 +1181,7 @@ class GpuTranscriber:
                 "quality_flags": ["too_short_for_reliable_speech"],
                 "elapsed_seconds": round(time.perf_counter() - started, 3),
             }
+        resumed_chunks: list[dict[str, Any]] = []
         if self.accelerator == "mlx":
             import mlx_whisper  # type: ignore[import-not-found]
 
@@ -1191,6 +1195,7 @@ class GpuTranscriber:
                     path_or_hf_repo=str(self.model_path),
                     language=self.config.language,
                     word_timestamps=self.config.word_timestamps,
+                    without_timestamps=not self.config.word_timestamps,
                     condition_on_previous_text=False,
                     temperature=0.0,
                     hallucination_silence_threshold=(
@@ -1200,13 +1205,28 @@ class GpuTranscriber:
                 )
 
             if chunk_ranges:
-                segments = []
-                chunk_texts = []
-                language = None
                 assert duration_seconds is not None
-                for chunk_index, (logical_start, logical_end) in enumerate(
-                    chunk_ranges
-                ):
+                resumed_chunks = validated_completed_transcription_chunks(
+                    completed_chunks, chunk_ranges, duration_seconds
+                )
+                segments = [
+                    segment
+                    for chunk in resumed_chunks
+                    for segment in chunk["segments"]
+                ]
+                chunk_texts = [
+                    chunk["text"] for chunk in resumed_chunks if chunk["text"]
+                ]
+                language = next(
+                    (
+                        chunk["language"]
+                        for chunk in resumed_chunks
+                        if chunk["language"]
+                    ),
+                    None,
+                )
+                for chunk_index in range(len(resumed_chunks), len(chunk_ranges)):
+                    logical_start, logical_end = chunk_ranges[chunk_index]
                     decode_start = max(0.0, logical_start - TMK_CHUNK_OVERLAP_SECONDS)
                     decode_end = min(
                         duration_seconds,
@@ -1243,9 +1263,26 @@ class GpuTranscriber:
                     )
                     if chunk_text:
                         chunk_texts.append(chunk_text)
+                    if chunk_progress:
+                        chunk_progress(
+                            {
+                                "chunk_index": chunk_index,
+                                "chunk_total": len(chunk_ranges),
+                                "logical_start_seconds": logical_start,
+                                "logical_end_seconds": logical_end,
+                                "language": raw.get("language"),
+                                "segments": accepted_chunk,
+                                "text": chunk_text,
+                            }
+                        )
                 segments.sort(key=lambda segment: (segment["start"], segment["end"]))
                 text = " ".join(chunk_texts)
             else:
+                if completed_chunks:
+                    raise ValueError(
+                        "completed transcription chunks require TMK-bounded audio"
+                    )
+                resumed_chunks = []
                 raw = infer(decode_audio_for_mlx(audio_source))
                 segments = [
                     normalize_segment(segment) for segment in raw.get("segments", [])
@@ -1299,6 +1336,7 @@ class GpuTranscriber:
             "duration_seconds": duration_seconds,
             "tmk_chunked": bool(chunk_ranges),
             "transcription_chunks": len(chunk_ranges) if chunk_ranges else 1,
+            "resumed_transcription_chunks": len(resumed_chunks),
             "quality_flags": quality_flags,
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         }
@@ -1436,6 +1474,88 @@ def tmk_chunk_ranges(
         ranges.append((start, end))
         start = end
     return ranges if len(ranges) > 1 else []
+
+
+def canonical_tmk_markers(markers: Any) -> list[float]:
+    """Return a stable finite marker vector for checkpoint identity matching."""
+
+    if not isinstance(markers, (list, tuple)):
+        return []
+    values = []
+    for raw in markers[:MAX_TMK_CHUNK_MARKERS]:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            continue
+        value = float(raw)
+        if math.isfinite(value) and value > 0.0:
+            values.append(value)
+    return sorted(set(values))
+
+
+def validated_completed_transcription_chunks(
+    value: Any,
+    chunk_ranges: list[tuple[float, float]],
+    duration_seconds: float,
+) -> list[dict[str, Any]]:
+    """Validate a contiguous, globally timestamped MLX checkpoint prefix."""
+
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > len(chunk_ranges):
+        raise ValueError("completed transcription chunks must be a bounded list")
+    completed = []
+    for index, raw in enumerate(value):
+        if not isinstance(raw, dict):
+            raise ValueError("completed transcription chunk must be an object")
+        logical_start, logical_end = chunk_ranges[index]
+        if raw.get("chunk_index") != index:
+            raise ValueError("completed transcription chunks must be contiguous")
+        if raw.get("chunk_total") != len(chunk_ranges):
+            raise ValueError("completed transcription chunk total changed")
+        try:
+            stored_start = float(raw["logical_start_seconds"])
+            stored_end = float(raw["logical_end_seconds"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("completed transcription chunk range is invalid") from exc
+        if not (
+            math.isclose(stored_start, logical_start, abs_tol=1e-6)
+            and math.isclose(stored_end, logical_end, abs_tol=1e-6)
+        ):
+            raise ValueError("completed transcription chunk boundaries changed")
+        raw_segments = raw.get("segments")
+        if not isinstance(raw_segments, list):
+            raise ValueError("completed transcription chunk segments must be a list")
+        segments = []
+        for raw_segment in raw_segments:
+            if not isinstance(raw_segment, dict):
+                raise ValueError("completed transcription segment must be an object")
+            segment = normalize_segment(raw_segment)
+            start = segment["start"]
+            end = segment["end"]
+            if not (
+                math.isfinite(start)
+                and math.isfinite(end)
+                and 0.0 <= start <= end <= duration_seconds + 1e-6
+            ):
+                raise ValueError("completed transcription segment range is invalid")
+            segments.append(segment)
+        language = raw.get("language")
+        if language is not None and not isinstance(language, str):
+            raise ValueError("completed transcription chunk language is invalid")
+        text = raw.get("text")
+        if not isinstance(text, str):
+            raise ValueError("completed transcription chunk text is invalid")
+        completed.append(
+            {
+                "chunk_index": index,
+                "chunk_total": len(chunk_ranges),
+                "logical_start_seconds": logical_start,
+                "logical_end_seconds": logical_end,
+                "language": language,
+                "segments": segments,
+                "text": text.strip(),
+            }
+        )
+    return completed
 
 
 def decode_audio_for_mlx(
@@ -3661,6 +3781,34 @@ def safe_transcript_path(
     return normalized_dir / f"{sha256}{suffix}"
 
 
+def safe_transcription_checkpoint_path(transcript_dir: Path, sha256: Any) -> Path:
+    """Build a private partial-transcript path keyed only by a content digest."""
+
+    validate_sha256(sha256, label="transcription checkpoint SHA-256")
+    normalized_dir = normalized_private_absolute_path(transcript_dir)
+    ensure_private_directory(normalized_dir)
+    return normalized_dir / f"{sha256}.partial.json"
+
+
+def remove_private_regular_file(path: Path) -> None:
+    """Remove one owner-owned regular private file without following symlinks."""
+
+    directory_fd = open_private_directory(path.parent)
+    try:
+        try:
+            metadata = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"private state is not a regular file: {path}")
+        if metadata.st_uid != os.geteuid():
+            raise PermissionError(f"private state is not owned by this user: {path}")
+        os.unlink(path.name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 class AudioLibrary:
     """Public Python API for the end-to-end curation workflow."""
 
@@ -4100,6 +4248,8 @@ class AudioLibrary:
         prefetch_fallback_allowed = True
         prefetch_transcription_overlaps = 0
         tmk_chunk_hints_used = 0
+        resumed_transcription_chunks = 0
+        transcription_checkpoints_written = 0
         completed = cached = failed = 0
         failures = []
         eviction_failures = []
@@ -4278,13 +4428,76 @@ class AudioLibrary:
                     )
                     if tmk_chunk_hint:
                         tmk_chunk_hints_used += 1
-                    result = (
-                        transcriber.transcribe(
+                    checkpoint_path: Path | None = None
+                    if markers_seconds:
+                        checkpoint_path = safe_transcription_checkpoint_path(
+                            transcript_dir, sha256
+                        )
+                        checkpoint_identity = {
+                            "schema_version": TRANSCRIPTION_CHECKPOINT_SCHEMA_VERSION,
+                            "sha256": sha256,
+                            "accelerator": transcriber.accelerator,
+                            "model": transcriber.model,
+                            "model_revision": vars(transcriber).get("model_revision"),
+                            "language": config.language,
+                            "word_timestamps": config.word_timestamps,
+                            "tmk_markers_seconds": canonical_tmk_markers(markers_seconds),
+                        }
+                        existing_checkpoint = read_optional_private_json(checkpoint_path)
+                        completed_checkpoint_chunks = []
+                        if existing_checkpoint and all(
+                            existing_checkpoint.get(key) == expected
+                            for key, expected in checkpoint_identity.items()
+                        ):
+                            completed_checkpoint_chunks = existing_checkpoint.get(
+                                "completed_chunks", []
+                            )
+
+                        def checkpoint_chunk(chunk: dict[str, Any]) -> None:
+                            """Persist one contiguous chunk before starting the next."""
+
+                            nonlocal transcription_checkpoints_written
+                            if not isinstance(completed_checkpoint_chunks, list):
+                                raise ValueError(
+                                    "completed transcription checkpoint is not a list"
+                                )
+                            if chunk.get("chunk_index") != len(
+                                completed_checkpoint_chunks
+                            ):
+                                raise ValueError(
+                                    "transcription checkpoint chunks are not contiguous"
+                                )
+                            completed_checkpoint_chunks.append(chunk)
+                            atomic_json_write(
+                                checkpoint_path,
+                                {
+                                    **checkpoint_identity,
+                                    "source_path": record["path"],
+                                    "completed_chunks": completed_checkpoint_chunks,
+                                },
+                            )
+                            transcription_checkpoints_written += 1
+                            if progress:
+                                progress(
+                                    index,
+                                    len(records),
+                                    record["path"],
+                                    (
+                                        "chunk_completed:"
+                                        f"{chunk['chunk_index'] + 1}/{chunk['chunk_total']}"
+                                    ),
+                                )
+
+                        result = transcriber.transcribe(
                             audio_input,
                             tmk_markers_seconds=markers_seconds,
+                            completed_chunks=completed_checkpoint_chunks,
+                            chunk_progress=checkpoint_chunk,
                         )
-                        if markers_seconds
-                        else transcriber.transcribe(audio_input)
+                    else:
+                        result = transcriber.transcribe(audio_input)
+                    resumed_transcription_chunks += int(
+                        result.get("resumed_transcription_chunks", 0)
                     )
                     result.update(
                         {
@@ -4305,6 +4518,8 @@ class AudioLibrary:
                     )
                     atomic_json_write(transcript_path, result)
                     atomic_text_write(text_path, result["text"].strip() + "\n")
+                    if checkpoint_path is not None:
+                        remove_private_regular_file(checkpoint_path)
                     completed += 1
                     status = "completed"
                 record["error"] = None
@@ -4346,6 +4561,8 @@ class AudioLibrary:
             "prefetch_fallback_suppressed": prefetch_fallback_suppressed,
             "prefetch_transcription_overlaps": prefetch_transcription_overlaps,
             "tmk_chunk_hints_used": tmk_chunk_hints_used,
+            "resumed_transcription_chunks": resumed_transcription_chunks,
+            "transcription_checkpoints_written": transcription_checkpoints_written,
             "recordings_selected": len(records),
             "completed": completed,
             "cached": cached,

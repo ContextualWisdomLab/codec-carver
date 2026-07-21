@@ -2303,10 +2303,33 @@ class GpuTranscriberTests(unittest.TestCase):
             whisper.transcribe.call_args.kwargs["condition_on_previous_text"]
         )
         self.assertEqual(whisper.transcribe.call_args.kwargs["temperature"], 0.0)
+        self.assertTrue(whisper.transcribe.call_args.kwargs["without_timestamps"])
         self.assertEqual(
             whisper.transcribe.call_args.kwargs["path_or_hf_repo"],
             str(Path("/models") / audio_library.DEFAULT_MLX_MODEL_REVISION),
         )
+
+    def test_mlx_word_timestamps_keep_timestamp_token_decoding(self) -> None:
+        package, _, whisper = self._mlx_modules()
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=1.0),
+            patch("audio_library.decode_audio_for_mlx", return_value=object()),
+        ):
+            GpuTranscriber(
+                TranscriptionConfig(accelerator="mlx", word_timestamps=True)
+            ).transcribe(Path("clip.wav"))
+        options = whisper.transcribe.call_args.kwargs
+        self.assertTrue(options["word_timestamps"])
+        self.assertFalse(options["without_timestamps"])
+        self.assertEqual(options["hallucination_silence_threshold"], 2.0)
 
     def test_mlx_uses_tmk_markers_for_bounded_overlapping_chunks(self) -> None:
         package, _, whisper = self._mlx_modules()
@@ -2382,6 +2405,161 @@ class GpuTranscriberTests(unittest.TestCase):
         )
         self.assertTrue(result["tmk_chunked"])
         self.assertEqual(result["transcription_chunks"], 3)
+
+    def test_mlx_resumes_a_contiguous_tmk_chunk_checkpoint(self) -> None:
+        package, _, whisper = self._mlx_modules()
+        first_chunk = {
+            "text": "첫째",
+            "language": "ko",
+            "segments": [{"start": 10, "end": 11, "text": "첫째"}],
+        }
+        second_chunk = {
+            "text": "둘째",
+            "language": "ko",
+            "segments": [{"start": 2, "end": 3, "text": "둘째"}],
+        }
+        final_chunk = {
+            "text": "셋째",
+            "language": "ko",
+            "segments": [],
+        }
+        completed_chunks = []
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=620.0),
+            patch(
+                "audio_library.decode_audio_for_mlx",
+                side_effect=[object(), object(), object(), object()],
+            ) as decode,
+        ):
+            transcriber = GpuTranscriber(TranscriptionConfig(accelerator="mlx"))
+            whisper.transcribe.side_effect = [
+                first_chunk,
+                RuntimeError("simulated interruption"),
+            ]
+            with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+                transcriber.transcribe(
+                    Path("long.m4a"),
+                    tmk_markers_seconds=[300.0, 600.0],
+                    chunk_progress=completed_chunks.append,
+                )
+            self.assertEqual(len(completed_chunks), 1)
+            whisper.transcribe.side_effect = [second_chunk, final_chunk]
+            resumed_progress = Mock()
+            result = transcriber.transcribe(
+                Path("long.m4a"),
+                tmk_markers_seconds=[300.0, 600.0],
+                completed_chunks=completed_chunks,
+                chunk_progress=resumed_progress,
+            )
+        self.assertEqual(decode.call_count, 4)
+        self.assertEqual(whisper.transcribe.call_count, 4)
+        self.assertEqual(resumed_progress.call_count, 2)
+        self.assertEqual(result["text"], "첫째 둘째 셋째")
+        self.assertEqual(result["resumed_transcription_chunks"], 1)
+        self.assertEqual(
+            [(segment["start"], segment["end"]) for segment in result["segments"]],
+            [(10.0, 11.0), (301.0, 302.0)],
+        )
+
+    def test_mlx_rejects_checkpoint_without_tmk_chunk_boundaries(self) -> None:
+        package, _, whisper = self._mlx_modules()
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=10.0),
+            self.assertRaisesRegex(ValueError, "require TMK-bounded audio"),
+        ):
+            GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(
+                Path("short.m4a"), completed_chunks=[{"chunk_index": 0}]
+            )
+        whisper.transcribe.assert_not_called()
+
+    def test_transcription_checkpoint_validation_rejects_malformed_state(self) -> None:
+        self.assertEqual(audio_library.canonical_tmk_markers(None), [])
+        self.assertEqual(
+            audio_library.canonical_tmk_markers(
+                [True, "bad", float("nan"), -1.0, 30, 30.0]
+            ),
+            [30.0],
+        )
+        ranges = [(0.0, 30.0)]
+        base = {
+            "chunk_index": 0,
+            "chunk_total": 1,
+            "logical_start_seconds": 0.0,
+            "logical_end_seconds": 30.0,
+            "language": "ko",
+            "segments": [],
+            "text": "회의",
+        }
+        invalid_cases = [
+            ({}, "bounded list"),
+            ([base, base], "bounded list"),
+            (["bad"], "must be an object"),
+            ([{**base, "chunk_index": 1}], "must be contiguous"),
+            ([{**base, "chunk_total": 2}], "total changed"),
+            ([{key: value for key, value in base.items() if key != "logical_end_seconds"}], "range is invalid"),
+            ([{**base, "logical_end_seconds": 29.0}], "boundaries changed"),
+            ([{**base, "segments": {}}], "segments must be a list"),
+            ([{**base, "segments": ["bad"]}], "segment must be an object"),
+            (
+                [{**base, "segments": [{"start": -1, "end": 2, "text": "bad"}]}],
+                "segment range is invalid",
+            ),
+            ([{**base, "language": 1}], "language is invalid"),
+            ([{**base, "text": None}], "text is invalid"),
+        ]
+        for value, message in invalid_cases:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                audio_library.validated_completed_transcription_chunks(
+                    value, ranges, 30.0
+                )
+
+    def test_private_checkpoint_removal_rejects_nonfiles_and_foreign_owner(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state"
+            state.mkdir(mode=0o700)
+            directory = state / "checkpoint"
+            directory.mkdir()
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                audio_library.remove_private_regular_file(directory)
+
+            checkpoint = state / "checkpoint.json"
+            checkpoint.write_text("{}", encoding="utf-8")
+            real_stat = os.stat
+
+            def foreign_stat(path, *args, **kwargs):
+                metadata = real_stat(path, *args, **kwargs)
+                if path == checkpoint.name and kwargs.get("dir_fd") is not None:
+                    return types.SimpleNamespace(
+                        st_mode=metadata.st_mode,
+                        st_uid=metadata.st_uid + 1,
+                    )
+                return metadata
+
+            with (
+                patch("audio_library.os.stat", side_effect=foreign_stat),
+                self.assertRaisesRegex(PermissionError, "not owned"),
+            ):
+                audio_library.remove_private_regular_file(checkpoint)
 
     def test_tmk_chunk_ranges_reject_bad_offsets_and_merge_tiny_edges(self) -> None:
         self.assertEqual(audio_library.tmk_chunk_ranges(None, 10.0), [])
@@ -4632,6 +4810,150 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(
                 transcript["tmk_chunk_hint_markers_seconds"], [30.0, 60.0]
             )
+
+    def test_stream_transcribe_persists_and_removes_tmk_chunk_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            recorded_at = "2023-10-31T16:22:00+09:00"
+            audio = _record(
+                "FOLDER01/231031_1622.wav",
+                HASH_A,
+                materialized=True,
+                recorded_at=recorded_at,
+                tmk_path="FOLDER01/231031_1622.tmk",
+            )
+            tmk = {
+                "path": "FOLDER01/231031_1622.tmk",
+                "kind": "tmk",
+                "extension": "tmk",
+                "size_bytes": 243,
+                "sha256": TMK_HASH,
+                "sha256_verified": True,
+                "sha256_source": "content",
+                "recorded_at": recorded_at,
+                "tmk_marker_count": 1,
+                "tmk_last_marker_seconds": 30.0,
+                "tmk_markers_seconds": [30.0],
+                "error": None,
+            }
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [audio, tmk],
+                    "duplicate_groups": [],
+                },
+            )
+            (root / "FOLDER01").mkdir()
+            (root / audio["path"]).write_bytes(AUDIO_A_BYTES)
+            backend = Mock()
+            backend.inspect.return_value = audio
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {audio["path"]: HASH_A})
+            chunk_zero = {
+                "chunk_index": 0,
+                "chunk_total": 2,
+                "logical_start_seconds": 0.0,
+                "logical_end_seconds": 30.0,
+                "language": "ko",
+                "segments": [{"start": 1.0, "end": 2.0, "text": "첫째"}],
+                "text": "첫째",
+            }
+            chunk_one = {
+                "chunk_index": 1,
+                "chunk_total": 2,
+                "logical_start_seconds": 30.0,
+                "logical_end_seconds": 60.0,
+                "language": "ko",
+                "segments": [{"start": 31.0, "end": 32.0, "text": "둘째"}],
+                "text": "둘째",
+            }
+
+            def interrupted(_audio_input, **kwargs):
+                self.assertEqual(kwargs["completed_chunks"], [])
+                kwargs["chunk_progress"](chunk_zero)
+                raise RuntimeError("simulated GPU interruption")
+
+            first = Mock(
+                accelerator="mlx",
+                model="model",
+                model_revision="revision",
+            )
+            first.transcribe.side_effect = interrupted
+            progress = Mock()
+            with patch("audio_library.GpuTranscriber", return_value=first):
+                failed = library.stream_transcribe(
+                    evict_after=False, progress=progress
+                )
+            self.assertEqual(failed["failed"], 1)
+            self.assertEqual(failed["transcription_checkpoints_written"], 1)
+            self.assertEqual(progress.call_args_list[0].args[3], "chunk_completed:1/2")
+            checkpoint_path = (
+                state / "transcripts" / f"{HASH_A}.partial.json"
+            )
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            self.assertEqual(checkpoint["completed_chunks"], [chunk_zero])
+
+            checkpoint["completed_chunks"] = {}
+            atomic_json_write(checkpoint_path, checkpoint)
+            bad_list = Mock(
+                accelerator="mlx",
+                model="model",
+                model_revision="revision",
+            )
+            bad_list.transcribe.side_effect = lambda _audio_input, **kwargs: kwargs[
+                "chunk_progress"
+            ](chunk_zero)
+            with patch("audio_library.GpuTranscriber", return_value=bad_list):
+                rejected_list = library.stream_transcribe(evict_after=False)
+            self.assertIn("not a list", rejected_list["failures"][0]["error"])
+
+            checkpoint["completed_chunks"] = [chunk_zero]
+            atomic_json_write(checkpoint_path, checkpoint)
+            bad_order = Mock(
+                accelerator="mlx",
+                model="model",
+                model_revision="revision",
+            )
+            bad_order.transcribe.side_effect = lambda _audio_input, **kwargs: kwargs[
+                "chunk_progress"
+            ](chunk_zero)
+            with patch("audio_library.GpuTranscriber", return_value=bad_order):
+                rejected_order = library.stream_transcribe(evict_after=False)
+            self.assertIn(
+                "not contiguous", rejected_order["failures"][0]["error"]
+            )
+
+            def resumed(_audio_input, **kwargs):
+                self.assertEqual(kwargs["completed_chunks"], [chunk_zero])
+                kwargs["chunk_progress"](chunk_one)
+                return {
+                    "text": "첫째 둘째",
+                    "segments": chunk_zero["segments"] + chunk_one["segments"],
+                    "language": "ko",
+                    "resumed_transcription_chunks": 1,
+                }
+
+            second = Mock(
+                accelerator="mlx",
+                model="model",
+                model_revision="revision",
+            )
+            second.transcribe.side_effect = resumed
+            with patch("audio_library.GpuTranscriber", return_value=second):
+                completed = library.stream_transcribe(evict_after=False)
+            self.assertEqual(completed["completed"], 1)
+            self.assertEqual(completed["resumed_transcription_chunks"], 1)
+            self.assertEqual(completed["transcription_checkpoints_written"], 1)
+            self.assertFalse(checkpoint_path.exists())
+            transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(transcript["text"], "첫째 둘째")
 
     def test_stream_transcribe_uses_cached_hash_and_isolates_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
