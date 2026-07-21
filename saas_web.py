@@ -240,8 +240,17 @@ HTML_TEMPLATE = """
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
+                if (this.value === '') {
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
+                    preview.innerText = '';
+                    const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
+                    buttons.forEach(btn => btn.setAttribute('aria-pressed', 'false'));
+                    return;
+                }
+
+                const val = parseInt(this.value, 10);
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
@@ -263,12 +272,20 @@ HTML_TEMPLATE = """
                 } else {
                     preview.innerText = formatBinaryBytes(val);
                 }
-
             });
 
             document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
                 const preview = document.getElementById('batch_target_bytes_preview');
+                if (this.value === '') {
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
+                    preview.innerText = '';
+                    const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
+                    buttons.forEach(btn => btn.setAttribute('aria-pressed', 'false'));
+                    return;
+                }
+
+                const val = parseInt(this.value, 10);
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
