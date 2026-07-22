@@ -4078,15 +4078,27 @@ def remove_private_regular_file(path: Path) -> None:
 class AudioLibrary:
     """Public Python API for the end-to-end curation workflow."""
 
-    def __init__(self, root: Path | str, backend: RustBackend | None = None) -> None:
-        """Bind the API to one library root and one Rust backend."""
+    def __init__(
+        self,
+        root: Path | str,
+        backend: RustBackend | None = None,
+        *,
+        state_dir: Path | str | None = None,
+    ) -> None:
+        """Bind the API to one library root, Rust backend, and private state."""
 
         self.root = Path(root).resolve()
         if not self.root.is_dir():
             raise NotADirectoryError(
                 f"audio library root is not a directory: {self.root}"
             )
-        self.state_dir = self.root / ".codec-carver"
+        if state_dir is None:
+            self.state_dir = self.root / ".codec-carver"
+        else:
+            requested_state_dir = Path(state_dir).expanduser()
+            if not requested_state_dir.is_absolute():
+                raise ValueError("external state directory must be an absolute path")
+            self.state_dir = normalized_private_absolute_path(requested_state_dir)
         self._ensure_secure_state_dir()
         root_key = hashlib.sha256(str(self.root).encode("utf-8")).hexdigest()[:16]
         temporary_root = Path(tempfile.gettempdir())
@@ -4108,8 +4120,32 @@ class AudioLibrary:
         )
         self.backend = backend or RustBackend()
 
-    def inventory(self, *, threads: int | None = None) -> dict[str, Any]:
-        """Generate the canonical SHA-256/TMK inventory."""
+    def inventory(
+        self,
+        *,
+        threads: int | None = None,
+        relative_paths: Iterable[str] = (),
+        inspect_timeout_seconds: float = 14_400,
+    ) -> dict[str, Any]:
+        """Generate or selectively refresh the canonical SHA-256/TMK inventory.
+
+        A selected refresh delegates each byte-heavy inspection to Rust and merges
+        the resulting records into an existing full inventory.  This prevents a
+        small iCloud repair from hydrating unrelated multi-gigabyte recordings.
+        """
+
+        selected_paths = tuple(
+            dict.fromkeys(
+                validate_relative_path(
+                    self.root, value, label="selected inventory path"
+                )
+                for value in relative_paths
+            )
+        )
+        if inspect_timeout_seconds <= 0:
+            raise ValueError("inventory inspect timeout must be positive")
+        if selected_paths and threads is not None:
+            raise ValueError("inventory threads apply only to a full scan")
 
         inventory_path = self.state_dir / "inventory.json"
         previous_manifest = None
@@ -4127,10 +4163,81 @@ class AudioLibrary:
             )
             if not history_path.is_file():
                 atomic_json_write(history_path, previous_manifest)
-        manifest = self.backend.inventory(self.root, threads=threads)
+        if selected_paths:
+            if previous_manifest is None:
+                raise FileNotFoundError(
+                    "selected inventory refresh requires an existing full inventory"
+                )
+            if previous_manifest.get("schema_version") != 1:
+                raise ValueError(
+                    "selected inventory baseline has an unsupported schema"
+                )
+            if previous_manifest.get("root") != str(self.root):
+                raise ValueError("selected inventory baseline root does not match")
+            previous_records = {
+                record["path"]: record for record in previous_manifest.get("files", [])
+            }
+            missing_paths = [
+                value for value in selected_paths if value not in previous_records
+            ]
+            if missing_paths:
+                raise ValueError(
+                    "selected inventory paths are absent from the baseline: "
+                    + ", ".join(missing_paths)
+                )
+            refreshed_records = []
+            for relative_path in selected_paths:
+                record = self.backend.inspect(
+                    self.root,
+                    relative_path,
+                    timeout_seconds=inspect_timeout_seconds,
+                )
+                if record.get("path") != relative_path:
+                    raise ValueError(
+                        "Rust inspection returned an unexpected inventory path: "
+                        f"{record.get('path')!r} != {relative_path!r}"
+                    )
+                previous_record = previous_records[relative_path]
+                if record.get("kind") == "audio":
+                    for field in (
+                        "tmk_path",
+                        "tmk_marker_count",
+                        "tmk_last_marker_seconds",
+                        "tmk_markers_seconds",
+                        "tmk_error",
+                    ):
+                        if record.get(field) is None and field in previous_record:
+                            record[field] = previous_record[field]
+                refreshed_records.append(record)
+            refreshed_by_path = {record["path"]: record for record in refreshed_records}
+            merged_files = [
+                refreshed_by_path.get(record["path"], record)
+                for record in previous_manifest["files"]
+            ]
+            records_by_path = {record["path"]: record for record in merged_files}
+            for record in merged_files:
+                if record.get("kind") != "audio" or not record.get("tmk_path"):
+                    continue
+                tmk_record = records_by_path.get(record["tmk_path"])
+                if tmk_record is None or tmk_record.get("kind") != "tmk":
+                    continue
+                record["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
+                record["tmk_last_marker_seconds"] = tmk_record.get(
+                    "tmk_last_marker_seconds"
+                )
+                record["tmk_markers_seconds"] = tmk_record.get("tmk_markers_seconds")
+                record["tmk_error"] = tmk_record.get("error")
+            manifest = dict(previous_manifest)
+            manifest["generated_at"] = datetime.now().astimezone().isoformat()
+            manifest["files"] = merged_files
+            rebuild_manifest_summary(manifest)
+        else:
+            manifest = self.backend.inventory(self.root, threads=threads)
         if "files" in manifest:
             for record in manifest["files"]:
-                if record.get("sha256"):
+                if record.get("sha256") and (
+                    not selected_paths or record.get("path") in selected_paths
+                ):
                     validate_sha256(record["sha256"], label="backend inventory SHA-256")
                     record["sha256_verified"] = True
                     record["sha256_source"] = "content"
@@ -5992,6 +6099,13 @@ def rebuild_manifest_summary(manifest: dict[str, Any]) -> None:
     manifest["dataless_file_count"] = sum(
         not record.get("materialized", False) for record in manifest["files"]
     )
+    manifest["audio_file_count"] = len(audio_records)
+    manifest["tmk_file_count"] = sum(
+        record.get("kind") == "tmk" for record in manifest["files"]
+    )
+    manifest["total_audio_bytes"] = sum(
+        int(record.get("size_bytes", 0)) for record in audio_records
+    )
     manifest["earliest_recording_at"] = min(
         (
             record["recorded_at"]
@@ -6383,11 +6497,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        help=(
+            "owner-only local state directory; use this when the recording root "
+            "is managed by iCloud/File Provider"
+        ),
+    )
     parser.add_argument("--backend-binary", type=Path)
     parser.add_argument("--backend-sha256")
     subparsers = parser.add_subparsers(dest="command", required=True)
     inventory_parser = subparsers.add_parser("inventory")
     inventory_parser.add_argument("--threads", type=int)
+    inventory_parser.add_argument(
+        "--path",
+        action="append",
+        default=[],
+        help=(
+            "refresh only an existing inventory path through Rust inspect; "
+            "repeat for linked audio/TMK files"
+        ),
+    )
+    inventory_parser.add_argument(
+        "--inspect-timeout-seconds", type=float, default=14_400
+    )
     tmk_parser = subparsers.add_parser("hydrate-tmk")
     tmk_parser.add_argument("--workers", type=int, default=4)
     tmk_parser.add_argument("--inspect-timeout-seconds", type=float, default=60)
@@ -6480,9 +6614,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     library = AudioLibrary(
         args.root,
         RustBackend(args.backend_binary, expected_sha256=args.backend_sha256),
+        state_dir=args.state_dir,
     )
     if args.command == "inventory":
-        result = library.inventory(threads=args.threads)
+        result = library.inventory(
+            threads=args.threads,
+            relative_paths=args.path,
+            inspect_timeout_seconds=args.inspect_timeout_seconds,
+        )
     elif args.command == "hydrate-tmk":
         result = library.hydrate_tmk_metadata(
             workers=args.workers,

@@ -3463,6 +3463,150 @@ class GpuTranscriberTests(unittest.TestCase):
 
 
 class AudioLibraryTests(unittest.TestCase):
+    def test_external_state_directory_avoids_file_provider_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "recordings"
+            state_dir = base / "local-state"
+            root.mkdir()
+
+            library = AudioLibrary(root, Mock(), state_dir=state_dir)
+
+            self.assertEqual(library.state_dir, state_dir)
+            self.assertTrue(state_dir.is_dir())
+            self.assertEqual(state_dir.stat().st_mode & 0o777, 0o700)
+            self.assertFalse((root / ".codec-carver").exists())
+            with self.assertRaisesRegex(ValueError, "must be an absolute path"):
+                AudioLibrary(root, Mock(), state_dir=Path("relative-state"))
+
+    def test_selected_inventory_refresh_uses_rust_inspect_and_preserves_baseline(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            baseline = {
+                "schema_version": 1,
+                "root": str(root),
+                "generated_at": "2024-01-01T00:00:00+09:00",
+                "files": [
+                    _record(
+                        "selected.wav",
+                        HASH_A,
+                        materialized=False,
+                        sha256_verified=False,
+                        sha256_source="transcript_sidecar",
+                        tmk_path="selected.tmk",
+                        tmk_marker_count=0,
+                        tmk_markers_seconds=[],
+                    ),
+                    {
+                        "path": "selected.tmk",
+                        "kind": "tmk",
+                        "extension": "tmk",
+                        "size_bytes": len(TMK_BYTES),
+                        "materialized": False,
+                        "sha256": TMK_HASH,
+                        "sha256_verified": False,
+                        "sha256_source": "inventory_history",
+                        "tmk_marker_count": 0,
+                        "tmk_last_marker_seconds": None,
+                        "tmk_markers_seconds": [],
+                        "error": "dataless",
+                    },
+                    _record(
+                        "unrelated.wav",
+                        HASH_B,
+                        materialized=False,
+                        sha256_verified=False,
+                        sha256_source="inventory_history",
+                    ),
+                    _record(
+                        "orphaned-tmk-link.wav",
+                        "c" * 64,
+                        tmk_path="missing.tmk",
+                    ),
+                ],
+                "duplicate_groups": [],
+            }
+            atomic_json_write(library.state_dir / "inventory.json", baseline)
+            backend.inspect.side_effect = [
+                _record(
+                    "selected.wav",
+                    HASH_A,
+                    materialized=True,
+                    tmk_path=None,
+                ),
+                {
+                    "path": "selected.tmk",
+                    "kind": "tmk",
+                    "extension": "tmk",
+                    "size_bytes": len(TMK_BYTES),
+                    "materialized": True,
+                    "sha256": TMK_HASH,
+                    "tmk_marker_count": 1,
+                    "tmk_last_marker_seconds": 60.0,
+                    "tmk_markers_seconds": [60.0],
+                    "error": None,
+                },
+            ]
+
+            manifest = library.inventory(
+                relative_paths=["selected.wav", "selected.tmk"],
+                inspect_timeout_seconds=12,
+            )
+
+            records = {record["path"]: record for record in manifest["files"]}
+            self.assertTrue(records["selected.wav"]["sha256_verified"])
+            self.assertEqual(records["selected.wav"]["tmk_marker_count"], 1)
+            self.assertEqual(records["selected.wav"]["tmk_markers_seconds"], [60.0])
+            self.assertFalse(records["unrelated.wav"]["sha256_verified"])
+            self.assertEqual(
+                backend.inspect.call_args_list,
+                [
+                    call(root, "selected.wav", timeout_seconds=12),
+                    call(root, "selected.tmk", timeout_seconds=12),
+                ],
+            )
+            backend.inventory.assert_not_called()
+
+    def test_selected_inventory_refresh_rejects_missing_baseline_and_threads(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            library = AudioLibrary(tmp, Mock())
+            with self.assertRaisesRegex(FileNotFoundError, "existing full inventory"):
+                library.inventory(relative_paths=["recording.wav"])
+            with self.assertRaisesRegex(ValueError, "threads apply only"):
+                library.inventory(threads=2, relative_paths=["recording.wav"])
+            with self.assertRaisesRegex(ValueError, "timeout must be positive"):
+                library.inventory(inspect_timeout_seconds=0)
+
+            baseline = {
+                "schema_version": 1,
+                "root": "wrong-root",
+                "files": [_record("recording.wav", HASH_A)],
+            }
+            atomic_json_write(library.state_dir / "inventory.json", baseline)
+            with self.assertRaisesRegex(ValueError, "baseline root does not match"):
+                library.inventory(relative_paths=["recording.wav"])
+
+            baseline["root"] = str(library.root)
+            baseline["schema_version"] = 2
+            atomic_json_write(library.state_dir / "inventory.json", baseline)
+            with self.assertRaisesRegex(ValueError, "unsupported schema"):
+                library.inventory(relative_paths=["recording.wav"])
+
+            baseline["schema_version"] = 1
+            atomic_json_write(library.state_dir / "inventory.json", baseline)
+            with self.assertRaisesRegex(ValueError, "absent from the baseline"):
+                library.inventory(relative_paths=["missing.wav"])
+
+            library.backend.inspect.return_value = _record("other.wav", HASH_A)
+            with self.assertRaisesRegex(ValueError, "unexpected inventory path"):
+                library.inventory(relative_paths=["recording.wav"])
+
     def test_inventory_apply_and_missing_inventory(self) -> None:
         backend = Mock()
         backend.inventory.side_effect = [
@@ -5826,7 +5970,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(
                 audio_library.main([".", "inventory", "--threads", "2"]), 0
             )
-        library.inventory.assert_called_once_with(threads=2)
+        library.inventory.assert_called_once_with(
+            threads=2,
+            relative_paths=[],
+            inspect_timeout_seconds=14_400,
+        )
 
     def test_describe_caches_pinned_gemma_topics_and_isolates_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

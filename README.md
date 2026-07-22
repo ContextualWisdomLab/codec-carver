@@ -131,6 +131,17 @@ python3.12 -m venv .venv
 .venv/bin/pip install -e ".[transcribe-mlx,describe-mlx]"  # Apple Silicon / Metal
 
 codec-carver-library /path/to/recordings inventory --threads 4
+# Refresh only already-known paths after Finder materializes them. Rust hashes
+# exactly these files and Python atomically merges them into the full manifest,
+# avoiding unrelated multi-gigabyte iCloud reads.
+codec-carver-library /path/to/recordings inventory \
+  --path 'FOLDER01/231102_1840(1).wav' \
+  --path 'FOLDER01/231102_1840(1).tmk'
+# When the recording root is in iCloud, keep mutable evidence state on local
+# storage so File Provider cannot roll back an inventory or mutation journal.
+codec-carver-library /path/to/recordings \
+  --state-dir "$HOME/Library/Application Support/codec-carver/sony-icd-tx650" \
+  inventory --path 'FOLDER01/231102_1840(1).wav'
 codec-carver-library /path/to/recordings hydrate-tmk --workers 4
 codec-carver-library /path/to/recordings hydrate-tmk \
   --workers 1 --path 'FOLDER01/231101_0917.tmk'

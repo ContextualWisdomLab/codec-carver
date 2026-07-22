@@ -188,6 +188,17 @@ generation.
 MLX Whisper caches the loaded model within the process, so the library API keeps
 one `GpuTranscriber` alive for the entire run.
 
+After Finder materializes a known placeholder, `inventory --path` refreshes only
+the named baseline records through Rust `inspect` and atomically merges their
+content hashes and TMK metadata in Python. A selected refresh never starts a
+full tree walk, so repairing one recording cannot accidentally hydrate unrelated
+multi-gigabyte iCloud files.
+For File Provider roots, `--state-dir` places mutable manifests, transcripts,
+plans, and journals in a separate owner-only local directory. Recording and TMK
+mutations remain rooted in the selected library, including SHA-addressed
+quarantine destinations, while evidence state is insulated from cloud-version
+rollback races.
+
 For long Sony recordings, the Rust-provided TMK vector bounds each MLX waveform
 decode instead of materializing the entire recording as one float array. This
 reduces peak memory without reloading the model or switching away from GPU
