@@ -205,4 +205,7 @@ done
     fail "runtime directory path changed during bootstrap"
 
 printf 'GPU_RUNTIME_READY\t%s\n' "$RUNTIME_DIR/bin/python"
-printf 'Run: %q %q ROOT describe\n' "$RUNTIME_DIR/bin/python" "$REPO_ROOT/audio_library.py"
+printf 'Run: %q %q %q describe\n' \
+    "$RUNTIME_DIR/bin/python" \
+    "$REPO_ROOT/audio_library.py" \
+    "/path/to/library"

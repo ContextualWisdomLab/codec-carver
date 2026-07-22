@@ -50,6 +50,8 @@ class MacosGpuBootstrapTests(unittest.TestCase):
         self.assertIn('UV_SNAPSHOT="$("$MKTEMP_BIN"', script)
         self.assertIn('sha256_file "$UV_SNAPSHOT"', script)
         self.assertNotIn("command -v", script)
+        self.assertIn('"/path/to/library"', script)
+        self.assertNotIn(" ROOT describe", script)
 
     def test_every_locked_requirement_is_exact_and_hashed(self) -> None:
         lock = LOCK_FILE.read_text(encoding="utf-8")
