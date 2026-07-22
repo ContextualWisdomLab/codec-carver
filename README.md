@@ -117,6 +117,319 @@ If it is not installed, conversion runs normally and transcription is skipped
 with a `TRANSCRIBE_SKIP` notice. A failing transcript never aborts a conversion.
 Choose a model with `--transcribe-model` (default `base`).
 
+## GPU audio-library curation (Python API + Rust backend)
+
+The audio-library workflow standardizes recording names from recording time,
+known location, transcript content, and SHA-256; parses Sony `.tmk` markers; and
+quarantines exact duplicates. Byte-heavy scanning and mutations run in Rust,
+while Python keeps one GPU Whisper model loaded for the batch. Ollama is never
+used and GPU mode does not fall back to CPU.
+
+The editable install below is for local checkout development only. The hardened
+persistent macOS GPU bootstrap installs hash-locked dependencies and runs the
+checkout directly instead of installing the project editable.
+
+```bash
+cargo build --release --manifest-path rust-core/Cargo.toml
+python3.12 -m venv .venv
+.venv/bin/pip install -e ".[transcribe-mlx,describe-mlx]"  # Apple Silicon / Metal
+
+codec-carver-library /path/to/recordings inventory --threads 4
+# Refresh only already-known paths after Finder materializes them. Rust hashes
+# exactly these files and Python atomically merges them into the full manifest,
+# avoiding unrelated multi-gigabyte iCloud reads.
+codec-carver-library /path/to/recordings inventory \
+  --path 'FOLDER01/231102_1840(1).wav' \
+  --path 'FOLDER01/231102_1840(1).tmk'
+# When the recording root is in iCloud, keep mutable evidence state on local
+# storage so File Provider cannot roll back an inventory or mutation journal.
+codec-carver-library /path/to/recordings \
+  --state-dir "$HOME/Library/Application Support/codec-carver/sony-icd-tx650" \
+  inventory --path 'FOLDER01/231102_1840(1).wav'
+codec-carver-library /path/to/recordings hydrate-tmk --workers 4
+codec-carver-library /path/to/recordings hydrate-tmk \
+  --workers 1 --path 'FOLDER01/231101_0917.tmk'
+codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
+# For a deliberately bounded small batch, pipeline iCloud reads in Rust with
+# ordered, single-model GPU transcription.
+codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
+  --prefetch-workers 4 --prefetch-max-bytes 536870912
+# Add --word-timestamps only when word-level audit evidence is required.
+# Summarize verified transcripts into filename topics with pinned Gemma 4 on
+# Metal. This calls MLX-VLM directly; no Ollama server or transcript upload is
+# involved. Repeat --path to keep the description batch bounded.
+codec-carver-library /path/to/recordings describe \
+  --path "recording-a.m4a" --path "recording-b.wav"
+codec-carver-library /path/to/recordings plan
+# Bound both planning and later apply-time revalidation to one audio record and
+# its linked TMK. Repeat --path for an explicitly selected batch.
+codec-carver-library /path/to/recordings plan \
+  --path "FOLDER01/231018_1018.wav"
+# Every name is compared with the complete SHA-bound name derived from its
+# transcript and drift is reported. Changing an existing standard name requires
+# one of these explicit refresh authorizations.
+codec-carver-library /path/to/recordings plan \
+  --refresh-standardized-path "2024-06-24_15-44-11__선유로__old-title__sha256-04d93e2e12fb.m4a"
+codec-carver-library /path/to/recordings plan \
+  --refresh-description-drift --defer-unready
+# When iCloud has not supplied every source, mutate only fully ready recordings
+# and preserve the unresolved paths as explicit deferred evidence.
+codec-carver-library /path/to/recordings plan --defer-unready
+codec-carver-library /path/to/recordings apply          # validation only
+codec-carver-library /path/to/recordings apply --execute
+```
+
+The library backend is loaded only from the repository's release/debug build or
+an explicit `--backend-binary` accompanied by `--backend-sha256`; it is never
+selected from ambient `PATH`. The selected binary must be owner-controlled,
+non-symlinked, and non-group/world-writable. Python copies the exact bytes read
+from a stable, no-follow source descriptor into an independent owner-only
+execution inode, seals its directory, and forces every Rust command to that
+SHA-256-pinned snapshot. Replacing the configured source path after validation
+therefore cannot change the bytes that execute. Duration probing uses only the
+approved fixed system `ffprobe` locations; ambient environment variables cannot
+change the selected executable. MLX audio is
+decoded first by an equivalently approved absolute `ffmpeg` and passed to
+Whisper as an in-memory waveform, so `mlx-whisper` never resolves a bare
+`ffmpeg` from caller-controlled `PATH`. Rust, ffprobe, and ffmpeg children all
+receive a minimal allowlisted environment that excludes `LD_*` and `DYLD_*`
+loader injection controls. MLX-VLM preflight additionally uses Python isolated
+mode, a trusted runtime working directory, and verifies the package origin is
+beneath that interpreter's prefix before importing native model code.
+Whisper repositories are also immutable inputs: MLX accepts only
+`mlx-community/whisper-large-v3-turbo-q4` at revision
+`660c343bbf4e52ac257f0b7d952e5388e6f93bef`, while CUDA resolves
+`dropbox-dash/faster-whisper-large-v3-turbo` at revision
+`0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf`. Mutable model names or arbitrary
+Hub repositories are rejected before inference.
+
+`describe` loads the pinned 4-bit
+`mlx-community/gemma-4-e2b-it-4bit` revision once per batch, samples up to 48
+Whisper segments across the full recording, and first extracts one central idea,
+outcome, confidence level, and cited segment IDs. A separate title pass must
+express that context instead of listing frequent keywords; low-confidence or
+generic-only titles are deferred. The final title and its audit context are
+cached together in the SHA-keyed transcript sidecar, and evidence selection is
+rescored against both the thesis and outcome. The model identifier and revision
+are allowlisted, tokenizer remote code is disabled, transcript prompt data is
+control-delimiter escaped JSON, and every title term must be recoverable from
+the transcript itself. Segment references count only when they appear as
+anchored `[S###]` labels; an `S###` string inside speech is not evidence.
+Untrusted CR/LF and other control whitespace inside each Whisper segment are
+collapsed before Python assigns its label, and the resulting labels must form
+the exact contiguous sequence `S001`, `S002`, and so on. Title grounding
+preserves token boundaries, so a cross-token substring cannot impersonate a
+source term. Central idea and outcome terms must also occur in the cited
+transcript segments, so the model cannot legitimize an invented title through
+its own analysis fields. Old
+keyword-only caches are not silently upgraded. Planning consumes this
+evidence-backed description when present and retains the deterministic extractor
+as a no-model failure-safe.
+Once semantic analysis has explicitly failed, its reason is checkpointed and
+the unstandardized recording is deferred instead of being renamed from a
+keyword-only fallback. Planning reports an existing standard name when its
+entire basename differs from the timestamp, location, transcript-derived
+central-context title, and SHA suffix recomputed from current evidence, but a
+durable rename still requires explicit refresh authorization.
+
+`stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
+remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
+that local stage, and Python atomically checkpoints before removing the stage.
+The default selection order keeps already-materialized recordings ahead of
+remote placeholders for throughput. Add `--oldest-first` when lineage work must
+select the globally earliest `recorded_at` across nested directories before
+local availability. When timestamps tie, an original-looking path is selected
+before numbered copy suffixes; the run checkpoint records the chosen order.
+Already-materialized recordings follow the same byte-binding rule: Rust opens
+each path component with no-follow descriptors, copies and hashes the opened
+file into private scratch, and the GPU reads only that verified copy. A pathname
+swap after inspection therefore cannot redirect transcription outside the
+library. Python independently opens the backend-reported scratch child relative
+to its owner-only directory with `O_NOFOLLOW` and requires the scratch file to
+have exactly one link. It confirms that name still identifies the opened inode,
+unlinks the name, and only then hashes the anonymous descriptor. The actual byte
+count and SHA-256 must match both the backend record and any known inventory
+digest before ffmpeg or faster-whisper consumes that same descriptor. A
+same-user hardlink, replacement path, or post-check rename therefore cannot
+redirect the bytes used for inference.
+`--prefetch-workers` keeps a bounded rolling queue of Rust/iCloud staging calls
+full; `--prefetch-max-bytes` caps their combined logical size (512 MiB by
+default). As soon as the next selected recording is staged, the ordered Python
+loop starts its single-model GPU transcription while later Rust staging futures
+continue in the same bounded pool. GPU work, durable checkpoints, scratch
+removal, and native eviction remain serialized. The run summary records the
+number of GPU calls that actually overlapped unfinished prefetch work as
+`prefetch_transcription_overlaps`. Native eviction is deferred while any bounded
+stage is still running so it cannot contend with FileProvider prefetch. The
+no-progress stage timeout defaults to 420 seconds because real iCloud
+placeholders can take more than two minutes to
+deliver their first byte; override it with `--stage-stall-timeout-seconds` when
+the provider has a different latency envelope. A parallel prefetch that reaches
+that timeout is retried once through the serial staging path, after bounded
+parallel stages finish, because FileProvider can defer every concurrent request
+while accepting an immediate single request. If that serial canary also fails,
+later timeouts in the same batch skip the otherwise identical long retry; other
+failures are not retried. The run summary records fallback attempts, recoveries,
+and suppressions. A terminal native-stage stall is checkpointed as
+`error_code: stage_source_stalled` with `timeout_seconds`,
+`stage_progress_bytes`, and `retryable: true`; its readable error points to an
+unhealthy iCloud/FileProvider materialization path instead of exposing only a
+generic subprocess command timeout. Already local files stay local.
+Run `hydrate-tmk`
+first when iCloud holds Sony sidecars:
+it reads the tiny TMK files concurrently, checkpoints each SHA-256 and the full
+ordered marker vector, and backfills any existing transcript sidecars. Verified
+TMK offsets split long MLX recordings into bounded, one-second-overlap decode
+ranges while the same pinned Whisper model remains resident; midpoint ownership
+removes overlap duplicates and restores every segment to its recording-global
+timestamp. This avoids decoding an hours-long recording into one peak-memory
+waveform. A later dataless flag
+does not cause the same TMK to be downloaded again. Four workers and a 60-second
+per-file timeout are the defaults because higher iCloud File Provider concurrency
+can delay every placeholder; rerunning resumes only unresolved sidecars. Repeat
+`--path` to verify only the TMKs paired with the bounded audio batch instead of
+waking every iCloud placeholder. Already verified TMKs also repair stale linked
+transcript metadata without rehashing; `synced_transcripts` and `sync_failed`
+report that idempotent pass separately from new TMK hydration.
+`stream-transcribe` never blocks an audio recording on an unresolved TMK: it uses
+hydrated markers when present and records `tmk_error` evidence otherwise.
+If that primary sidecar is still remote but a same-directory, same-time,
+same-size TMK with an equivalent copy-normalized stem has a content-verified SHA
+and valid ordered markers, streaming may use it only as a bounded decode hint.
+The transcript keeps the unresolved primary `tmk_path` and separately records
+the hint path, SHA-256, marker count, last marker, and full vector; it never
+presents the sibling as the primary sidecar. `tmk_chunk_hints_used` reports this
+performance fallback per run.
+Gemma title generation also keeps its two-to-six-token quality gate. If a final
+literal-evidence repair still exceeds that bound, codec-carver deterministically
+rebuilds a subject-purpose title only from the already validated central idea,
+outcome, cited transcript evidence, and transcript-grounded terms instead of
+accepting or blindly truncating the model output.
+Inventory validation also requires every audio `tmk_path` to reference a record
+whose kind is exactly `tmk`; a crafted audio-to-audio link cannot authorize
+quarantining canonical audio as if it were a duplicate sidecar.
+On macOS, Rust requests every dataless item through Foundation's supported
+`FileManager.startDownloadingUbiquitousItem` API, then coordinates the read with
+`NSFileCoordinator` and performs the single-pass copy-and-hash inside the
+coordinated accessor. The coordinator is required by current File Provider
+domains to keep `isDownloadRequested`/`isDownloading` active; already-local
+files keep the direct fast path. The implementation does not depend on the
+undocumented `brctl download` command. If Finder and the coordinated native
+request both remain at zero bytes, inspect File Provider with
+`fileproviderctl check` before an operator-approved repair.
+After a durable transcript checkpoint, Rust also releases the local source
+blocks through `FileManager.evictUbiquitousItem`; no `brctl evict` subprocess is
+used. Eviction is optional cleanup, so a native eviction error is recorded in
+`eviction_failures` without converting a completed transcription into a failure.
+At startup it samples the live macOS dataless flag and drains currently local
+audio before remote placeholders, keeping the GPU fed while iCloud catches up.
+Rust stage monitoring resets its stall clock whenever the partial grows; the
+default 420-second stall limit skips only placeholders making no byte progress,
+not large files that are actively copying and hashing. An independent absolute
+deadline, four times the configured stall limit, also bounds repeated premature
+EOF retries even when a faulty provider reports monotonically increasing byte
+counts. File Provider can expose
+the logical source size before any bytes are readable; Rust rejects such a
+premature short/empty EOF, and Python retries it only until the same bounded
+zero-progress deadline instead of accepting the empty-file SHA-256.
+Batch commands still print their complete JSON checkpoint summary, but return a
+non-zero process status when any selected file is recorded in `failures`.
+Planning rejects recordings without SHA-256 or transcript evidence by default.
+`--defer-unready` keeps those paths unchanged and lists them in
+`deferred_paths`, allowing verified subsets to proceed without inventing a
+placeholder description. `plan --path` narrows quarantine and rename operations
+to the selected audio paths and their linked TMKs; the same selection is stored
+in the private plan and recomputed at apply time, while omitting it preserves the
+whole-library batch behavior.
+Every rescan archives the previous inventory by its SHA-256. If iCloud evicts a
+previously hashed recording, same-path/same-size evidence and transcript
+sidecars restore its full hash only as an explicitly unverified identity hint.
+It cannot form an exact-duplicate group or a new rename/quarantine operation
+until Rust hashes current bytes. An executed mutation journal can restore
+identity continuity after a move, but remains unverified until current bytes are
+opened and hashed again. Materialized files are rehashed before any transcript
+cache hit or new mutation plan, then copied and hashed into private scratch
+before a GPU call.
+Transcripts are keyed by the full SHA-256 under
+`.codec-carver/transcripts/`, use owner-only directory/file permissions, and
+accept only canonical 64-hex digest filenames. Every transcript consumer opens
+the final sidecar relative to a verified directory descriptor with
+`O_NOFOLLOW`; symlinks and non-regular sidecars are unavailable evidence, never
+external JSON input. Cache, planning, TMK backfill, and inventory reconciliation
+also verify the sidecar's embedded SHA-256 against its inventory record; a
+foreign sidecar cannot suppress GPU inference or supply a filename title. Exact
+copies are inferred only once. Ultra-short
+low-confidence words remain auditable in JSON but do not enter standardized
+filenames. For long meetings, the optional Gemma phase records the central idea,
+outcome, confidence, and directly supporting segment IDs before it creates the
+filename title. Generic keyword bundles are rejected, while the deterministic
+corpus-central phrase remains the no-model failure-safe. A structurally valid
+timestamp/location/SHA wrapper cannot hide an arbitrary description: the
+complete expected name is compared and listed in `description_drift_paths`,
+while explicit refresh authorization controls the durable rename.
+Duplicate files move to the recoverable
+`.codec-carver/quarantine/exact-duplicates/` tree; no irreversible deletion is
+performed by default. Inventory, TMK, transcript, and mutation paths are
+validated beneath the canonical library root at both the public Python bridge
+and Rust boundary. Direct `inspect`, `stage`, and `evict` calls reject absolute,
+parent, non-portable, and symlink-component paths before launching Rust.
+Symlinked state/staging roots are refused, and scratch cleanup uses a
+no-follow directory handle rather than a check-then-unlink pathname.
+Private state paths are created and opened from `/` one component at a time with
+`mkdirat`/`openat`, `O_DIRECTORY`, and `O_NOFOLLOW`; an intermediate ancestor
+swap cannot redirect an atomic state write outside the selected library.
+Rust holds an exclusive per-library mutation lock from validation through
+execution, walks or creates every source/destination parent relative to the
+locked root descriptor with `O_NOFOLLOW`, and performs no-overwrite
+descriptor-relative renames (`RENAME_EXCL` on macOS, `RENAME_NOREPLACE` on
+Linux). Rollback uses the same primitive, so replacing a destination parent
+with a symlink cannot redirect a move outside the library. Python refuses
+`apply --execute` for injected or substitute backends; only the concrete,
+descriptor-safe `RustBackend` may cross the mutation boundary.
+Rust returns inventory and mutation-journal JSON on stdout; Python alone commits
+those state files through descriptor-relative atomic replacement. Final-name
+symlinks are never followed, and a partial or schema-invalid mutation journal is
+moved to `.codec-carver/recovery/malformed-journals/` so a damaged checkpoint
+cannot brick later inventories. Both recovery path components are created and
+opened from the verified state-directory descriptor with `mkdirat`/`openat`
+semantics, so an intermediate symlink cannot redirect quarantine outside the
+library.
+
+The importable API is `audio_library.AudioLibrary`. The architecture, evidence
+precedence, filename contract, and primary research/standards sources are in
+[`docs/architecture/gpu-transcription-rust-backend.md`](docs/architecture/gpu-transcription-rust-backend.md).
+
+### Persistent macOS GPU runtime
+
+On macOS, do not place the MLX environment in an iCloud/File Provider-backed
+repository. Loading native packages such as `tokenizers`, `torch`, and
+`mlx-vlm` can otherwise block inside `dyld` even when the package files appear
+materialized. Create the persistent runtime under the local cache instead. The
+bootstrap supports Apple Silicon and installs the complete Python dependency
+graph from `requirements-macos-mlx-lock.txt` with package hashes verified; the
+checkout itself is run directly rather than installed as an editable package.
+The script resets `PATH` before its first helper call, uses fixed system-tool
+paths, and copies the reviewed SHA-256-pinned `uv` executable into the validated
+runtime inode before executing it. A different reviewed `uv` build requires
+both `--uv-bin` and its `--uv-sha256` digest.
+The runtime must be a direct child of the owner-controlled
+`~/Library/Caches/codec-carver/venvs` directory; bootstrap operations stay bound
+to the validated directory inode so a later pathname swap cannot redirect them:
+
+```bash
+./scripts/bootstrap_macos_gpu_runtime.sh
+GPU_PY="$HOME/Library/Caches/codec-carver/venvs/gpu-py312/bin/python"
+"$GPU_PY" "$PWD/audio_library.py" /path/to/library inventory
+"$GPU_PY" "$PWD/audio_library.py" /path/to/library transcribe --accelerator mlx
+"$GPU_PY" "$PWD/audio_library.py" /path/to/library describe
+```
+
+The bootstrap installs the hash-locked dependency sets for `transcribe-mlx` and
+`describe-mlx` into one reusable environment outside File Provider storage. The Python API
+keeps the Whisper and Gemma models resident for batch work, Apple Metal performs
+the model inference without Ollama or CPU fallback, and the Rust backend retains
+streaming SHA-256, TMK parsing, inventory, and mutation work.
+
 ## Safety notes
 
 - Source files selected by the scan are protected from deletion or overwrite; keep `--output-dir` as a generated-only directory so excluded originals are never mistaken for stale generated outputs.

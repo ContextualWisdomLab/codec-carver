@@ -102,6 +102,25 @@ class TestMCPDriver(unittest.TestCase):
 
             self.assertEqual(result_str, "No conversion results generated.")
 
+    @patch("mcp_driver.media_shrinker.convert_file")
+    def test_shrink_media_omits_unavailable_optional_details(self, mock_convert_file):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_file = Path(temp_dir) / "source.wav"
+            source_file.touch()
+            mock_convert_file.return_value = [
+                ConversionResult(
+                    source_path=source_file,
+                    output_path=None,
+                    status="skipped",
+                    original_size_bytes=0,
+                )
+            ]
+
+            result_str = shrink_media(str(source_file), str(Path(temp_dir) / "out"))
+
+        self.assertEqual(result_str, "Status: skipped")
+
 if __name__ == '__main__':
     unittest.main()
 

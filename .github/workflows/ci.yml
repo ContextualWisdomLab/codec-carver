@@ -41,3 +41,26 @@ jobs:
 
       - name: Verify console entry point
         run: codec-carver --help
+
+  rust:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust 1.88.0 with rustfmt
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+
+      - name: Report Rust toolchain
+        run: |
+          rustup run 1.88.0 rustc --version --verbose
+          rustup run 1.88.0 cargo --version --verbose
+
+      - name: Check Rust formatting
+        run: rustup run 1.88.0 cargo fmt --manifest-path rust-core/Cargo.toml -- --check
+
+      - name: Test Rust backend
+        run: rustup run 1.88.0 cargo test --locked --all-targets --manifest-path rust-core/Cargo.toml

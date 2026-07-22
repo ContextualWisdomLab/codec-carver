@@ -317,6 +317,21 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         self.assertEqual(response.body, b'{"error":"Payload Too Large"}')
 
+    def test_request_size_limit_passes_non_request_asgi_messages(self):
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def call_next(request):
+            self.assertEqual(
+                await request._receive(), {"type": "http.disconnect"}
+            )
+            return Response(status_code=204)
+
+        request = SimpleNamespace(headers={}, _receive=receive)
+        response = asyncio.run(saas_web.limit_request_size(request, call_next))
+
+        self.assertEqual(response.status_code, 204)
+
     def test_get_ui_includes_preset_buttons(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -1083,6 +1098,10 @@ class JobModelTests(unittest.TestCase):
         saas_web._cleanup_job("c")
         self.assertFalse(temp_dir.exists())
         self.assertIsNone(saas_web.JOB_STORE.get("c"))
+
+    def test_cleanup_job_tolerates_unknown_job(self):
+        saas_web._cleanup_job("unknown-cleanup-job")
+        self.assertIsNone(saas_web.JOB_STORE.get("unknown-cleanup-job"))
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")

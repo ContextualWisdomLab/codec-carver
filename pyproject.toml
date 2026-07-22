@@ -32,7 +32,17 @@ dependencies = [
 [project.optional-dependencies]
 web = ["fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1"]
 mcp = ["mcp==1.28.1"]
-transcribe = ["faster-whisper==1.2.1"]
+transcribe = ["faster-whisper==1.2.1", "huggingface-hub==1.23.0"]
+transcribe-mlx = [
+    "huggingface-hub==1.23.0",
+    "mlx-whisper==0.4.3; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "numpy==2.2.6; platform_system == 'Darwin' and platform_machine == 'arm64' and python_version < '3.11'",
+    "numpy==2.4.6; platform_system == 'Darwin' and platform_machine == 'arm64' and python_version >= '3.11'",
+]
+describe-mlx = [
+    "mlx-vlm==0.6.4; platform_system == 'Darwin' and platform_machine == 'arm64'",
+]
+transcribe-cuda = ["faster-whisper==1.2.1", "huggingface-hub==1.23.0"]
 dev = [
     "interrogate==1.7.0",
     "fastapi==0.139.0",
@@ -47,14 +57,20 @@ all = [
     "fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1",
     "mcp==1.28.1",
     "faster-whisper==1.2.1",
+    "huggingface-hub==1.23.0",
+    "mlx-whisper==0.4.3; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "mlx-vlm==0.6.4; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "numpy==2.2.6; platform_system == 'Darwin' and platform_machine == 'arm64' and python_version < '3.11'",
+    "numpy==2.4.6; platform_system == 'Darwin' and platform_machine == 'arm64' and python_version >= '3.11'",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Seongho-Bae/codec-carver"
-Repository = "https://github.com/Seongho-Bae/codec-carver"
+Homepage = "https://github.com/ContextualWisdomLab/codec-carver"
+Repository = "https://github.com/ContextualWisdomLab/codec-carver"
 
 [project.scripts]
 codec-carver = "media_shrinker:main"
+codec-carver-library = "audio_library:main"
 
 [tool.setuptools]
 py-modules = [
@@ -72,6 +88,7 @@ py-modules = [
     "transcribe",
     "transcript_search",
     "usage_metering",
+    "audio_library",
 ]
 
 [tool.interrogate]

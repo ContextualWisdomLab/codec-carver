@@ -63,6 +63,12 @@ def _fake_lstat(mode: int, size: int = 0) -> MagicMock:
 
 
 class FindCandidateTests(unittest.TestCase):
+    def test_find_candidates_accepts_filesystem_root_without_extra_separator(
+        self,
+    ) -> None:
+        with patch("media_shrinker.os.walk", return_value=[]):
+            self.assertEqual(find_candidates(Path("/"), size_limit_bytes=1), [])
+
     def test_find_candidates_returns_supported_files_over_limit_case_insensitively(
         self,
     ) -> None:
@@ -1123,6 +1129,14 @@ class PlanningTests(unittest.TestCase):
             ],
         )
 
+    def test_parse_silencedetect_ignores_orphan_end_marker(self) -> None:
+        self.assertEqual(
+            parse_silencedetect_intervals(
+                "[silencedetect @ 0x1] silence_end: 4.0 | silence_duration: 4.0"
+            ),
+            [],
+        )
+
     def test_parse_silencedetect_intervals_normalizes_negative_start_at_recording_head(
         self,
     ) -> None:
@@ -1862,6 +1876,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload[0]["status"], "converted")
 
+    def test_main_execute_accepts_filesystem_root_without_extra_separator(self) -> None:
+        with (
+            patch("media_shrinker.find_candidates", return_value=[]),
+            patch("media_shrinker._execute_conversions", return_value=[]),
+            patch("media_shrinker.write_report") as write,
+            patch("builtins.print"),
+        ):
+            rc = media_shrinker.main(
+                ["/", "--execute", "--report", "/tmp/ignored-report.json"]
+            )
+
+        self.assertEqual(rc, 0)
+        write.assert_called_once()
+
     def test_main_execute_returns_failure_when_any_result_failed(self) -> None:
         result = media_shrinker.ConversionResult(
             source_path=Path("/scan/a.wav"),
@@ -2066,6 +2094,14 @@ class CliTests(unittest.TestCase):
                 with self.assertRaisesRegex(MediaShrinkerError, "no cloud"):
                     media_shrinker.download_from_icloud(Path("source.wav"))
 
+        completed = MagicMock(returncode=0, stderr="")
+        with (
+            patch("media_shrinker.shutil.which", return_value="/usr/bin/brctl"),
+            patch("media_shrinker.subprocess.run", return_value=completed) as run,
+        ):
+            media_shrinker.download_from_icloud(Path("source.wav"))
+        run.assert_called_once()
+
     def test_conversion_plan_command_rejects_missing_input_placeholder(self) -> None:
         plan = ConversionPlan("bad", Path("in.wav"), Path("out.flac"), ["-n", "out"])
         with self.assertRaisesRegex(MediaShrinkerError, "missing '-i'"):
@@ -2092,6 +2128,7 @@ class CliTests(unittest.TestCase):
                 original_size_bytes=4,
             )
             probe = MediaProbe(1.0, 4, "pcm_s16le", 128_000, False, "wav")
+            resolved_sources = frozenset({source.resolve()})
 
             with patch("media_shrinker.probe_media", return_value=probe):
                 with patch("media_shrinker._convert_segment", return_value=result) as mocked:
@@ -2100,10 +2137,14 @@ class CliTests(unittest.TestCase):
                         root=root,
                         output_dir=root / "out",
                         original_size=4,
+                        resolved_protected_sources=resolved_sources,
                     )
 
         self.assertEqual(results, [result])
         self.assertEqual(mocked.call_args.kwargs["original_size"], 4)
+        self.assertEqual(
+            mocked.call_args.kwargs["protected_sources"], resolved_sources
+        )
 
     def test_convert_file_downloads_icloud_and_detects_silence_for_long_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2332,6 +2373,23 @@ class CliTests(unittest.TestCase):
                 max_segment_duration_seconds=2,
                 protected_sources=frozenset({source.resolve()}),
             )
+
+            valid_legacy = output_dir / "other.flac"
+            valid_legacy.write_bytes(b"valid")
+            with patch("media_shrinker._probe_output_duration", return_value=1.0):
+                media_shrinker._remove_invalid_legacy_outputs(
+                    source,
+                    rel_source=Path("other.wav"),
+                    probe=probe,
+                    output_dir=output_dir,
+                    suffixes=[".flac"],
+                    target_bytes=100,
+                    ffprobe_path="ffprobe",
+                    max_segment_duration_seconds=2,
+                    protected_sources=frozenset({source.resolve()}),
+                )
+
+            self.assertTrue(valid_legacy.exists())
 
         self.assertFalse(oversized_legacy.exists())
 

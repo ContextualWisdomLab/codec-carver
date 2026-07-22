@@ -1,0 +1,3031 @@
+//! Fast, auditable filesystem operations for Codec Carver audio libraries.
+
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(unix)]
+use std::ffi::CString;
+use std::fmt::Display;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Write};
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as UnixMetadataExt, OpenOptionsExt};
+use std::path::{Component, Path, PathBuf};
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(target_os = "macos")]
+use std::os::macos::fs::MetadataExt as MacosMetadataExt;
+
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, Local, LocalResult, NaiveDate, TimeZone};
+use rayon::prelude::*;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
+use walkdir::{DirEntry, WalkDir};
+
+static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+static COMPACT_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?P<yy>\d{2})(?P<month>\d{2})(?P<day>\d{2})[_-](?P<hour>\d{2})(?P<minute>\d{2})")
+        .expect("valid compact timestamp regex")
+});
+static STANDARD_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})_(?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})__",
+    )
+    .expect("valid standard timestamp regex")
+});
+static ISO_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?P<iso>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))")
+        .expect("valid ISO timestamp regex")
+});
+static COPY_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(?:\s*\(\d+\)|\s+\d+)$").expect("valid copy suffix regex"));
+static TMK_MARK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[(?P<minutes>\d{5}):(?P<seconds>\d{2})\.(?P<hundredths>\d{2})\]")
+        .expect("valid TMK regex")
+});
+static ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|[^가-힣])[가-힣0-9]+(?:동|가|로|길)(?:[0-9]|\s|[,._-]|$)")
+        .expect("valid Korean address regex")
+});
+
+const AUDIO_EXTENSIONS: &[&str] = &["wav", "m4a", "mp3", "flac", "aac", "opus", "ogg", "wma"];
+const IO_BUFFER_BYTES: usize = 1024 * 1024;
+const MAX_TMK_CAPTURE_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FileRecord {
+    pub path: String,
+    pub kind: FileKind,
+    pub extension: String,
+    pub size_bytes: u64,
+    pub materialized: bool,
+    pub sha256: Option<String>,
+    pub recorded_at: Option<String>,
+    pub time_source: Option<TimeSource>,
+    pub location: Option<String>,
+    pub tmk_path: Option<String>,
+    pub tmk_marker_count: Option<usize>,
+    pub tmk_last_marker_seconds: Option<f64>,
+    pub tmk_markers_seconds: Option<Vec<f64>>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    Audio,
+    Tmk,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeSource {
+    StandardFilename,
+    IsoFilename,
+    CompactFilename,
+    FilesystemCreated,
+    FilesystemModified,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DuplicateGroup {
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub canonical_path: String,
+    pub duplicate_paths: Vec<String>,
+    pub earliest_recorded_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InventoryManifest {
+    pub schema_version: u32,
+    pub root: String,
+    pub generated_at: String,
+    pub earliest_recording_at: Option<String>,
+    pub audio_file_count: usize,
+    pub tmk_file_count: usize,
+    pub dataless_file_count: usize,
+    pub total_audio_bytes: u64,
+    pub files: Vec<FileRecord>,
+    pub duplicate_groups: Vec<DuplicateGroup>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StageResult {
+    pub record: FileRecord,
+    pub staged_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvictResult {
+    pub path: String,
+    pub evicted: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PendingFile {
+    absolute_path: PathBuf,
+    relative_path: String,
+    kind: FileKind,
+    extension: String,
+    size_bytes: u64,
+    materialized: bool,
+    recorded_at: Option<String>,
+    time_source: Option<TimeSource>,
+    location: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MutationPlan {
+    pub schema_version: u32,
+    pub root: String,
+    pub operations: Vec<MutationOperation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MutationOperation {
+    pub action: MutationAction,
+    pub source: String,
+    pub destination: String,
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MutationAction {
+    Rename,
+    Quarantine,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApplyJournal {
+    pub schema_version: u32,
+    pub root: String,
+    pub executed: bool,
+    pub operation_count: usize,
+    pub completed: Vec<MutationOperation>,
+}
+
+/// Scan, hash, and correlate an audio library.
+pub fn inventory(root: &Path, threads: Option<usize>) -> Result<InventoryManifest> {
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library root {}", root.display()))?;
+    if !canonical_root.is_dir() {
+        bail!(
+            "library root is not a directory: {}",
+            canonical_root.display()
+        );
+    }
+
+    let mut pending = Vec::new();
+    let mut errors = Vec::new();
+    for entry in WalkDir::new(&canonical_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !is_excluded_entry(entry, &canonical_root))
+    {
+        if let Some(entry) = record_error(entry, &mut errors) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let Some((kind, extension)) = classify(entry.path()) else {
+                continue;
+            };
+            if let Some(value) = record_error(
+                pending_file(&canonical_root, entry.path(), kind, extension),
+                &mut errors,
+            ) {
+                pending.push(value);
+            }
+        }
+    }
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads.unwrap_or_else(default_hash_threads).max(1))
+        .build()
+        .context("cannot create hashing thread pool")?;
+    let mut files = pool.install(|| pending.par_iter().map(process_file).collect::<Vec<_>>());
+    correlate_tmk(&mut files);
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let duplicate_groups = find_duplicate_groups(&files);
+    let earliest_recording_at = files
+        .iter()
+        .filter(|record| record.kind == FileKind::Audio)
+        .filter_map(|record| record.recorded_at.clone())
+        .min();
+    let audio_file_count = files
+        .iter()
+        .filter(|record| record.kind == FileKind::Audio)
+        .count();
+    let tmk_file_count = files
+        .iter()
+        .filter(|record| record.kind == FileKind::Tmk)
+        .count();
+    let dataless_file_count = files.iter().filter(|record| !record.materialized).count();
+    let total_audio_bytes = files
+        .iter()
+        .filter(|record| record.kind == FileKind::Audio)
+        .map(|record| record.size_bytes)
+        .sum();
+    errors.extend(files.iter().filter_map(|record| {
+        record
+            .error
+            .as_ref()
+            .map(|error| format!("{}: {error}", record.path))
+    }));
+
+    Ok(InventoryManifest {
+        schema_version: 1,
+        root: canonical_root.to_string_lossy().nfc().collect(),
+        generated_at: Local::now().to_rfc3339(),
+        earliest_recording_at,
+        audio_file_count,
+        tmk_file_count,
+        dataless_file_count,
+        total_audio_bytes,
+        files,
+        duplicate_groups,
+        errors,
+    })
+}
+
+/// Produce JSON and optionally persist the inventory with an atomic rename.
+pub fn inventory_to_json(
+    root: &Path,
+    output: Option<&Path>,
+    threads: Option<usize>,
+) -> Result<String> {
+    let manifest = inventory(root, threads)?;
+    let payload = pretty_json(&manifest);
+    if let Some(path) = output {
+        atomic_write(path, payload.as_bytes())?;
+    }
+    Ok(payload)
+}
+
+/// Inspect one materialized file without rescanning or rehashing the library.
+pub fn inspect_relative(root: &Path, relative_path: &Path) -> Result<FileRecord> {
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library root {}", root.display()))?;
+    validate_relative_path(&relative_path.to_string_lossy())?;
+    let requested = canonical_root.join(relative_path);
+    let canonical_path = requested
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library file {}", requested.display()))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        bail!("library file escaped root: {}", canonical_path.display());
+    }
+    let (kind, extension) = classify(&canonical_path)
+        .ok_or_else(|| anyhow!("unsupported audio/TMK file: {}", canonical_path.display()))?;
+    let pending = pending_file(&canonical_root, &canonical_path, kind, extension)?;
+    inspect_pending_file(&canonical_root, relative_path, pending)
+}
+
+fn inspect_pending_file(
+    canonical_root: &Path,
+    relative_path: &Path,
+    pending: PendingFile,
+) -> Result<FileRecord> {
+    if !pending.materialized {
+        return Ok(process_file(&pending));
+    }
+    let input = open_regular_beneath(canonical_root, relative_path)?;
+    let size_bytes = input.metadata()?.len();
+    let kind = pending.kind;
+    let mut captured = (kind == FileKind::Tmk).then(Vec::new);
+    let sha256 = hash_open_file(input, captured.as_mut())?;
+    let markers = captured
+        .as_deref()
+        .map(parse_tmk_markers)
+        .unwrap_or_default();
+    Ok(FileRecord {
+        path: pending.relative_path,
+        kind,
+        extension: pending.extension,
+        size_bytes,
+        materialized: true,
+        sha256: Some(sha256),
+        recorded_at: pending.recorded_at,
+        time_source: pending.time_source,
+        location: pending.location,
+        tmk_path: None,
+        tmk_marker_count: (kind == FileKind::Tmk).then_some(markers.len()),
+        tmk_last_marker_seconds: markers.last().copied(),
+        tmk_markers_seconds: (kind == FileKind::Tmk).then_some(markers),
+        error: None,
+    })
+}
+
+/// Inspect one file and serialize its stable record schema.
+pub fn inspect_relative_to_json(root: &Path, relative_path: &Path) -> Result<String> {
+    Ok(pretty_json(&inspect_relative(root, relative_path)?))
+}
+
+/// Stream one file into local scratch storage while computing its SHA-256 once.
+pub fn stage_relative(
+    root: &Path,
+    relative_path: &Path,
+    staging_dir: &Path,
+) -> Result<StageResult> {
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library root {}", root.display()))?;
+    validate_relative_path(&relative_path.to_string_lossy())?;
+    let requested = canonical_root.join(relative_path);
+    let canonical_path = requested
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library file {}", requested.display()))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        bail!("library file escaped root: {}", canonical_path.display());
+    }
+    let (kind, extension) = classify(&canonical_path)
+        .ok_or_else(|| anyhow!("unsupported audio/TMK file: {}", canonical_path.display()))?;
+    let pending = pending_file(&canonical_root, &canonical_path, kind, extension.clone())?;
+
+    #[cfg(target_os = "macos")]
+    request_icloud_download_if_needed(&canonical_path, pending.materialized)?;
+
+    let canonical_staging = prepare_staging_directory(staging_dir)?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let partial = canonical_staging.join(format!(
+        ".codec-carver-{}-{nonce}.{extension}.partial",
+        std::process::id()
+    ));
+    let mut tmk_bytes = (kind == FileKind::Tmk)
+        .then(|| Vec::with_capacity(pending.size_bytes.min(1024 * 1024) as usize));
+    let sha256 = match copy_and_hash_staged_source(
+        &canonical_root,
+        relative_path,
+        &canonical_path,
+        &partial,
+        tmk_bytes.as_mut(),
+        pending.materialized,
+    ) {
+        Ok(hash) => hash,
+        Err(error) => {
+            let _ = fs::remove_file(&partial);
+            return Err(error);
+        }
+    };
+    ensure_complete_stage(&canonical_path, &partial, pending.size_bytes)?;
+    let staged_path = canonical_staging.join(format!("{sha256}.{extension}"));
+    match fs::symlink_metadata(&staged_path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() {
+                let _ = fs::remove_file(&partial);
+                bail!(
+                    "cached staged artifact is not a regular file: {}",
+                    staged_path.display()
+                );
+            }
+            let cached_hash = open_regular_no_follow(&staged_path)
+                .and_then(|cached| hash_open_file(cached, None));
+            let cached_hash = match cached_hash {
+                Ok(hash) => hash,
+                Err(error) => {
+                    let _ = fs::remove_file(&partial);
+                    return Err(error).with_context(|| {
+                        format!(
+                            "cannot verify cached staged artifact {}",
+                            staged_path.display()
+                        )
+                    });
+                }
+            };
+            if cached_hash != sha256 {
+                let _ = fs::remove_file(&partial);
+                bail!(
+                    "cached staged artifact SHA-256 mismatch: {}",
+                    staged_path.display()
+                );
+            }
+            fs::remove_file(&partial)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            finalize_staged_partial(&partial, &staged_path)?;
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&partial);
+            return Err(error).with_context(|| {
+                format!(
+                    "cannot inspect cached staged artifact {}",
+                    staged_path.display()
+                )
+            });
+        }
+    }
+    let markers = tmk_bytes
+        .as_deref()
+        .map(parse_tmk_markers)
+        .unwrap_or_default();
+    Ok(StageResult {
+        record: FileRecord {
+            path: pending.relative_path,
+            kind,
+            extension,
+            size_bytes: pending.size_bytes,
+            materialized: pending.materialized,
+            sha256: Some(sha256),
+            recorded_at: pending.recorded_at,
+            time_source: pending.time_source,
+            location: pending.location,
+            tmk_path: None,
+            tmk_marker_count: (kind == FileKind::Tmk).then_some(markers.len()),
+            tmk_last_marker_seconds: markers.last().copied(),
+            tmk_markers_seconds: (kind == FileKind::Tmk).then_some(markers),
+            error: None,
+        },
+        staged_path: staged_path.to_string_lossy().nfc().collect(),
+    })
+}
+
+fn finalize_staged_partial(partial: &Path, staged_path: &Path) -> Result<()> {
+    if let Err(rename_error) = fs::rename(partial, staged_path) {
+        if let Err(cleanup_error) = fs::remove_file(partial) {
+            return Err(rename_error).with_context(|| {
+                format!(
+                    "cannot finalize staged artifact {}; additionally cannot remove partial {}: {cleanup_error}",
+                    staged_path.display(),
+                    partial.display()
+                )
+            });
+        }
+        return Err(rename_error)
+            .with_context(|| format!("cannot finalize staged artifact {}", staged_path.display()));
+    }
+    Ok(())
+}
+
+/// Stage one file and serialize its record plus scratch path.
+pub fn stage_relative_to_json(
+    root: &Path,
+    relative_path: &Path,
+    staging_dir: &Path,
+) -> Result<String> {
+    stage_relative(root, relative_path, staging_dir).map(|result| pretty_json(&result))
+}
+
+/// Release one iCloud file's local blocks through the native macOS FileManager API.
+pub fn evict_relative(root: &Path, relative_path: &Path) -> Result<EvictResult> {
+    #[cfg(target_os = "macos")]
+    return evict_relative_with(root, relative_path, evict_icloud_file);
+
+    #[cfg(not(target_os = "macos"))]
+    evict_relative_with(root, relative_path, |_path| {
+        bail!("iCloud eviction is only supported on macOS")
+    })
+}
+
+fn evict_relative_with<F>(root: &Path, relative_path: &Path, evict: F) -> Result<EvictResult>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library root {}", root.display()))?;
+    validate_relative_path(&relative_path.to_string_lossy())?;
+    let requested = canonical_root.join(relative_path);
+    let canonical_path = requested
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library file {}", requested.display()))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        bail!("library file escaped root: {}", canonical_path.display());
+    }
+    classify(&canonical_path)
+        .ok_or_else(|| anyhow!("unsupported audio/TMK file: {}", canonical_path.display()))?;
+    evict(&canonical_path)?;
+    Ok(EvictResult {
+        path: relative_path.to_string_lossy().nfc().collect(),
+        evicted: true,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn evict_icloud_file(path: &Path) -> Result<()> {
+    use objc2_foundation::{NSFileManager, NSURL};
+
+    let url = NSURL::from_file_path(path)
+        .expect("a canonical absolute filesystem path always has a file URL");
+    NSFileManager::defaultManager()
+        .evictUbiquitousItemAtURL_error(&url)
+        .map_err(|error| anyhow!("cannot evict iCloud file {}: {error}", path.display()))
+}
+
+/// Evict one file and serialize the stable result schema.
+pub fn evict_relative_to_json(root: &Path, relative_path: &Path) -> Result<String> {
+    evict_result_to_json(evict_relative(root, relative_path))
+}
+
+fn evict_result_to_json(result: Result<EvictResult>) -> Result<String> {
+    Ok(pretty_json(&result?))
+}
+
+fn record_error<T, E: Display>(
+    result: std::result::Result<T, E>,
+    errors: &mut Vec<String>,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            errors.push(error.to_string());
+            None
+        }
+    }
+}
+
+fn prepare_staging_directory(staging_dir: &Path) -> Result<PathBuf> {
+    #[cfg(unix)]
+    {
+        let directory = open_directory_path_no_follow(staging_dir, true)?;
+        let opened = directory.metadata()?;
+        let effective_uid = unsafe { libc::geteuid() };
+        if opened.uid() != effective_uid && opened.uid() != 0 {
+            bail!(
+                "staging directory has an unapproved owner: {}",
+                staging_dir.display()
+            );
+        }
+        if opened.mode() & 0o022 != 0 {
+            bail!(
+                "staging directory is group/world-writable: {}",
+                staging_dir.display()
+            );
+        }
+        let canonical = staging_dir.canonicalize().context(format!(
+            "cannot resolve staging directory {}",
+            staging_dir.display()
+        ))?;
+        let resolved = fs::metadata(&canonical)?;
+        if opened.dev() != resolved.dev() || opened.ino() != resolved.ino() {
+            bail!(
+                "staging directory changed while being validated: {}",
+                staging_dir.display()
+            );
+        }
+        Ok(canonical)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(staging_dir).with_context(|| {
+            format!("cannot create staging directory {}", staging_dir.display())
+        })?;
+        let lexical = fs::symlink_metadata(staging_dir).with_context(|| {
+            format!("cannot inspect staging directory {}", staging_dir.display())
+        })?;
+        if lexical.file_type().is_symlink() || !lexical.is_dir() {
+            bail!(
+                "staging path is not a real directory: {}",
+                staging_dir.display()
+            );
+        }
+        staging_dir.canonicalize().context(format!(
+            "cannot resolve staging directory {}",
+            staging_dir.display()
+        ))
+    }
+}
+
+fn is_excluded_entry(entry: &DirEntry, root: &Path) -> bool {
+    if entry.path() == root {
+        return false;
+    }
+    entry.file_type().is_dir()
+        && matches!(
+            entry.file_name().to_str(),
+            Some(".git" | ".codec-carver" | "target" | ".venv")
+        )
+}
+
+fn classify(path: &Path) -> Option<(FileKind, String)> {
+    let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    if AUDIO_EXTENSIONS.contains(&extension.as_str()) {
+        Some((FileKind::Audio, extension))
+    } else if extension == "tmk" {
+        Some((FileKind::Tmk, extension))
+    } else {
+        None
+    }
+}
+
+fn pending_file(
+    root: &Path,
+    path: &Path,
+    kind: FileKind,
+    extension: String,
+) -> Result<PendingFile> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("cannot stat without following links: {}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        bail!("scanned path is not a regular file: {}", path.display());
+    }
+    let relative_path: String = path
+        .strip_prefix(root)
+        .context("scanned path escaped root")?
+        .to_string_lossy()
+        .nfc()
+        .collect();
+    let filename: String = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .nfc()
+        .collect();
+    let (recorded_at, time_source) = infer_recorded_at(&filename, &metadata);
+    Ok(PendingFile {
+        absolute_path: path.to_path_buf(),
+        relative_path,
+        kind,
+        extension,
+        size_bytes: metadata.len(),
+        materialized: !is_dataless(&metadata),
+        recorded_at,
+        time_source,
+        location: infer_location(&filename),
+    })
+}
+
+fn process_file(pending: &PendingFile) -> FileRecord {
+    let mut tmk_bytes = if pending.kind == FileKind::Tmk {
+        Some(Vec::with_capacity(
+            pending.size_bytes.min(1024 * 1024) as usize
+        ))
+    } else {
+        None
+    };
+    let result = if pending.materialized {
+        hash_file(&pending.absolute_path, tmk_bytes.as_mut())
+    } else {
+        Err(anyhow!(
+            "iCloud dataless placeholder; run `codec-carver-library <root> \
+             stream-transcribe --path {:?}` to request it through the native macOS \
+             FileManager API, or use Finder 'Download Now', before hashing",
+            pending.relative_path
+        ))
+    };
+    let (sha256, error) = match result {
+        Ok(hash) => (Some(hash), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let markers = tmk_bytes
+        .as_deref()
+        .map(parse_tmk_markers)
+        .unwrap_or_default();
+    FileRecord {
+        path: pending.relative_path.clone(),
+        kind: pending.kind,
+        extension: pending.extension.clone(),
+        size_bytes: pending.size_bytes,
+        materialized: pending.materialized,
+        sha256,
+        recorded_at: pending.recorded_at.clone(),
+        time_source: pending.time_source,
+        location: pending.location.clone(),
+        tmk_path: None,
+        tmk_marker_count: (pending.kind == FileKind::Tmk).then_some(markers.len()),
+        tmk_last_marker_seconds: markers.last().copied(),
+        tmk_markers_seconds: (pending.kind == FileKind::Tmk).then_some(markers),
+        error,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn request_icloud_download_if_needed(path: &Path, materialized: bool) -> Result<()> {
+    request_icloud_download_if_needed_with(path, materialized, request_icloud_download)
+}
+
+#[cfg(target_os = "macos")]
+fn request_icloud_download_if_needed_with<F>(
+    path: &Path,
+    materialized: bool,
+    request: F,
+) -> Result<()>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    if materialized {
+        return Ok(());
+    }
+    request(path)
+}
+
+#[cfg(target_os = "macos")]
+fn request_icloud_download(path: &Path) -> Result<()> {
+    use objc2_foundation::{NSFileManager, NSURL};
+
+    let url = NSURL::from_file_path(path)
+        .ok_or_else(|| anyhow!("cannot create a file URL for {}", path.display()))?;
+    let manager = NSFileManager::defaultManager();
+    manager
+        .startDownloadingUbiquitousItemAtURL_error(&url)
+        .map_err(|error| {
+            anyhow!(
+                "cannot request iCloud materialization for {}: {error}",
+                path.display()
+            )
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn is_dataless(metadata: &fs::Metadata) -> bool {
+    const SF_DATALESS: u32 = 0x4000_0000;
+    metadata.st_flags() & SF_DATALESS != 0
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_dataless(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn hash_file(path: &Path, capture: Option<&mut Vec<u8>>) -> Result<String> {
+    hash_open_file(open_regular_no_follow(path)?, capture)
+}
+
+fn open_regular_no_follow(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options
+        .open(path)
+        .with_context(|| format!("cannot securely open regular file {}", path.display()))?;
+    if !file.metadata()?.is_file() {
+        bail!("path is not a regular file: {}", path.display());
+    }
+    Ok(file)
+}
+
+fn capture_tmk_chunk(capture: &mut Option<&mut Vec<u8>>, chunk: &[u8]) -> Result<()> {
+    let Some(bytes) = capture.as_deref_mut() else {
+        return Ok(());
+    };
+    let captured = bytes
+        .len()
+        .checked_add(chunk.len())
+        .ok_or_else(|| anyhow!("TMK capture size overflow"))?;
+    if captured > MAX_TMK_CAPTURE_BYTES {
+        bail!(
+            "TMK metadata exceeds the {} byte capture limit",
+            MAX_TMK_CAPTURE_BYTES
+        );
+    }
+    bytes.extend_from_slice(chunk);
+    Ok(())
+}
+
+fn hash_open_file(input: File, capture: Option<&mut Vec<u8>>) -> Result<String> {
+    let mut reader = BufReader::with_capacity(IO_BUFFER_BYTES, input);
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; IO_BUFFER_BYTES];
+    let mut capture = capture;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        capture_tmk_chunk(&mut capture, &buffer[..read])?;
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(unix)]
+fn open_regular_beneath(root: &Path, relative_path: &Path) -> Result<File> {
+    validate_relative_path(&relative_path.to_string_lossy())?;
+    let root_context = format!("cannot securely open library root {}", root.display());
+    let mut directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(root)
+        .context(root_context)?;
+    let components = relative_path.components().collect::<Vec<_>>();
+    let (final_component, parent_components) = components
+        .split_last()
+        .expect("validated relative paths have a final component");
+    for component in parent_components {
+        let name = component.as_os_str();
+        let name = CString::new(name.as_bytes())
+            .context(format!("path contains NUL: {}", relative_path.display()))?;
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_DIRECTORY;
+        let descriptor = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error()).context(format!(
+                "cannot securely open {} beneath {}",
+                relative_path.display(),
+                root.display()
+            ));
+        }
+        let opened = unsafe { File::from_raw_fd(descriptor) };
+        directory = opened;
+    }
+    let final_name = CString::new(final_component.as_os_str().as_bytes())
+        .context(format!("path contains NUL: {}", relative_path.display()))?;
+    let descriptor = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            final_name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error()).context(format!(
+            "cannot securely open {} beneath {}",
+            relative_path.display(),
+            root.display()
+        ));
+    }
+    let opened = unsafe { File::from_raw_fd(descriptor) };
+    if !opened.metadata()?.is_file() {
+        bail!(
+            "library source is not a regular file: {}",
+            relative_path.display()
+        );
+    }
+    Ok(opened)
+}
+
+#[cfg(not(unix))]
+fn open_regular_beneath(root: &Path, relative_path: &Path) -> Result<File> {
+    validate_relative_path(&relative_path.to_string_lossy())?;
+    let path = root.join(relative_path);
+    let file = File::open(&path).with_context(|| format!("cannot open {}", path.display()))?;
+    if !file.metadata()?.is_file() {
+        bail!(
+            "library source is not a regular file: {}",
+            relative_path.display()
+        );
+    }
+    Ok(file)
+}
+
+fn copy_and_hash_open_file(
+    input: File,
+    destination: &Path,
+    capture: Option<&mut Vec<u8>>,
+) -> Result<String> {
+    let mut output_options = OpenOptions::new();
+    output_options.write(true).create_new(true);
+    #[cfg(unix)]
+    output_options
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .mode(0o600);
+    let output = output_options
+        .open(destination)
+        .with_context(|| format!("cannot create {}", destination.display()))?;
+    let mut reader = BufReader::with_capacity(IO_BUFFER_BYTES, input);
+    let mut writer = BufWriter::with_capacity(IO_BUFFER_BYTES, output);
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; IO_BUFFER_BYTES];
+    let mut capture = capture;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..read])?;
+        hasher.update(&buffer[..read]);
+        capture_tmk_chunk(&mut capture, &buffer[..read])?;
+    }
+    writer.flush()?;
+    writer.get_ref().sync_all()?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn copy_and_hash_staged_source(
+    root: &Path,
+    relative_path: &Path,
+    source: &Path,
+    destination: &Path,
+    capture: Option<&mut Vec<u8>>,
+    materialized: bool,
+) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    if !materialized {
+        return coordinated_copy_and_hash_file(root, relative_path, source, destination, capture);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = (materialized, source);
+    copy_and_hash_open_file(
+        open_regular_beneath(root, relative_path)?,
+        destination,
+        capture,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn open_coordinated_regular_beneath(
+    root: &Path,
+    relative_path: &Path,
+    coordinated_url: &objc2_foundation::NSURL,
+) -> Result<File> {
+    let coordinated_path = coordinated_url.to_file_path().ok_or_else(|| {
+        anyhow!(
+            "iCloud coordinator returned a non-file URL for {}",
+            relative_path.display()
+        )
+    })?;
+    let coordinated_relative = coordinated_path.strip_prefix(root).with_context(|| {
+        format!(
+            "iCloud coordinated URL escaped library root: {}",
+            coordinated_path.display()
+        )
+    })?;
+    if coordinated_relative != relative_path {
+        bail!(
+            "iCloud coordinated URL changed the requested library path: expected {}, got {}",
+            relative_path.display(),
+            coordinated_relative.display()
+        );
+    }
+    open_regular_beneath(root, coordinated_relative)
+}
+
+#[cfg(target_os = "macos")]
+fn coordinated_copy_and_hash_file(
+    root: &Path,
+    relative_path: &Path,
+    source: &Path,
+    destination: &Path,
+    capture: Option<&mut Vec<u8>>,
+) -> Result<String> {
+    use block2::StackBlock;
+    use objc2_foundation::{NSFileCoordinator, NSFileCoordinatorReadingOptions, NSURL};
+    use std::cell::RefCell;
+
+    let url = NSURL::from_file_path(source).ok_or_else(|| {
+        anyhow!(
+            "cannot create a coordinated file URL for {}",
+            source.display()
+        )
+    })?;
+    let coordinator = NSFileCoordinator::new();
+    let result = RefCell::new(None);
+    let capture = RefCell::new(capture);
+    let reader = StackBlock::new(|coordinated_url: std::ptr::NonNull<NSURL>| {
+        let capture = capture.borrow_mut().take();
+        // SAFETY: NSFileCoordinator's accessor contract supplies a live, non-null
+        // NSURL for the duration of this synchronous callback.
+        let coordinated_url = unsafe { coordinated_url.as_ref() };
+        result.replace(Some(
+            open_coordinated_regular_beneath(root, relative_path, coordinated_url)
+                .and_then(|input| copy_and_hash_open_file(input, destination, capture)),
+        ));
+    });
+    let mut coordination_error = None;
+    coordinator.coordinateReadingItemAtURL_options_error_byAccessor(
+        &url,
+        NSFileCoordinatorReadingOptions::empty(),
+        Some(&mut coordination_error),
+        &reader,
+    );
+    let coordination_error = coordination_error.as_deref().map(ToString::to_string);
+    finish_coordinated_copy(source, coordination_error, result.into_inner())
+}
+
+#[cfg(target_os = "macos")]
+fn finish_coordinated_copy(
+    source: &Path,
+    coordination_error: Option<String>,
+    result: Option<Result<String>>,
+) -> Result<String> {
+    if let Some(error) = coordination_error {
+        bail!(
+            "cannot coordinate iCloud materialization for {}: {error}",
+            source.display()
+        );
+    }
+    match result {
+        Some(result) => result,
+        None => bail!(
+            "iCloud coordinator returned without reading {}",
+            source.display()
+        ),
+    }
+}
+
+fn ensure_complete_stage(source: &Path, partial: &Path, expected: u64) -> Result<()> {
+    let copied = match fs::metadata(partial)
+        .with_context(|| format!("cannot stat staged partial {}", partial.display()))
+        .map(|metadata| metadata.len())
+    {
+        Ok(copied) => copied,
+        Err(error) => {
+            let _ = fs::remove_file(partial);
+            return Err(error);
+        }
+    };
+    if copied != expected {
+        let _ = fs::remove_file(partial);
+        bail!(
+            "STAGE_SOURCE_NOT_READY copied {copied} of {expected} bytes from {}",
+            source.display()
+        );
+    }
+    Ok(())
+}
+
+fn parse_tmk_markers(bytes: &[u8]) -> Vec<f64> {
+    let text = String::from_utf8_lossy(bytes);
+    TMK_MARK_RE
+        .captures_iter(&text)
+        .filter_map(|capture| {
+            let minutes = capture.name("minutes")?.as_str().parse::<f64>().ok()?;
+            let seconds = capture.name("seconds")?.as_str().parse::<f64>().ok()?;
+            let hundredths = capture.name("hundredths")?.as_str().parse::<f64>().ok()?;
+            Some(minutes * 60.0 + seconds + hundredths / 100.0)
+        })
+        .collect()
+}
+
+fn correlate_tmk(files: &mut [FileRecord]) {
+    let mut exact = HashMap::new();
+    let mut normalized = HashMap::new();
+    for (index, record) in files
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| record.kind == FileKind::Tmk)
+    {
+        let path = Path::new(&record.path);
+        exact.insert(sidecar_key(path, false), index);
+        normalized.entry(sidecar_key(path, true)).or_insert(index);
+    }
+    let matches: Vec<(usize, usize)> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| record.kind == FileKind::Audio)
+        .filter_map(|(audio_index, record)| {
+            let path = Path::new(&record.path);
+            exact
+                .get(&sidecar_key(path, false))
+                .or_else(|| normalized.get(&sidecar_key(path, true)))
+                .copied()
+                .map(|tmk_index| (audio_index, tmk_index))
+        })
+        .collect();
+    for (audio_index, tmk_index) in matches {
+        let (tmk_path, count, last, markers) = {
+            let tmk = &files[tmk_index];
+            (
+                tmk.path.clone(),
+                tmk.tmk_marker_count,
+                tmk.tmk_last_marker_seconds,
+                tmk.tmk_markers_seconds.clone(),
+            )
+        };
+        let audio = &mut files[audio_index];
+        audio.tmk_path = Some(tmk_path);
+        audio.tmk_marker_count = count;
+        audio.tmk_last_marker_seconds = last;
+        audio.tmk_markers_seconds = markers;
+    }
+}
+
+fn sidecar_key(path: &Path, remove_copy_suffix: bool) -> String {
+    let parent: String = path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .to_string_lossy()
+        .nfc()
+        .collect();
+    let stem: String = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .nfc()
+        .collect();
+    let stem = if remove_copy_suffix {
+        COPY_SUFFIX_RE.replace(&stem, "").into_owned()
+    } else {
+        stem
+    };
+    format!("{parent}\0{}", stem.to_lowercase())
+}
+
+fn infer_recorded_at(
+    filename: &str,
+    metadata: &fs::Metadata,
+) -> (Option<String>, Option<TimeSource>) {
+    if let Some(capture) = STANDARD_TIME_RE.captures(filename) {
+        let year = capture["year"]
+            .parse::<i32>()
+            .expect("regex matched digits");
+        let month = capture["month"]
+            .parse::<u32>()
+            .expect("regex matched digits");
+        let day = capture["day"].parse::<u32>().expect("regex matched digits");
+        let hour = capture["hour"]
+            .parse::<u32>()
+            .expect("regex matched digits");
+        let minute = capture["minute"]
+            .parse::<u32>()
+            .expect("regex matched digits");
+        let second = capture["second"]
+            .parse::<u32>()
+            .expect("regex matched digits");
+        if let Some(naive) = NaiveDate::from_ymd_opt(year, month, day)
+            .and_then(|date| date.and_hms_opt(hour, minute, second))
+            && let Some(value) = earliest_local_rfc3339(Local.from_local_datetime(&naive))
+        {
+            return (Some(value), Some(TimeSource::StandardFilename));
+        }
+    }
+    if let Some(capture) = ISO_TIME_RE.captures(filename)
+        && let Some(raw) = capture.name("iso")
+        && let Ok(value) = DateTime::parse_from_rfc3339(raw.as_str())
+    {
+        return (Some(value.to_rfc3339()), Some(TimeSource::IsoFilename));
+    }
+    if let Some(capture) = COMPACT_TIME_RE.captures(filename) {
+        let parsed = (|| {
+            let year = 2000 + capture.name("yy")?.as_str().parse::<i32>().ok()?;
+            let month = capture.name("month")?.as_str().parse::<u32>().ok()?;
+            let day = capture.name("day")?.as_str().parse::<u32>().ok()?;
+            let hour = capture.name("hour")?.as_str().parse::<u32>().ok()?;
+            let minute = capture.name("minute")?.as_str().parse::<u32>().ok()?;
+            let naive = NaiveDate::from_ymd_opt(year, month, day)?.and_hms_opt(hour, minute, 0)?;
+            Local.from_local_datetime(&naive).earliest()
+        })();
+        if let Some(value) = parsed {
+            return (Some(value.to_rfc3339()), Some(TimeSource::CompactFilename));
+        }
+    }
+    let modified = metadata
+        .modified()
+        .map(|time| (time, TimeSource::FilesystemModified));
+    metadata
+        .created()
+        .map(|time| (time, TimeSource::FilesystemCreated))
+        .or(modified)
+        .map_or((None, None), |(time, source)| {
+            (Some(system_time_to_rfc3339(time)), Some(source))
+        })
+}
+
+fn earliest_local_rfc3339<Tz>(value: LocalResult<DateTime<Tz>>) -> Option<String>
+where
+    Tz: TimeZone,
+    Tz::Offset: Display,
+{
+    value.earliest().map(|resolved| resolved.to_rfc3339())
+}
+
+fn system_time_to_rfc3339(time: SystemTime) -> String {
+    let value: DateTime<Local> = time.into();
+    value.to_rfc3339()
+}
+
+fn infer_location(filename: &str) -> Option<String> {
+    let stem = Path::new(filename).file_stem()?.to_string_lossy();
+    if STANDARD_TIME_RE.is_match(&stem) {
+        let components: Vec<&str> = stem.split("__").collect();
+        return (components.len() >= 4
+            && components.last()?.starts_with("sha256-")
+            && !components[1].is_empty())
+        .then(|| components[1].to_string());
+    }
+    let candidates: Vec<String> = stem
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !ISO_TIME_RE.is_match(line))
+        .filter(|line| ADDRESS_RE.is_match(line))
+        .map(ToOwned::to_owned)
+        .collect();
+    let selected = candidates.last()?.trim();
+    let normalized = COPY_SUFFIX_RE.replace(selected, "").trim().to_string();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn find_duplicate_groups(files: &[FileRecord]) -> Vec<DuplicateGroup> {
+    let mut by_hash: BTreeMap<&str, Vec<&FileRecord>> = BTreeMap::new();
+    for record in files.iter().filter(|record| record.kind == FileKind::Audio) {
+        if let Some(hash) = record.sha256.as_deref() {
+            by_hash.entry(hash).or_default().push(record);
+        }
+    }
+    by_hash
+        .into_iter()
+        .filter(|(_, records)| records.len() > 1)
+        .map(|(hash, mut records)| {
+            records.sort_by(|left, right| canonical_cmp(left, right));
+            let canonical = records[0];
+            let earliest_recorded_at = records
+                .iter()
+                .filter_map(|record| record.recorded_at.clone())
+                .min();
+            DuplicateGroup {
+                sha256: hash.to_string(),
+                size_bytes: canonical.size_bytes,
+                canonical_path: canonical.path.clone(),
+                duplicate_paths: records[1..]
+                    .iter()
+                    .map(|record| record.path.clone())
+                    .collect(),
+                earliest_recorded_at,
+            }
+        })
+        .collect()
+}
+
+fn canonical_cmp(left: &FileRecord, right: &FileRecord) -> Ordering {
+    let left_key = (
+        left.recorded_at.as_deref().unwrap_or("9999"),
+        COPY_SUFFIX_RE.is_match(
+            Path::new(&left.path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .as_ref(),
+        ),
+        left.tmk_path.is_none(),
+        left.location.is_none(),
+        left.path.matches('/').count(),
+        left.path.as_str(),
+    );
+    let right_key = (
+        right.recorded_at.as_deref().unwrap_or("9999"),
+        COPY_SUFFIX_RE.is_match(
+            Path::new(&right.path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .as_ref(),
+        ),
+        right.tmk_path.is_none(),
+        right.location.is_none(),
+        right.path.matches('/').count(),
+        right.path.as_str(),
+    );
+    left_key.cmp(&right_key)
+}
+
+fn default_hash_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(8)
+}
+
+/// Validate a relative path used by a mutation plan.
+pub fn validate_relative_path(path: &str) -> Result<()> {
+    let value = Path::new(path);
+    if value.as_os_str().is_empty() || value.is_absolute() {
+        bail!("mutation path must be non-empty and relative: {path:?}");
+    }
+    if value
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        bail!("mutation path contains unsafe components: {path:?}");
+    }
+    Ok(())
+}
+
+/// Validate and optionally execute a mutation plan with best-effort rollback.
+pub fn apply_plan(plan: &MutationPlan, execute: bool) -> Result<ApplyJournal> {
+    if plan.schema_version != 1 {
+        bail!("unsupported mutation plan schema {}", plan.schema_version);
+    }
+    let root = Path::new(&plan.root)
+        .canonicalize()
+        .with_context(|| format!("cannot resolve plan root {}", plan.root))?;
+    #[cfg(not(unix))]
+    {
+        let _ = (root, execute);
+        bail!("secure descriptor-relative mutations require a Unix platform");
+    }
+    #[cfg(unix)]
+    apply_plan_unix(plan, execute, &root)
+}
+
+#[cfg(unix)]
+fn open_locked_root(root: &Path) -> Result<File> {
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(root)
+        .with_context(|| format!("cannot securely open plan root {}", root.display()))?;
+    let result = unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX) };
+    finish_root_lock(directory, root, result)
+}
+
+#[cfg(unix)]
+fn finish_root_lock(directory: File, root: &Path, result: libc::c_int) -> Result<File> {
+    if result != 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("cannot lock plan root {}", root.display()));
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn component_name(component: &std::ffi::OsStr, path: &Path) -> Result<CString> {
+    CString::new(component.as_bytes())
+        .with_context(|| format!("path contains NUL: {}", path.display()))
+}
+
+#[cfg(unix)]
+fn open_directory_path_no_follow(path: &Path, create: bool) -> Result<File> {
+    let anchor = if path.is_absolute() { "/" } else { "." };
+    let mut directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(anchor)
+        .with_context(|| {
+            format!(
+                "cannot open directory traversal anchor for {}",
+                path.display()
+            )
+        })?;
+    for component in path.components() {
+        let value = match component {
+            Component::RootDir | Component::CurDir => continue,
+            Component::Normal(value) => value,
+            Component::ParentDir | Component::Prefix(_) => {
+                bail!("unsafe directory traversal path: {}", path.display())
+            }
+        };
+        let name = component_name(value, path)?;
+        match open_child_directory(&directory, &name, path) {
+            Ok(opened) => directory = opened,
+            Err(error)
+                if create
+                    && error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|source| source.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                create_child_directory(&directory, &name, path)?;
+                directory = open_child_directory(&directory, &name, path)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn open_child_directory(parent: &File, name: &CString, path: &Path) -> Result<File> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "cannot securely open directory component of {}",
+                path.display()
+            )
+        });
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+#[cfg(unix)]
+fn create_child_directory(parent: &File, name: &CString, path: &Path) -> Result<()> {
+    let created = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
+    if created != 0 {
+        let source = std::io::Error::last_os_error();
+        if source.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(source).with_context(|| {
+                format!(
+                    "cannot securely create directory component of {}",
+                    path.display()
+                )
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn mutation_parent(
+    root: &File,
+    relative_path: &Path,
+    create: bool,
+) -> Result<Option<(File, CString)>> {
+    validate_relative_path(&relative_path.to_string_lossy())?;
+    let final_component = relative_path
+        .file_name()
+        .expect("validated mutation paths have a final component");
+    let final_name = component_name(final_component, relative_path)?;
+    let mut directory = root.try_clone()?;
+    let parent = relative_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    for component in parent.components() {
+        let Component::Normal(value) = component else {
+            continue;
+        };
+        let name = component_name(value, relative_path)?;
+        match open_child_directory(&directory, &name, relative_path) {
+            Ok(opened) => directory = opened,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|source| source.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                if !create {
+                    return Ok(None);
+                }
+                create_child_directory(&directory, &name, relative_path)?;
+                directory = open_child_directory(&directory, &name, relative_path)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(Some((directory, final_name)))
+}
+
+#[cfg(unix)]
+fn entry_exists(parent: &File, name: &CString) -> Result<bool> {
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::NotFound {
+        Ok(false)
+    } else {
+        Err(error).context("cannot inspect descriptor-relative mutation entry")
+    }
+}
+
+#[cfg(unix)]
+fn open_mutation_source(root: &File, relative_path: &Path) -> Result<(File, File, CString)> {
+    let (parent, name) = mutation_parent(root, relative_path, false)?
+        .ok_or_else(|| anyhow!("source parent is missing: {}", relative_path.display()))?;
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "cannot securely open mutation source {}",
+                relative_path.display()
+            )
+        });
+    }
+    let source = unsafe { File::from_raw_fd(descriptor) };
+    if !source.metadata()?.is_file() {
+        bail!(
+            "mutation source is not a regular file: {}",
+            relative_path.display()
+        );
+    }
+    Ok((parent, source, name))
+}
+
+#[cfg(unix)]
+fn source_name_still_matches(parent: &File, source: &File, name: &CString) -> Result<()> {
+    let mut opened = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let mut current = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let opened_result = unsafe { libc::fstat(source.as_raw_fd(), opened.as_mut_ptr()) };
+    let current_result = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            current.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if opened_result != 0 || current_result != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("mutation source changed before descriptor-relative move");
+    }
+    let opened = unsafe { opened.assume_init() };
+    let current = unsafe { current.assume_init() };
+    if opened.st_dev != current.st_dev || opened.st_ino != current.st_ino {
+        bail!("mutation source changed before descriptor-relative move");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn rename_noreplace_at(
+    source_parent: &File,
+    source_name: &CString,
+    destination_parent: &File,
+    destination_name: &CString,
+) -> Result<()> {
+    let result = unsafe {
+        libc::renameatx_np(
+            source_parent.as_raw_fd(),
+            source_name.as_ptr(),
+            destination_parent.as_raw_fd(),
+            destination_name.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("descriptor-relative rename failed");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn rename_noreplace_at(
+    source_parent: &File,
+    source_name: &CString,
+    destination_parent: &File,
+    destination_name: &CString,
+) -> Result<()> {
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            source_parent.as_raw_fd(),
+            source_name.as_ptr(),
+            destination_parent.as_raw_fd(),
+            destination_name.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("descriptor-relative rename failed");
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn rename_noreplace_at(
+    source_parent: &File,
+    source_name: &CString,
+    destination_parent: &File,
+    destination_name: &CString,
+) -> Result<()> {
+    let linked = unsafe {
+        libc::linkat(
+            source_parent.as_raw_fd(),
+            source_name.as_ptr(),
+            destination_parent.as_raw_fd(),
+            destination_name.as_ptr(),
+            0,
+        )
+    };
+    if linked != 0 {
+        return Err(std::io::Error::last_os_error()).context("descriptor-relative link failed");
+    }
+    let unlinked = unsafe { libc::unlinkat(source_parent.as_raw_fd(), source_name.as_ptr(), 0) };
+    if unlinked != 0 {
+        let error = std::io::Error::last_os_error();
+        let _ =
+            unsafe { libc::unlinkat(destination_parent.as_raw_fd(), destination_name.as_ptr(), 0) };
+        return Err(error).context("descriptor-relative unlink failed");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_mutation_operation(root: &File, operation: &MutationOperation) -> Result<()> {
+    let expected_sha256 = operation.sha256.as_deref().ok_or_else(|| {
+        anyhow!(
+            "mutation source is not content-bound by SHA-256: {}",
+            operation.source
+        )
+    })?;
+    if expected_sha256.len() != 64
+        || !expected_sha256
+            .bytes()
+            .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
+    {
+        bail!("invalid mutation SHA-256 for {}", operation.source);
+    }
+    let (_parent, source, _name) = open_mutation_source(root, Path::new(&operation.source))?;
+    let actual_sha256 = hash_open_file(source, None)?;
+    if actual_sha256 != expected_sha256 {
+        bail!(
+            "mutation source SHA-256 changed for {}: expected {}, got {}",
+            operation.source,
+            expected_sha256,
+            actual_sha256
+        );
+    }
+    if let Some((parent, name)) = mutation_parent(root, Path::new(&operation.destination), false)?
+        && entry_exists(&parent, &name)?
+    {
+        bail!("destination already exists: {}", operation.destination);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn move_mutation_with<F>(root: &File, operation: &MutationOperation, before_rename: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let expected_sha256 = operation.sha256.as_deref().ok_or_else(|| {
+        anyhow!(
+            "mutation source is not content-bound by SHA-256: {}",
+            operation.source
+        )
+    })?;
+    let (source_parent, source, source_name) =
+        open_mutation_source(root, Path::new(&operation.source))?;
+    let actual_sha256 = hash_open_file(source.try_clone()?, None)?;
+    if actual_sha256 != expected_sha256 {
+        bail!(
+            "mutation source SHA-256 changed for {}: expected {}, got {}",
+            operation.source,
+            expected_sha256,
+            actual_sha256
+        );
+    }
+    let (destination_parent, destination_name) =
+        mutation_parent(root, Path::new(&operation.destination), true)?
+            .expect("creating a validated mutation parent always returns a descriptor");
+    before_rename()?;
+    source_name_still_matches(&source_parent, &source, &source_name)?;
+    rename_noreplace_at(
+        &source_parent,
+        &source_name,
+        &destination_parent,
+        &destination_name,
+    )
+}
+
+#[cfg(unix)]
+fn move_mutation(root: &File, operation: &MutationOperation) -> Result<()> {
+    move_mutation_with(root, operation, || Ok(()))
+}
+
+#[cfg(unix)]
+fn rollback_completed<F>(completed: &[MutationOperation], mut mover: F) -> Vec<String>
+where
+    F: FnMut(&MutationOperation) -> Result<()>,
+{
+    let mut errors = Vec::new();
+    for operation in completed.iter().rev() {
+        let reverse = MutationOperation {
+            action: operation.action,
+            source: operation.destination.clone(),
+            destination: operation.source.clone(),
+            sha256: operation.sha256.clone(),
+        };
+        if let Err(error) = mover(&reverse) {
+            errors.push(format!(
+                "{} -> {}: {error:#}",
+                reverse.source, reverse.destination
+            ));
+        }
+    }
+    errors
+}
+
+#[cfg(unix)]
+fn apply_plan_unix(plan: &MutationPlan, execute: bool, root: &Path) -> Result<ApplyJournal> {
+    let root_directory = open_locked_root(root)?;
+    let mut destinations = HashSet::new();
+    for operation in &plan.operations {
+        validate_relative_path(&operation.source)?;
+        validate_relative_path(&operation.destination)?;
+        if operation.source == operation.destination {
+            bail!("source and destination are identical: {}", operation.source);
+        }
+        if !destinations.insert(operation.destination.clone()) {
+            bail!("duplicate destination in plan: {}", operation.destination);
+        }
+        validate_mutation_operation(&root_directory, operation)?;
+    }
+
+    let mut completed: Vec<MutationOperation> = Vec::new();
+    if execute {
+        for operation in &plan.operations {
+            if let Err(error) = move_mutation(&root_directory, operation) {
+                let rollback_errors = rollback_completed(&completed, |reverse| {
+                    move_mutation(&root_directory, reverse)
+                });
+                let rollback_status = if rollback_errors.is_empty() {
+                    "completed operations were rolled back".to_string()
+                } else {
+                    format!(
+                        "rollback incomplete; rollback errors: {}",
+                        rollback_errors.join(" | ")
+                    )
+                };
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to move {} to {}; {rollback_status}",
+                        operation.source, operation.destination,
+                    )
+                });
+            }
+            completed.push(operation.clone());
+        }
+    }
+    Ok(ApplyJournal {
+        schema_version: 1,
+        root: root.to_string_lossy().nfc().collect(),
+        executed: execute,
+        operation_count: plan.operations.len(),
+        completed,
+    })
+}
+
+/// Load a plan, apply it, and optionally write its journal atomically.
+pub fn apply_plan_file(
+    plan_path: &Path,
+    journal_path: Option<&Path>,
+    execute: bool,
+) -> Result<String> {
+    let plan: MutationPlan = serde_json::from_reader(
+        File::open(plan_path)
+            .with_context(|| format!("cannot open plan {}", plan_path.display()))?,
+    )
+    .with_context(|| format!("invalid plan JSON {}", plan_path.display()))?;
+    let journal = apply_plan(&plan, execute)?;
+    let payload = pretty_json(&journal);
+    if let Some(path) = journal_path {
+        atomic_write(path, payload.as_bytes())?;
+    }
+    Ok(payload)
+}
+
+#[cfg(unix)]
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let directory = open_directory_path_no_follow(parent, true).with_context(|| {
+        format!(
+            "cannot securely create/open atomic output parent {}",
+            parent.display()
+        )
+    })?;
+    let metadata = directory.metadata()?;
+    let effective_uid = unsafe { libc::geteuid() };
+    if metadata.uid() != effective_uid && metadata.uid() != 0 {
+        bail!(
+            "atomic output parent has an unapproved owner: {}",
+            parent.display()
+        );
+    }
+    if metadata.mode() & 0o022 != 0 {
+        bail!(
+            "atomic output parent is group/world-writable: {}",
+            parent.display()
+        );
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("output path has no file name"))?;
+    let destination_name = component_name(file_name, path)?;
+    let sequence = ATOMIC_WRITE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+    let temporary_name_text = format!(
+        ".{}.tmp-{}-{sequence}",
+        file_name.to_string_lossy(),
+        std::process::id()
+    );
+    let temporary_name = component_name(std::ffi::OsStr::new(&temporary_name_text), path)?;
+    let descriptor = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            temporary_name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "cannot create private atomic output beneath {}",
+                parent.display()
+            )
+        });
+    }
+    let mut file = unsafe { File::from_raw_fd(descriptor) };
+    let write_result = (|| -> Result<()> {
+        file.write_all(contents)?;
+        file.sync_all()?;
+        let renamed = unsafe {
+            libc::renameat(
+                directory.as_raw_fd(),
+                temporary_name.as_ptr(),
+                directory.as_raw_fd(),
+                destination_name.as_ptr(),
+            )
+        };
+        if renamed != 0 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("cannot atomically replace {}", path.display()));
+        }
+        directory.sync_all()?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = unsafe { libc::unlinkat(directory.as_raw_fd(), temporary_name.as_ptr(), 0) };
+    }
+    write_result
+}
+
+#[cfg(not(unix))]
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("output path has no file name"))?
+        .to_string_lossy();
+    let sequence = ATOMIC_WRITE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+    let temporary = parent.join(format!(
+        ".{file_name}.tmp-{}-{sequence}",
+        std::process::id()
+    ));
+    let write_result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+fn pretty_json<T: Serialize>(value: &T) -> String {
+    serde_json::to_string_pretty(value)
+        .expect("serializing the fixed Codec Carver schema cannot fail")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn temporary_directory(label: &str) -> PathBuf {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "codec-carver-core-{label}-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn record(
+        path: &str,
+        kind: FileKind,
+        sha256: Option<&str>,
+        recorded_at: Option<&str>,
+    ) -> FileRecord {
+        FileRecord {
+            path: path.to_string(),
+            kind,
+            extension: match kind {
+                FileKind::Audio => "wav",
+                FileKind::Tmk => "tmk",
+            }
+            .to_string(),
+            size_bytes: 5,
+            materialized: true,
+            sha256: sha256.map(ToOwned::to_owned),
+            recorded_at: recorded_at.map(ToOwned::to_owned),
+            time_source: Some(TimeSource::CompactFilename),
+            location: None,
+            tmk_path: None,
+            tmk_marker_count: None,
+            tmk_last_marker_seconds: None,
+            tmk_markers_seconds: None,
+            error: None,
+        }
+    }
+
+    fn noop_evict(_path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn synthetic_evict(_path: &Path) -> Result<()> {
+        bail!("synthetic eviction")
+    }
+
+    #[test]
+    fn parses_sony_tmk_markers_as_minute_offsets() {
+        let values = parse_tmk_markers(b"\xef\xbb\xbf[00005:00.01]\r\n[00075:02.50]\r\n");
+        assert_eq!(values, vec![300.01, 4502.5]);
+    }
+
+    #[test]
+    fn infers_location_from_multiline_and_plain_names() {
+        assert_eq!(
+            infer_location(
+                "2024-07-29T13:58:35+09:00 대한민국\n서울특별시\n당산동5가 9-11\n07213 37.5 126.8.m4a"
+            ),
+            Some("당산동5가 9-11".to_string())
+        );
+        assert_eq!(
+            infer_location("양평동4가 8.m4a"),
+            Some("양평동4가".to_string())
+        );
+        assert_eq!(infer_location("251125_0905_02.wav"), None);
+        assert_eq!(
+            infer_location("배동오 에스에이씨(주)_260630_2121.m4a"),
+            None
+        );
+    }
+
+    #[test]
+    fn normalizes_copy_suffix_for_sidecars() {
+        assert_eq!(
+            sidecar_key(Path::new("FOLDER01/231018_1018(1).wav"), true),
+            "FOLDER01\u{0}231018_1018"
+        );
+        assert_eq!(sidecar_key(Path::new(""), false), "\0");
+    }
+
+    #[test]
+    fn rejects_unsafe_mutation_paths() {
+        assert!(validate_relative_path("recordings/a.wav").is_ok());
+        assert!(validate_relative_path("../escape.wav").is_err());
+        assert!(validate_relative_path("/absolute.wav").is_err());
+        assert!(validate_relative_path("").is_err());
+    }
+
+    #[test]
+    fn inspects_one_file_without_a_library_rescan() {
+        let root =
+            std::env::temp_dir().join(format!("codec-carver-core-inspect-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("240102_0304.wav"), b"audio").unwrap();
+        let record = inspect_relative(&root, Path::new("240102_0304.wav")).unwrap();
+        assert_eq!(record.kind, FileKind::Audio);
+        assert_eq!(
+            record.sha256.as_deref(),
+            Some("6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b")
+        );
+        assert!(
+            record
+                .recorded_at
+                .as_deref()
+                .unwrap()
+                .starts_with("2024-01-02T03:04")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_library_open_rejects_symlink_components() {
+        use std::os::unix::fs::symlink;
+
+        let base = temporary_directory("secure-open-symlinks");
+        let root = base.join("library");
+        let staging = base.join("staging");
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("audio.wav"), b"trusted").unwrap();
+        symlink(target.join("audio.wav"), root.join("linked.wav")).unwrap();
+        symlink(&target, root.join("linked-directory")).unwrap();
+
+        assert!(open_regular_beneath(&root, Path::new("linked.wav")).is_err());
+        assert!(open_regular_beneath(&root, Path::new("linked-directory/audio.wav")).is_err());
+        assert!(open_regular_beneath(&root, Path::new("target")).is_err());
+        assert!(inspect_relative(&root, Path::new("linked.wav")).is_err());
+        assert!(stage_relative(&root, Path::new("linked.wav"), &staging).is_err());
+        assert!(!staging.join("linked.wav.partial").exists());
+        fs::remove_dir(&staging).unwrap();
+        symlink(&target, &staging).unwrap();
+        let staging_error = stage_relative(&root, Path::new("target/audio.wav"), &staging)
+            .unwrap_err()
+            .to_string();
+        assert!(staging_error.contains("cannot securely open directory component"));
+
+        let dataless = PendingFile {
+            absolute_path: root.join("dataless.wav"),
+            relative_path: "dataless.wav".to_string(),
+            kind: FileKind::Audio,
+            extension: "wav".to_string(),
+            size_bytes: 10,
+            materialized: false,
+            recorded_at: None,
+            time_source: None,
+            location: None,
+        };
+        let record = inspect_pending_file(&root, Path::new("dataless.wav"), dataless).unwrap();
+        assert!(!record.materialized);
+        assert!(record.error.unwrap().contains("dataless placeholder"));
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn native_eviction_validates_paths_and_serializes_results() {
+        let root = temporary_directory("evict");
+        let source = root.join("240102_0304.wav");
+        fs::write(&source, b"audio").unwrap();
+        let result = evict_relative_with(&root, Path::new("240102_0304.wav"), noop_evict).unwrap();
+        assert_eq!(result.path, "240102_0304.wav");
+        assert!(result.evicted);
+        assert!(
+            evict_result_to_json(Ok(result))
+                .unwrap()
+                .contains("\"evicted\": true")
+        );
+        assert!(evict_result_to_json(Err(anyhow!("synthetic eviction"))).is_err());
+        assert!(evict_relative_with(&root, Path::new("240102_0304.wav"), synthetic_evict).is_err());
+        assert!(evict_relative_with(&root, Path::new("../escape.wav"), noop_evict).is_err());
+        assert!(evict_relative_with(&root, Path::new("missing.wav"), noop_evict).is_err());
+        fs::write(root.join("unsupported.txt"), b"text").unwrap();
+        assert!(evict_relative_with(&root, Path::new("unsupported.txt"), noop_evict).is_err());
+        let outside = temporary_directory("evict-outside");
+        fs::write(outside.join("outside.wav"), b"outside").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.join("outside.wav"), root.join("escape.wav"))
+                .unwrap();
+            assert!(evict_relative_with(&root, Path::new("escape.wav"), noop_evict).is_err());
+        }
+        assert!(evict_relative(&root.join("missing-root"), Path::new("240102_0304.wav")).is_err());
+        assert!(evict_relative(&root, Path::new("missing.wav")).is_err());
+        assert!(evict_relative(&root, Path::new("unsupported.txt")).is_err());
+        assert!(evict_relative(&root, Path::new("240102_0304.wav")).is_err());
+        assert!(evict_relative_to_json(&root, Path::new("240102_0304.wav")).is_err());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn stages_and_hashes_one_file_in_a_single_stream() {
+        let base = temporary_directory("stage");
+        let root = base.join("library");
+        let staging = base.join("staging");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("240102_0304.wav"), b"audio").unwrap();
+        let result = stage_relative(&root, Path::new("240102_0304.wav"), &staging).unwrap();
+        assert_eq!(
+            result.record.sha256.as_deref(),
+            Some("6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b")
+        );
+        assert_eq!(fs::read(&result.staged_path).unwrap(), b"audio");
+        let repeated = stage_relative(&root, Path::new("240102_0304.wav"), &staging).unwrap();
+        assert_eq!(repeated.staged_path, result.staged_path);
+
+        fs::write(&result.staged_path, b"corrupt").unwrap();
+        let corrupt_error = stage_relative(&root, Path::new("240102_0304.wav"), &staging)
+            .unwrap_err()
+            .to_string();
+        assert!(corrupt_error.contains("cached staged artifact SHA-256 mismatch"));
+        assert_eq!(fs::read(&result.staged_path).unwrap(), b"corrupt");
+        fs::remove_file(&result.staged_path).unwrap();
+        let repaired = stage_relative(&root, Path::new("240102_0304.wav"), &staging).unwrap();
+        assert_eq!(fs::read(&repaired.staged_path).unwrap(), b"audio");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt, symlink};
+
+            fs::remove_file(&repaired.staged_path).unwrap();
+            symlink(root.join("240102_0304.wav"), &repaired.staged_path).unwrap();
+            let linked_error = stage_relative(&root, Path::new("240102_0304.wav"), &staging)
+                .unwrap_err()
+                .to_string();
+            assert!(linked_error.contains("cached staged artifact is not a regular file"));
+            fs::remove_file(&repaired.staged_path).unwrap();
+
+            let linked_staging = base.join("linked-staging");
+            symlink(&staging, &linked_staging).unwrap();
+            assert!(
+                stage_relative(
+                    &root,
+                    Path::new("240102_0304.wav"),
+                    &linked_staging.join("nested")
+                )
+                .is_err()
+            );
+            fs::remove_file(&linked_staging).unwrap();
+
+            fs::set_permissions(&staging, fs::Permissions::from_mode(0o777)).unwrap();
+            assert!(stage_relative(&root, Path::new("240102_0304.wav"), &staging).is_err());
+            fs::set_permissions(&staging, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        fs::write(
+            root.join("240102_0304.tmk"),
+            b"[00000:01.25]\r\n[00001:02.50]\r\n",
+        )
+        .unwrap();
+        let tmk = stage_relative_to_json(&root, Path::new("240102_0304.tmk"), &staging).unwrap();
+        let tmk: StageResult = serde_json::from_str(&tmk).unwrap();
+        assert_eq!(tmk.record.tmk_marker_count, Some(2));
+        assert_eq!(tmk.record.tmk_last_marker_seconds, Some(62.5));
+        assert_eq!(tmk.record.tmk_markers_seconds, Some(vec![1.25, 62.5]));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn incomplete_stage_size_is_not_accepted_as_a_complete_source() {
+        let base = temporary_directory("incomplete-stage");
+        let partial = base.join("placeholder.partial");
+        let source = Path::new("placeholder.wav");
+
+        fs::write(&partial, b"audio").unwrap();
+        ensure_complete_stage(source, &partial, 5).unwrap();
+
+        fs::write(&partial, b"").unwrap();
+        let error = ensure_complete_stage(source, &partial, 5).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("STAGE_SOURCE_NOT_READY copied 0 of 5 bytes from placeholder.wav")
+        );
+        assert!(!partial.exists());
+
+        let error = ensure_complete_stage(source, &partial, 5).unwrap_err();
+        assert!(error.to_string().contains("cannot stat staged partial"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn failed_stage_finalize_removes_the_partial_file() {
+        let base = temporary_directory("failed-stage-finalize");
+        let partial = base.join("placeholder.partial");
+        let staged_path = base.join("cached.wav");
+        fs::write(&partial, b"audio").unwrap();
+        fs::create_dir(&staged_path).unwrap();
+
+        let error = finalize_staged_partial(&partial, &staged_path).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot finalize staged artifact")
+        );
+        assert!(!partial.exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn inventories_hashes_correlates_and_serializes_a_library() {
+        let root = temporary_directory("inventory");
+        let folder = root.join("FOLDER01");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("240102_0304.wav"), b"audio").unwrap();
+        fs::write(folder.join("240102_0304(1).wav"), b"audio").unwrap();
+        fs::write(
+            folder.join("240102_0304.tmk"),
+            b"[00000:01.25]\r\n[00001:02.50]\r\n",
+        )
+        .unwrap();
+        fs::write(
+            folder.join("2024-01-03T04:05:06+09:00 양평동4가 8.m4a"),
+            b"other audio",
+        )
+        .unwrap();
+        fs::write(folder.join("readme.txt"), b"ignored").unwrap();
+        for excluded in [".git", ".codec-carver", "target", ".venv"] {
+            let directory = root.join(excluded);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("240101_0000.wav"), b"ignored").unwrap();
+        }
+
+        let manifest = inventory(&root, Some(2)).unwrap();
+        assert_eq!(manifest.audio_file_count, 3);
+        assert_eq!(manifest.tmk_file_count, 1);
+        assert_eq!(manifest.total_audio_bytes, 5 + 5 + 11);
+        assert_eq!(manifest.duplicate_groups.len(), 1);
+        assert_eq!(
+            manifest.duplicate_groups[0].canonical_path,
+            "FOLDER01/240102_0304.wav"
+        );
+        assert_eq!(
+            manifest.duplicate_groups[0].duplicate_paths,
+            ["FOLDER01/240102_0304(1).wav"]
+        );
+        assert!(manifest.earliest_recording_at.is_some());
+        assert!(
+            manifest
+                .files
+                .iter()
+                .filter(|record| record.kind == FileKind::Audio)
+                .all(
+                    |record| record.tmk_path.as_deref() == Some("FOLDER01/240102_0304.tmk")
+                        || record.path.contains("2024-01-03")
+                )
+        );
+        assert_eq!(manifest.dataless_file_count, 0);
+        assert!(manifest.errors.is_empty());
+
+        let output = root.join("result/inventory.json");
+        let payload = inventory_to_json(&root, Some(&output), None).unwrap();
+        assert_eq!(
+            serde_json::from_str::<InventoryManifest>(&payload)
+                .unwrap()
+                .audio_file_count,
+            3
+        );
+        assert!(output.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let outside = root.join("outside-state.json");
+            let linked_output = root.join("linked-state.json");
+            fs::write(&outside, b"sentinel").unwrap();
+            symlink(&outside, &linked_output).unwrap();
+            atomic_write(&linked_output, b"safe replacement").unwrap();
+            assert_eq!(fs::read(&outside).unwrap(), b"sentinel");
+            assert_eq!(fs::read(&linked_output).unwrap(), b"safe replacement");
+            assert!(
+                !fs::symlink_metadata(&linked_output)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+
+            let outside_parent = root.join("outside-parent");
+            let linked_parent = root.join("linked-parent");
+            fs::create_dir(&outside_parent).unwrap();
+            symlink(&outside_parent, &linked_parent).unwrap();
+            assert!(atomic_write(&linked_parent.join("escaped.json"), b"blocked").is_err());
+            assert!(!outside_parent.join("escaped.json").exists());
+
+            let nested_outside = outside_parent.join("nested");
+            fs::create_dir(&nested_outside).unwrap();
+            assert!(
+                atomic_write(
+                    &linked_parent.join("nested/ancestor-escaped.json"),
+                    b"blocked"
+                )
+                .is_err()
+            );
+            assert!(!nested_outside.join("ancestor-escaped.json").exists());
+        }
+        assert!(atomic_write(&root, b"cannot replace a directory").is_err());
+        assert!(
+            inventory_to_json(&root, None, Some(1))
+                .unwrap()
+                .contains("audio_file_count")
+        );
+        let inspected =
+            inspect_relative_to_json(&root, Path::new("FOLDER01/240102_0304.tmk")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<FileRecord>(&inspected)
+                .unwrap()
+                .tmk_marker_count,
+            Some(2)
+        );
+        assert_eq!(
+            serde_json::from_str::<FileRecord>(&inspected)
+                .unwrap()
+                .tmk_markers_seconds,
+            Some(vec![1.25, 62.5])
+        );
+        assert!(default_hash_threads() >= 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inventory_and_inspection_errors_are_explicit() {
+        let root = temporary_directory("errors");
+        let mut errors = Vec::new();
+        assert_eq!(
+            record_error::<u8, _>(Err(io::Error::other("synthetic error")), &mut errors),
+            None
+        );
+        assert_eq!(errors, ["synthetic error"]);
+        assert_eq!(
+            record_error::<u8, _>(Err(anyhow!("synthetic anyhow error")), &mut errors),
+            None
+        );
+        let missing_walk_root = root.join("missing-walk-root");
+        let walk_error = WalkDir::new(&missing_walk_root)
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap_err();
+        assert!(record_error::<DirEntry, _>(Err(walk_error), &mut errors).is_none());
+        let regular_file = root.join("not-a-directory");
+        fs::write(&regular_file, b"file").unwrap();
+        assert!(inventory(&regular_file, Some(1)).is_err());
+        assert!(inventory(&root.join("missing"), Some(1)).is_err());
+
+        fs::write(root.join("unsupported.txt"), b"text").unwrap();
+        assert!(inspect_relative(&root.join("missing-root"), Path::new("a.wav")).is_err());
+        assert!(inspect_relative(&root, Path::new("unsupported.txt")).is_err());
+        assert!(inspect_relative(&root, Path::new("missing.wav")).is_err());
+        assert!(inspect_relative(&root, Path::new("../escape.wav")).is_err());
+        assert!(
+            stage_relative(
+                &root.join("missing-root"),
+                Path::new("a.wav"),
+                &root.join("stage")
+            )
+            .is_err()
+        );
+        assert!(stage_relative(&root, Path::new("missing.wav"), &root.join("stage")).is_err());
+        assert!(stage_relative(&root, Path::new("unsupported.txt"), &root.join("stage")).is_err());
+        assert!(stage_relative(&root, Path::new("/absolute.wav"), &root.join("stage")).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt, symlink};
+
+            let outside = temporary_directory("outside");
+            fs::write(outside.join("240102_0304.wav"), b"outside").unwrap();
+            symlink(outside.join("240102_0304.wav"), root.join("escape.wav")).unwrap();
+            assert!(
+                pending_file(
+                    &root,
+                    &root.join("escape.wav"),
+                    FileKind::Audio,
+                    "wav".to_string()
+                )
+                .is_err()
+            );
+            assert!(inspect_relative(&root, Path::new("escape.wav")).is_err());
+            assert!(stage_relative(&root, Path::new("escape.wav"), &root.join("stage")).is_err());
+
+            let unreadable = root.join("240102_0304.wav");
+            fs::write(&unreadable, b"audio").unwrap();
+            let original_permissions = fs::metadata(&unreadable).unwrap().permissions();
+            fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+            let pending =
+                pending_file(&root, &unreadable, FileKind::Audio, "wav".to_string()).unwrap();
+            assert!(process_file(&pending).error.is_some());
+            assert!(
+                stage_relative(&root, Path::new("240102_0304.wav"), &root.join("stage")).is_err()
+            );
+
+            let blocked = root.join("blocked");
+            fs::create_dir_all(&blocked).unwrap();
+            fs::write(blocked.join("240102_0304.wav"), b"blocked").unwrap();
+            let blocked_permissions = fs::metadata(&blocked).unwrap().permissions();
+            fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
+            let blocked_manifest = inventory(&root, Some(1)).unwrap();
+            fs::set_permissions(&blocked, blocked_permissions).unwrap();
+            assert!(!blocked_manifest.errors.is_empty());
+            fs::set_permissions(&unreadable, original_permissions).unwrap();
+
+            let staging_file = root.join("staging-file");
+            fs::write(&staging_file, b"not a directory").unwrap();
+            assert!(stage_relative(&root, Path::new("240102_0304.wav"), &staging_file).is_err());
+            fs::remove_dir_all(outside).unwrap();
+        }
+
+        assert!(
+            pending_file(
+                &root,
+                &root.join("missing.wav"),
+                FileKind::Audio,
+                "wav".to_string()
+            )
+            .is_err()
+        );
+
+        let synthetic_dataless = PendingFile {
+            absolute_path: root.join("dataless.wav"),
+            relative_path: "dataless.wav".to_string(),
+            kind: FileKind::Audio,
+            extension: "wav".to_string(),
+            size_bytes: 10,
+            materialized: false,
+            recorded_at: None,
+            time_source: None,
+            location: None,
+        };
+        let record = process_file(&synthetic_dataless);
+        let error = record.error.unwrap();
+        assert!(error.contains("dataless placeholder"));
+        assert!(error.contains("native macOS FileManager API"));
+        assert!(!error.contains("brctl download"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hashes_captures_and_time_inference_cover_fallbacks() {
+        let root = temporary_directory("helpers");
+        let audio = root.join("plain.wav");
+        fs::write(&audio, b"audio").unwrap();
+        let mut captured = Vec::new();
+        assert_eq!(
+            hash_file(&audio, Some(&mut captured)).unwrap(),
+            "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b"
+        );
+        assert_eq!(captured, b"audio");
+        assert!(hash_file(&root.join("missing.wav"), None).is_err());
+        let oversized_tmk = root.join("oversized.tmk");
+        fs::write(&oversized_tmk, vec![b'x'; MAX_TMK_CAPTURE_BYTES + 1]).unwrap();
+        let mut oversized_capture = Vec::new();
+        assert!(
+            hash_file(&oversized_tmk, Some(&mut oversized_capture))
+                .unwrap_err()
+                .to_string()
+                .contains("TMK metadata exceeds")
+        );
+
+        let copied = root.join("copied.wav");
+        let mut copied_bytes = Vec::new();
+        copy_and_hash_open_file(
+            File::open(&audio).unwrap(),
+            &copied,
+            Some(&mut copied_bytes),
+        )
+        .unwrap();
+        assert_eq!(copied_bytes, b"audio");
+        assert!(copy_and_hash_open_file(File::open(&audio).unwrap(), &copied, None).is_err());
+        assert!(copy_and_hash_open_file(File::open(&audio).unwrap(), &root, None).is_err());
+
+        let metadata = fs::metadata(&audio).unwrap();
+        assert_eq!(
+            infer_recorded_at(
+                "2024-01-02_03-04-05__회의__sha256-aaaaaaaaaaaa.wav",
+                &metadata
+            ),
+            (
+                Some(
+                    Local
+                        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+                        .earliest()
+                        .unwrap()
+                        .to_rfc3339()
+                ),
+                Some(TimeSource::StandardFilename)
+            )
+        );
+        let invalid_standard = infer_recorded_at(
+            "2024-13-99_25-99-99__회의__sha256-aaaaaaaaaaaa.wav",
+            &metadata,
+        );
+        assert!(invalid_standard.0.is_some());
+        assert_ne!(invalid_standard.1, Some(TimeSource::StandardFilename));
+        assert_eq!(
+            infer_recorded_at("2024-01-02T03:04:05+09:00.wav", &metadata).1,
+            Some(TimeSource::IsoFilename)
+        );
+        assert_eq!(
+            infer_recorded_at("240102_0304.wav", &metadata).1,
+            Some(TimeSource::CompactFilename)
+        );
+        assert!(infer_recorded_at("991332_9999.wav", &metadata).0.is_some());
+        assert!(infer_recorded_at("plain.wav", &metadata).0.is_some());
+        assert_eq!(earliest_local_rfc3339::<Local>(LocalResult::None), None);
+        assert!(!system_time_to_rfc3339(SystemTime::now()).is_empty());
+        assert_eq!(infer_location(""), None);
+        assert_eq!(
+            infer_location("2024-01-02_03-04-05__양평동4가-24-1__회의__sha256-aaaaaaaaaaaa.wav"),
+            Some("양평동4가-24-1".to_string())
+        );
+        assert_eq!(
+            infer_location("2024-01-02_03-04-05__양평동4가-회의__sha256-aaaaaaaaaaaa.wav"),
+            None
+        );
+        assert_eq!(
+            infer_location("2024-01-02_03-04-05____회의__sha256-aaaaaaaaaaaa.wav"),
+            None
+        );
+        assert_eq!(
+            infer_location("2024-01-02_03-04-05__양평동4가__회의__not-a-sha.wav"),
+            None
+        );
+        assert_eq!(
+            infer_location("강남로 12 (1).wav"),
+            Some("강남로 12".to_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_icloud_request_routes_only_dataless_paths() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let root = temporary_directory("native-icloud-request");
+        let local_file = root.join("local.wav");
+        fs::write(&local_file, b"audio").unwrap();
+
+        request_icloud_download_if_needed_with(&local_file, true, |_| {
+            panic!("materialized files must not contact the iCloud helper")
+        })
+        .unwrap();
+        let error = request_icloud_download_if_needed_with(&local_file, false, |path| {
+            assert_eq!(path, local_file);
+            Err(anyhow!("synthetic iCloud helper failure"))
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("synthetic iCloud helper failure")
+        );
+        let invalid = Path::new(OsStr::from_bytes(b"/tmp/invalid\0path"));
+        assert!(
+            request_icloud_download(invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot create a file URL")
+        );
+
+        let coordinated = root.join("coordinated.wav");
+        let mut captured = Vec::new();
+        let hash = copy_and_hash_staged_source(
+            &root,
+            Path::new("local.wav"),
+            &local_file,
+            &coordinated,
+            Some(&mut captured),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            hash,
+            "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b"
+        );
+        assert_eq!(captured, b"audio");
+        assert_eq!(fs::read(coordinated).unwrap(), b"audio");
+        assert!(
+            coordinated_copy_and_hash_file(
+                &root,
+                Path::new("local.wav"),
+                invalid,
+                &root.join("invalid.wav"),
+                None,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("cannot create a coordinated file URL")
+        );
+        let missing_error = coordinated_copy_and_hash_file(
+            &root,
+            Path::new("missing.wav"),
+            &root.join("missing.wav"),
+            &root.join("missing-copy.wav"),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            missing_error.to_string().contains("cannot securely open"),
+            "{missing_error}"
+        );
+        let coordination_error = finish_coordinated_copy(
+            &local_file,
+            Some("synthetic coordinator error".to_string()),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            coordination_error
+                .to_string()
+                .contains("cannot coordinate iCloud materialization")
+        );
+        let missing_result = finish_coordinated_copy(&local_file, None, None).unwrap_err();
+        assert!(
+            missing_result
+                .to_string()
+                .contains("coordinator returned without reading")
+        );
+        assert_eq!(
+            finish_coordinated_copy(&local_file, None, Some(Ok("hash".to_string()))).unwrap(),
+            "hash"
+        );
+        assert_eq!(
+            finish_coordinated_copy(
+                &local_file,
+                None,
+                Some(Err(anyhow!("synthetic copy error"))),
+            )
+            .unwrap_err()
+            .to_string(),
+            "synthetic copy error"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn duplicate_selection_uses_time_metadata_depth_and_path() {
+        let hash = "a".repeat(64);
+        let mut files = vec![
+            record(
+                "deep/path/240101_0000(1).wav",
+                FileKind::Audio,
+                Some(&hash),
+                Some("2024-01-01T00:00:00+09:00"),
+            ),
+            record(
+                "240101_0000.wav",
+                FileKind::Audio,
+                Some(&hash),
+                Some("2024-01-01T00:00:00+09:00"),
+            ),
+            record(
+                "later.wav",
+                FileKind::Audio,
+                Some(&hash),
+                Some("2024-02-01T00:00:00+09:00"),
+            ),
+            record("sidecar.tmk", FileKind::Tmk, Some(&hash), None),
+            record("unhashed.wav", FileKind::Audio, None, None),
+        ];
+        files[0].tmk_path = Some("deep/path/240101_0000.tmk".to_string());
+        files[0].location = Some("강남로 12".to_string());
+        let groups = find_duplicate_groups(&files);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].canonical_path, "240101_0000.wav");
+        assert_eq!(groups[0].duplicate_paths.len(), 2);
+        assert_eq!(
+            groups[0].earliest_recorded_at.as_deref(),
+            Some("2024-01-01T00:00:00+09:00")
+        );
+        assert_ne!(canonical_cmp(&files[0], &files[1]), Ordering::Equal);
+    }
+
+    #[test]
+    fn mutation_plans_validate_execute_serialize_and_rollback() {
+        let root = temporary_directory("mutations");
+        fs::write(root.join("a.wav"), b"a").unwrap();
+        fs::write(root.join("b.wav"), b"b").unwrap();
+        let a_hash = format!("{:x}", Sha256::digest(b"a"));
+        let b_hash = format!("{:x}", Sha256::digest(b"b"));
+        let plan = MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![
+                MutationOperation {
+                    action: MutationAction::Rename,
+                    source: "a.wav".to_string(),
+                    destination: "renamed/a.wav".to_string(),
+                    sha256: Some(a_hash),
+                },
+                MutationOperation {
+                    action: MutationAction::Quarantine,
+                    source: "b.wav".to_string(),
+                    destination: "quarantine/b.wav".to_string(),
+                    sha256: Some(b_hash),
+                },
+            ],
+        };
+        let dry_run = apply_plan(&plan, false).unwrap();
+        assert!(!dry_run.executed);
+        assert!(dry_run.completed.is_empty());
+        let executed = apply_plan(&plan, true).unwrap();
+        assert!(executed.executed);
+        assert_eq!(executed.completed.len(), 2);
+        assert!(root.join("renamed/a.wav").is_file());
+        assert!(root.join("quarantine/b.wav").is_file());
+
+        fs::write(root.join("c.wav"), b"c").unwrap();
+        let file_plan = MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![MutationOperation {
+                action: MutationAction::Rename,
+                source: "c.wav".to_string(),
+                destination: "d.wav".to_string(),
+                sha256: Some(format!("{:x}", Sha256::digest(b"c"))),
+            }],
+        };
+        let plan_path = root.join("plan.json");
+        fs::write(&plan_path, serde_json::to_vec(&file_plan).unwrap()).unwrap();
+        let journal_path = root.join("journals/journal.json");
+        let payload = apply_plan_file(&plan_path, Some(&journal_path), false).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ApplyJournal>(&payload)
+                .unwrap()
+                .operation_count,
+            1
+        );
+        assert!(journal_path.is_file());
+        assert!(
+            apply_plan_file(&plan_path, None, false)
+                .unwrap()
+                .contains("operation_count")
+        );
+        assert!(apply_plan_file(&root.join("missing.json"), None, false).is_err());
+        fs::write(root.join("invalid.json"), b"not json").unwrap();
+        assert!(apply_plan_file(&root.join("invalid.json"), None, false).is_err());
+
+        fs::write(root.join("rollback.wav"), b"rollback").unwrap();
+        let rollback_hash = format!("{:x}", Sha256::digest(b"rollback"));
+        let rollback = MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![
+                MutationOperation {
+                    action: MutationAction::Rename,
+                    source: "rollback.wav".to_string(),
+                    destination: "first.wav".to_string(),
+                    sha256: Some(rollback_hash.clone()),
+                },
+                MutationOperation {
+                    action: MutationAction::Rename,
+                    source: "rollback.wav".to_string(),
+                    destination: "second.wav".to_string(),
+                    sha256: Some(rollback_hash),
+                },
+            ],
+        };
+        let error = apply_plan(&rollback, true).unwrap_err().to_string();
+        assert!(error.contains("rolled back"));
+        assert!(root.join("rollback.wav").is_file());
+        assert!(!root.join("first.wav").exists());
+
+        let synthetic_rollback = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "destination.wav".to_string(),
+            sha256: Some("a".repeat(64)),
+        };
+        let rollback_errors = rollback_completed(&[synthetic_rollback], |_| {
+            Err(anyhow!("synthetic rollback failure"))
+        });
+        assert_eq!(rollback_errors.len(), 1);
+        assert!(rollback_errors[0].contains("synthetic rollback failure"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mutation_plan_rejections_are_complete() {
+        let root = temporary_directory("plan-errors");
+        fs::write(root.join("source.wav"), b"source").unwrap();
+        fs::write(root.join("occupied.wav"), b"occupied").unwrap();
+        let make_plan = |schema_version, operations| MutationPlan {
+            schema_version,
+            root: root.to_string_lossy().to_string(),
+            operations,
+        };
+        let operation = |source: &str, destination: &str| MutationOperation {
+            action: MutationAction::Rename,
+            source: source.to_string(),
+            destination: destination.to_string(),
+            sha256: Some(format!("{:x}", Sha256::digest(b"source"))),
+        };
+
+        assert!(apply_plan(&make_plan(2, vec![]), false).is_err());
+        assert!(
+            apply_plan(
+                &MutationPlan {
+                    schema_version: 1,
+                    root: root.join("missing").to_string_lossy().to_string(),
+                    operations: vec![]
+                },
+                false
+            )
+            .is_err()
+        );
+        let hashless = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "hashless.wav".to_string(),
+            sha256: None,
+        };
+        assert!(apply_plan(&make_plan(1, vec![hashless]), false).is_err());
+        let invalid_hash = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "invalid-hash.wav".to_string(),
+            sha256: Some("not-a-sha256".to_string()),
+        };
+        assert!(apply_plan(&make_plan(1, vec![invalid_hash]), false).is_err());
+        let wrong_hash = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "wrong-hash.wav".to_string(),
+            sha256: Some("0".repeat(64)),
+        };
+        assert!(apply_plan(&make_plan(1, vec![wrong_hash]), false).is_err());
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("source.wav", "source.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("../source.wav", "safe.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("source.wav", "../unsafe.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("missing.wav", "new.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(1, vec![operation("source.wav", "occupied.wav")]),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_plan(
+                &make_plan(
+                    1,
+                    vec![
+                        operation("source.wav", "same.wav"),
+                        operation("source.wav", "same.wav")
+                    ]
+                ),
+                false
+            )
+            .is_err()
+        );
+        let parent_is_file = make_plan(1, vec![operation("source.wav", "occupied.wav/child.wav")]);
+        assert!(apply_plan(&parent_is_file, true).is_err());
+        assert!(atomic_write(Path::new("/"), b"payload").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descriptor_mutations_reject_symlinks_and_resist_parent_swaps() {
+        use std::os::unix::fs::symlink;
+
+        let base = temporary_directory("mutation-descriptors");
+        let root = base.join("library");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(root.join("source.wav"), b"source").unwrap();
+        fs::write(outside.join("outside.wav"), b"outside").unwrap();
+        let source_hash = format!("{:x}", Sha256::digest(b"source"));
+        let plan_for = |source: &str, destination: &str| MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![MutationOperation {
+                action: MutationAction::Rename,
+                source: source.to_string(),
+                destination: destination.to_string(),
+                sha256: Some(source_hash.clone()),
+            }],
+        };
+
+        symlink(&outside, root.join("linked-parent")).unwrap();
+        assert!(apply_plan(&plan_for("source.wav", "linked-parent/stolen.wav"), false).is_err());
+        assert!(apply_plan(&plan_for("source.wav", "linked-parent/stolen.wav"), true).is_err());
+        assert!(!outside.join("stolen.wav").exists());
+
+        symlink(outside.join("outside.wav"), root.join("linked-source.wav")).unwrap();
+        assert!(apply_plan(&plan_for("linked-source.wav", "safe.wav"), false).is_err());
+
+        fs::create_dir(root.join("race-parent")).unwrap();
+        let detached = root.join("detached-parent");
+        let operation = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "race-parent/result.wav".to_string(),
+            sha256: Some(source_hash),
+        };
+        let root_directory = open_locked_root(&root).unwrap();
+        move_mutation_with(&root_directory, &operation, || {
+            fs::rename(root.join("race-parent"), &detached)?;
+            symlink(&outside, root.join("race-parent"))?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(detached.join("result.wav")).unwrap(), b"source");
+        assert!(!outside.join("result.wav").exists());
+
+        fs::write(root.join("new-source.wav"), b"new").unwrap();
+        fs::write(detached.join("occupied.wav"), b"occupied").unwrap();
+        let occupied = MutationOperation {
+            action: MutationAction::Rename,
+            source: "new-source.wav".to_string(),
+            destination: "detached-parent/occupied.wav".to_string(),
+            sha256: Some(format!("{:x}", Sha256::digest(b"new"))),
+        };
+        assert!(move_mutation(&root_directory, &occupied).is_err());
+        assert_eq!(fs::read(root.join("new-source.wav")).unwrap(), b"new");
+        assert_eq!(
+            fs::read(detached.join("occupied.wav")).unwrap(),
+            b"occupied"
+        );
+        drop(root_directory);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descriptor_mutation_failures_are_covered_and_fail_closed() {
+        let base = temporary_directory("mutation-descriptor-errors");
+        let root = base.join("library");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("source.wav"), b"source").unwrap();
+        fs::create_dir(root.join("source-directory.wav")).unwrap();
+        let root_directory = open_locked_root(&root).unwrap();
+
+        assert!(open_locked_root(&root.join("missing-root")).is_err());
+        assert!(
+            component_name(
+                std::ffi::OsStr::from_bytes(b"invalid\0component"),
+                Path::new("invalid-component.wav"),
+            )
+            .is_err()
+        );
+        assert!(
+            open_mutation_source(&root_directory, Path::new("missing-parent/source.wav")).is_err()
+        );
+
+        let unlocked = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&root)
+            .unwrap();
+        assert!(finish_root_lock(unlocked, &root, -1).is_err());
+
+        let created = CString::new("created").unwrap();
+        create_child_directory(&root_directory, &created, Path::new("created/child.wav")).unwrap();
+        create_child_directory(&root_directory, &created, Path::new("created/child.wav")).unwrap();
+        let regular_parent = File::open(root.join("source.wav")).unwrap();
+        let impossible = CString::new("child").unwrap();
+        assert!(
+            create_child_directory(&regular_parent, &impossible, Path::new("child/file.wav"))
+                .is_err()
+        );
+        assert!(entry_exists(&regular_parent, &impossible).is_err());
+        assert!(open_mutation_source(&root_directory, Path::new("source-directory.wav")).is_err());
+
+        let (source_parent, opened_source, source_name) =
+            open_mutation_source(&root_directory, Path::new("source.wav")).unwrap();
+        fs::rename(root.join("source.wav"), root.join("old-source.wav")).unwrap();
+        assert!(source_name_still_matches(&source_parent, &opened_source, &source_name).is_err());
+        fs::write(root.join("source.wav"), b"replacement").unwrap();
+        assert!(source_name_still_matches(&source_parent, &opened_source, &source_name).is_err());
+        drop(opened_source);
+        fs::remove_file(root.join("source.wav")).unwrap();
+        fs::rename(root.join("old-source.wav"), root.join("source.wav")).unwrap();
+
+        let hashless = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "hashless.wav".to_string(),
+            sha256: None,
+        };
+        assert!(move_mutation(&root_directory, &hashless).is_err());
+        let wrong_hash = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "wrong-hash.wav".to_string(),
+            sha256: Some("0".repeat(64)),
+        };
+        assert!(move_mutation(&root_directory, &wrong_hash).is_err());
+        let interrupted = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "interrupted/result.wav".to_string(),
+            sha256: Some(format!("{:x}", Sha256::digest(b"source"))),
+        };
+        assert!(
+            move_mutation_with(&root_directory, &interrupted, || bail!("synthetic race")).is_err()
+        );
+        assert!(root.join("source.wav").is_file());
+        assert!(!root.join("interrupted/result.wav").exists());
+
+        drop(root_directory);
+        fs::remove_dir_all(base).unwrap();
+    }
+}
