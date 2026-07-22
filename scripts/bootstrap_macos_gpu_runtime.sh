@@ -65,18 +65,16 @@ directory_metadata() {
 secure_directory_identity() {
     local -r path="$1"
     local -r label="$2"
-    local metadata device inode owner mode
+    local metadata device inode owner mode mode_value
     metadata="$(directory_metadata "$path")" || fail "$label metadata is unavailable"
     IFS=: read -r device inode owner mode <<< "$metadata"
     [[ "$device" =~ ^[0-9]+$ && "$inode" =~ ^[0-9]+$ ]] || \
         fail "$label identity is malformed"
     [[ "$owner" == "$EUID" ]] || fail "$label is not owned by this user"
     [[ "$mode" =~ ^[0-7]+$ ]] || fail "$label permissions are malformed"
-    case "$mode" in
-        *[2367][0-7] | *[0-7][2367])
-            fail "$label must not be group- or world-writable"
-            ;;
-    esac
+    mode_value=$((8#$mode))
+    (( (mode_value & 8#022) == 0 )) || \
+        fail "$label must not be group- or world-writable"
     printf '%s:%s\n' "$device" "$inode"
 }
 

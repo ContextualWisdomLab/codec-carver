@@ -19,7 +19,9 @@ LOCK_FILE = REPO_ROOT / "requirements-macos-mlx-lock.txt"
 
 class MacosGpuBootstrapTests(unittest.TestCase):
     @staticmethod
-    def _run_bootstrap(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def _run_bootstrap(
+        *args: str, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
         """Run the Bash program without depending on its executable mode bit."""
 
         return subprocess.run(
@@ -76,6 +78,45 @@ class MacosGpuBootstrapTests(unittest.TestCase):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, lock)
 
+    def test_mlx_extras_declare_the_direct_numpy_runtime_dependency(self) -> None:
+        project = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+        for extra in ("transcribe-mlx", "all"):
+            with self.subTest(extra=extra):
+                match = re.search(
+                    rf"(?ms)^{re.escape(extra)} = \[(.*?)^\]$",
+                    project,
+                )
+                self.assertIsNotNone(match)
+                assert match is not None
+                self.assertIn('"numpy==2.4.6"', match.group(1))
+
+    def test_permission_mask_checks_only_group_and_world_write_bits(self) -> None:
+        script = BOOTSTRAP.read_text(encoding="utf-8")
+
+        self.assertIn("mode_value=$((8#$mode))", script)
+        self.assertIn("(mode_value & 8#022) == 0", script)
+        for mode, expected_secure in (
+            ("700", True),
+            ("755", True),
+            ("40755", True),
+            ("722", False),
+            ("775", False),
+            ("40777", False),
+        ):
+            with self.subTest(mode=mode):
+                completed = subprocess.run(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        "mode_value=$((8#$1)); (( (mode_value & 8#022) == 0 ))",
+                        "permission-check",
+                        mode,
+                    ],
+                    check=False,
+                )
+                self.assertEqual(completed.returncode == 0, expected_secure)
+
     def test_hostile_path_cannot_hijack_bootstrap_help(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -87,7 +128,9 @@ class MacosGpuBootstrapTests(unittest.TestCase):
             )
             hostile_dirname.chmod(0o700)
             inherited_path = os.environ.get("PATH")
-            hostile_path = str(root) if not inherited_path else f"{root}:{inherited_path}"
+            hostile_path = (
+                str(root) if not inherited_path else f"{root}:{inherited_path}"
+            )
             completed = self._run_bootstrap(
                 "--help",
                 env={**os.environ, "PATH": hostile_path},
@@ -134,9 +177,7 @@ fi
 
             inherited_path = os.environ.get("PATH")
             test_path = (
-                str(fake_bin)
-                if not inherited_path
-                else f"{fake_bin}:{inherited_path}"
+                str(fake_bin) if not inherited_path else f"{fake_bin}:{inherited_path}"
             )
             env = {
                 **os.environ,
