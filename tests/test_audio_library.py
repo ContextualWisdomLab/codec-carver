@@ -2196,6 +2196,59 @@ class RustBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must be positive"):
                 backend.stage(root, "a.wav", staging, timeout_seconds=0)
 
+    def test_stage_reopens_a_stale_claim_after_placeholder_materializes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "core"
+            binary.write_bytes(b"")
+            source = root / "a.wav"
+            source.write_bytes(AUDIO_A_BYTES)
+            staging = root / "stage"
+            staging.mkdir()
+            backend = _test_backend(binary)
+            with (
+                patch("audio_library.is_icloud_dataless", return_value=True),
+                patch.object(
+                    RustBackend,
+                    "_run_stage_json",
+                    side_effect=[
+                        audio_library._StageSourceMaterializedForRetry(),
+                        {"ok": True},
+                    ],
+                ) as run,
+            ):
+                self.assertEqual(
+                    backend.stage(root, "a.wav", staging, timeout_seconds=34),
+                    {"ok": True},
+                )
+                restart_callback = run.call_args_list[0].kwargs[
+                    "restart_if_source_materialized"
+                ]
+                self.assertIsNotNone(restart_callback)
+                self.assertFalse(restart_callback())
+            self.assertEqual(run.call_count, 2)
+            self.assertIsNone(
+                run.call_args_list[1].kwargs["restart_if_source_materialized"]
+            )
+
+            process = Mock(pid=76, returncode=None)
+            process.poll.return_value = 0
+            process.communicate.side_effect = [
+                subprocess.TimeoutExpired(["core", "stage"], 1),
+                ("", ""),
+            ]
+            with (
+                patch("audio_library.subprocess.Popen", return_value=process),
+                self.assertRaises(audio_library._StageSourceMaterializedForRetry),
+            ):
+                RustBackend._run_stage_json(
+                    ["core", "stage"],
+                    staging,
+                    stall_timeout_seconds=1,
+                    restart_if_source_materialized=lambda: True,
+                )
+            process.kill.assert_called_once()
+
     def test_stage_stall_cleanup_errors_and_invalid_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             staging = Path(tmp)

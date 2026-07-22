@@ -684,6 +684,10 @@ class StageTimeoutError(subprocess.TimeoutExpired):
         }
 
 
+class _StageSourceMaterializedForRetry(RuntimeError):
+    """Signal that a stale File Provider coordination claim should be reopened."""
+
+
 def failure_entry(path: str, exc: Exception) -> dict[str, Any]:
     """Preserve a readable error plus structured fields for known failures."""
 
@@ -871,6 +875,16 @@ class RustBackend:
             str(staging_dir),
         ]
         command = self._bound_command(command)
+        source_path = Path(root) / relative_path
+
+        def source_has_materialized() -> bool:
+            """Return true once File Provider has replaced the placeholder."""
+
+            return not is_icloud_dataless(source_path)
+
+        restart_if_source_materialized: Callable[[], bool] | None = None
+        if is_icloud_dataless(source_path):
+            restart_if_source_materialized = source_has_materialized
         started = time.monotonic()
         deadline = started + total_timeout_seconds
         last_progress = started
@@ -891,7 +905,12 @@ class RustBackend:
                     command,
                     staging_dir,
                     stall_timeout_seconds=remaining,
+                    restart_if_source_materialized=restart_if_source_materialized,
                 )
+            except _StageSourceMaterializedForRetry:
+                restart_if_source_materialized = None
+                last_progress = time.monotonic()
+                continue
             except subprocess.TimeoutExpired as exc:
                 raise StageTimeoutError(
                     command,
@@ -957,6 +976,7 @@ class RustBackend:
         staging_dir: Path,
         *,
         stall_timeout_seconds: float,
+        restart_if_source_materialized: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """Decode a stage response while resetting its timeout on byte progress."""
 
@@ -995,6 +1015,14 @@ class RustBackend:
                     if current_sizes != observed_sizes:
                         observed_sizes = current_sizes
                         last_activity = now
+                    if (
+                        restart_if_source_materialized is not None
+                        and not observed_sizes
+                        and restart_if_source_materialized()
+                    ):
+                        process.kill()
+                        process.communicate()
+                        raise _StageSourceMaterializedForRetry
                     if now - last_activity < stall_timeout_seconds:
                         continue
                     process.kill()
