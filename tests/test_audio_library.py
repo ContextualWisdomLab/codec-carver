@@ -2192,6 +2192,15 @@ class RustBackendTests(unittest.TestCase):
                     ),
                 },
             )
+            text_backend_failure = subprocess.CalledProcessError(
+                3, ["core", "stage"], stderr="plain text diagnostic"
+            )
+            self.assertEqual(
+                audio_library.failure_entry("text.wav", text_backend_failure)[
+                    "backend_stderr"
+                ],
+                "plain text diagnostic",
+            )
 
             with self.assertRaisesRegex(ValueError, "must be positive"):
                 backend.stage(root, "a.wav", staging, timeout_seconds=0)
@@ -2645,7 +2654,7 @@ class GpuTranscriberTests(unittest.TestCase):
                     {"start": 2, "end": 3, "text": "둘째"},
                 ],
             },
-            {"text": "셋째", "language": "ko", "segments": []},
+            {"text": "", "language": "ko", "segments": []},
         ]
         decoded = [object(), object(), object()]
         with (
@@ -2693,7 +2702,7 @@ class GpuTranscriberTests(unittest.TestCase):
             ],
         )
         self.assertEqual(whisper.transcribe.call_count, 3)
-        self.assertEqual(result["text"], "첫째 둘째 셋째")
+        self.assertEqual(result["text"], "첫째 둘째")
         self.assertEqual(
             [(segment["start"], segment["end"]) for segment in result["segments"]],
             [(10.0, 11.0), (301.0, 302.0)],
@@ -3376,6 +3385,9 @@ class AudioLibraryTests(unittest.TestCase):
             (root / "old.wav").write_bytes(AUDIO_A_BYTES)
             (root / "old.tmk").write_bytes(TMK_BYTES)
             (root / "without.wav").write_bytes(AUDIO_B_BYTES)
+            no_transcript_bytes = b"no-transcript"
+            no_transcript_hash = hashlib.sha256(no_transcript_bytes).hexdigest()
+            (root / "no-transcript.wav").write_bytes(no_transcript_bytes)
             (root / "drop.tmk").write_bytes(TMK_BYTES)
             binary = root / "core"
             binary.write_bytes(b"")
@@ -3404,6 +3416,7 @@ class AudioLibraryTests(unittest.TestCase):
                         "without.wav",
                         HASH_B,
                         size_bytes=len(AUDIO_B_BYTES),
+                        location=None,
                         tmk_path="drop.tmk",
                         tmk_marker_count=1,
                         tmk_last_marker_seconds=300.0,
@@ -3415,6 +3428,12 @@ class AudioLibraryTests(unittest.TestCase):
                         "extension": "tmk",
                         "tmk_path": None,
                     },
+                    _record(
+                        "no-transcript.wav",
+                        no_transcript_hash,
+                        size_bytes=len(no_transcript_bytes),
+                        location=None,
+                    ),
                 ],
                 "duplicate_groups": [],
             }
@@ -3488,10 +3507,15 @@ class AudioLibraryTests(unittest.TestCase):
             )
             self.assertEqual(
                 [record["path"] for record in stored["files"]],
-                ["renamed.tmk", "renamed.wav", "without.wav"],
+                [
+                    "no-transcript.wav",
+                    "renamed.tmk",
+                    "renamed.wav",
+                    "without.wav",
+                ],
             )
             audio = next(
-                record for record in stored["files"] if record["kind"] == "audio"
+                record for record in stored["files"] if record["path"] == "renamed.wav"
             )
             self.assertEqual(audio["tmk_path"], "renamed.tmk")
             without = next(
@@ -3517,6 +3541,7 @@ class AudioLibraryTests(unittest.TestCase):
                 )
             )
             self.assertIsNone(without_transcript["tmk_path"])
+            self.assertNotIn("location", without_transcript)
             for field in audio_library.TMK_CHUNK_HINT_FIELDS:
                 self.assertNotIn(field, without_transcript)
 
@@ -7876,57 +7901,29 @@ class CliTests(unittest.TestCase):
             which.assert_not_called()
 
     def test_ffprobe_requires_an_approved_owner_controlled_path(self) -> None:
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            patch("audio_library.Path.is_file", return_value=False),
-        ):
+        with patch("audio_library.Path.is_file", return_value=False):
             self.assertIsNone(audio_library.trusted_ffprobe_binary())
-        with patch.dict(os.environ, {"CODEC_CARVER_FFPROBE": "relative/ffprobe"}):
-            with self.assertRaisesRegex(ValueError, "absolute path"):
-                audio_library.trusted_ffprobe_binary()
         with tempfile.TemporaryDirectory() as tmp:
             ffprobe = Path(tmp) / "ffprobe"
             ffprobe.write_bytes(b"")
             ffprobe.chmod(0o700)
-            with patch.dict(
-                os.environ, {"CODEC_CARVER_FFPROBE": str(ffprobe)}, clear=False
-            ):
-                with self.assertRaisesRegex(ValueError, "approved system path"):
-                    audio_library.trusted_ffprobe_binary()
-            with (
-                patch.object(audio_library, "APPROVED_FFPROBE_PATHS", (ffprobe,)),
-                patch.dict(
-                    os.environ, {"CODEC_CARVER_FFPROBE": str(ffprobe)}, clear=False
-                ),
-            ):
+            with patch.object(audio_library, "APPROVED_FFPROBE_PATHS", (ffprobe,)):
                 self.assertEqual(
                     audio_library.trusted_ffprobe_binary(), ffprobe.resolve()
                 )
             ffprobe.chmod(0o722)
             with (
                 patch.object(audio_library, "APPROVED_FFPROBE_PATHS", (ffprobe,)),
-                patch.dict(
-                    os.environ, {"CODEC_CARVER_FFPROBE": str(ffprobe)}, clear=False
-                ),
-                self.assertRaisesRegex(ValueError, "group/world-writable"),
             ):
-                audio_library.trusted_ffprobe_binary()
+                self.assertIsNone(audio_library.trusted_ffprobe_binary())
             good = Path(tmp) / "good-ffprobe"
             good.write_bytes(b"probe")
             good.chmod(0o700)
-            with (
-                patch.object(audio_library, "APPROVED_FFPROBE_PATHS", (ffprobe, good)),
-                patch.dict(os.environ, {}, clear=True),
+            with patch.object(
+                audio_library, "APPROVED_FFPROBE_PATHS", (ffprobe, good, good)
             ):
                 self.assertEqual(audio_library.trusted_ffprobe_binary(), good.resolve())
-            with (
-                patch.object(audio_library, "APPROVED_FFMPEG_PATHS", (good,)),
-                patch.dict(
-                    os.environ,
-                    {"CODEC_CARVER_FFMPEG": str(good)},
-                    clear=True,
-                ),
-            ):
+            with patch.object(audio_library, "APPROVED_FFMPEG_PATHS", (good,)):
                 self.assertEqual(audio_library.trusted_ffmpeg_binary(), good.resolve())
         with (
             patch("audio_library.trusted_ffprobe_binary", return_value=None),

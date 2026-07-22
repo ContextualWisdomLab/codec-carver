@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import chapters
 from chapters import Chapter, detect_chapters, to_ffmetadata, to_json
 
 
@@ -61,6 +62,18 @@ class DetectChaptersTest(unittest.TestCase):
             silences, total_duration=600.0, min_gap_seconds=3.0
         )
         self.assertEqual(len(chapters), 1)
+
+    def test_boundary_helper_drops_timeline_extremes(self) -> None:
+        """Defensive boundary validation rejects out-of-range midpoints."""
+
+        self.assertEqual(
+            chapters._boundaries_from_silences(
+                [(-10.0, 0.0), (600.0, 610.0)],
+                total_duration=600.0,
+                min_gap_seconds=3.0,
+            ),
+            [],
+        )
 
     def test_short_chapter_merges_into_previous(self) -> None:
         """A too-short trailing chapter merges into its predecessor."""

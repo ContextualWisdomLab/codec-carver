@@ -18,6 +18,18 @@ LOCK_FILE = REPO_ROOT / "requirements-macos-mlx-lock.txt"
 
 
 class MacosGpuBootstrapTests(unittest.TestCase):
+    @staticmethod
+    def _run_bootstrap(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        """Run the Bash program without depending on its executable mode bit."""
+
+        return subprocess.run(
+            ["/bin/bash", str(BOOTSTRAP), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
     def test_bootstrap_uses_only_hash_locked_remote_dependencies(self) -> None:
         script = BOOTSTRAP.read_text(encoding="utf-8")
 
@@ -74,12 +86,11 @@ class MacosGpuBootstrapTests(unittest.TestCase):
                 encoding="utf-8",
             )
             hostile_dirname.chmod(0o700)
-            completed = subprocess.run(
-                [str(BOOTSTRAP), "--help"],
-                check=False,
-                capture_output=True,
-                text=True,
-                env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}"},
+            inherited_path = os.environ.get("PATH")
+            hostile_path = str(root) if not inherited_path else f"{root}:{inherited_path}"
+            completed = self._run_bootstrap(
+                "--help",
+                env={**os.environ, "PATH": hostile_path},
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertFalse(marker.exists())
@@ -121,10 +132,16 @@ fi
                 executable.chmod(0o700)
             uv_sha256 = hashlib.sha256((fake_bin / "uv").read_bytes()).hexdigest()
 
+            inherited_path = os.environ.get("PATH")
+            test_path = (
+                str(fake_bin)
+                if not inherited_path
+                else f"{fake_bin}:{inherited_path}"
+            )
             env = {
                 **os.environ,
                 "HOME": str(home),
-                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "PATH": test_path,
             }
             uv_options = [
                 "--uv-bin",
@@ -133,11 +150,10 @@ fi
                 uv_sha256,
             ]
 
-            broad = subprocess.run(
-                [str(BOOTSTRAP), "--runtime-dir", f"{home}/", *uv_options],
-                check=False,
-                capture_output=True,
-                text=True,
+            broad = self._run_bootstrap(
+                "--runtime-dir",
+                f"{home}/",
+                *uv_options,
                 env=env,
             )
             self.assertNotEqual(broad.returncode, 0)
@@ -145,16 +161,10 @@ fi
 
             symlink_runtime = trusted_root / "linked"
             symlink_runtime.symlink_to(Path("/"), target_is_directory=True)
-            linked = subprocess.run(
-                [
-                    str(BOOTSTRAP),
-                    "--runtime-dir",
-                    str(symlink_runtime),
-                    *uv_options,
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
+            linked = self._run_bootstrap(
+                "--runtime-dir",
+                str(symlink_runtime),
+                *uv_options,
                 env=env,
             )
             self.assertNotEqual(linked.returncode, 0)
@@ -166,16 +176,10 @@ fi
                 "RACE_RUNTIME": str(raced_runtime),
                 "RACE_TARGET": str(escape),
             }
-            raced = subprocess.run(
-                [
-                    str(BOOTSTRAP),
-                    "--runtime-dir",
-                    str(raced_runtime),
-                    *uv_options,
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
+            raced = self._run_bootstrap(
+                "--runtime-dir",
+                str(raced_runtime),
+                *uv_options,
                 env=raced_env,
             )
             self.assertNotEqual(raced.returncode, 0)

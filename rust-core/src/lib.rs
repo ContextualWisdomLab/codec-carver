@@ -12,14 +12,14 @@ use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt as UnixMetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
-use std::os::macos::fs::MetadataExt;
+use std::os::macos::fs::MetadataExt as MacosMetadataExt;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
@@ -58,6 +58,8 @@ static ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "m4a", "mp3", "flac", "aac", "opus", "ogg", "wma"];
+const IO_BUFFER_BYTES: usize = 1024 * 1024;
+const MAX_TMK_CAPTURE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileRecord {
@@ -383,15 +385,50 @@ pub fn stage_relative(
     };
     ensure_complete_stage(&canonical_path, &partial, pending.size_bytes)?;
     let staged_path = canonical_staging.join(format!("{sha256}.{extension}"));
-    if staged_path.exists() {
-        if hash_file(&staged_path, None)? == sha256 {
+    match fs::symlink_metadata(&staged_path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() {
+                let _ = fs::remove_file(&partial);
+                bail!(
+                    "cached staged artifact is not a regular file: {}",
+                    staged_path.display()
+                );
+            }
+            let cached_hash = open_regular_no_follow(&staged_path)
+                .and_then(|cached| hash_open_file(cached, None));
+            let cached_hash = match cached_hash {
+                Ok(hash) => hash,
+                Err(error) => {
+                    let _ = fs::remove_file(&partial);
+                    return Err(error).with_context(|| {
+                        format!(
+                            "cannot verify cached staged artifact {}",
+                            staged_path.display()
+                        )
+                    });
+                }
+            };
+            if cached_hash != sha256 {
+                let _ = fs::remove_file(&partial);
+                bail!(
+                    "cached staged artifact SHA-256 mismatch: {}",
+                    staged_path.display()
+                );
+            }
             fs::remove_file(&partial)?;
-        } else {
-            fs::remove_file(&staged_path)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             fs::rename(&partial, &staged_path)?;
         }
-    } else {
-        fs::rename(&partial, &staged_path)?;
+        Err(error) => {
+            let _ = fs::remove_file(&partial);
+            return Err(error).with_context(|| {
+                format!(
+                    "cannot inspect cached staged artifact {}",
+                    staged_path.display()
+                )
+            });
+        }
     }
     let markers = tmk_bytes
         .as_deref()
@@ -496,12 +533,55 @@ fn record_error<T, E: Display>(
 }
 
 fn prepare_staging_directory(staging_dir: &Path) -> Result<PathBuf> {
-    fs::create_dir_all(staging_dir)
-        .with_context(|| format!("cannot create staging directory {}", staging_dir.display()))?;
-    staging_dir.canonicalize().context(format!(
-        "cannot resolve staging directory {}",
-        staging_dir.display()
-    ))
+    #[cfg(unix)]
+    {
+        let directory = open_directory_path_no_follow(staging_dir, true)?;
+        let opened = directory.metadata()?;
+        let effective_uid = unsafe { libc::geteuid() };
+        if opened.uid() != effective_uid && opened.uid() != 0 {
+            bail!(
+                "staging directory has an unapproved owner: {}",
+                staging_dir.display()
+            );
+        }
+        if opened.mode() & 0o022 != 0 {
+            bail!(
+                "staging directory is group/world-writable: {}",
+                staging_dir.display()
+            );
+        }
+        let canonical = staging_dir.canonicalize().context(format!(
+            "cannot resolve staging directory {}",
+            staging_dir.display()
+        ))?;
+        let resolved = fs::metadata(&canonical)?;
+        if opened.dev() != resolved.dev() || opened.ino() != resolved.ino() {
+            bail!(
+                "staging directory changed while being validated: {}",
+                staging_dir.display()
+            );
+        }
+        Ok(canonical)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(staging_dir).with_context(|| {
+            format!("cannot create staging directory {}", staging_dir.display())
+        })?;
+        let lexical = fs::symlink_metadata(staging_dir).with_context(|| {
+            format!("cannot inspect staging directory {}", staging_dir.display())
+        })?;
+        if lexical.file_type().is_symlink() || !lexical.is_dir() {
+            bail!(
+                "staging path is not a real directory: {}",
+                staging_dir.display()
+            );
+        }
+        staging_dir.canonicalize().context(format!(
+            "cannot resolve staging directory {}",
+            staging_dir.display()
+        ))
+    }
 }
 
 fn is_excluded_entry(entry: &DirEntry, root: &Path) -> bool {
@@ -570,10 +650,12 @@ fn process_file(pending: &PendingFile) -> FileRecord {
     let result = if pending.materialized {
         hash_file(&pending.absolute_path, tmk_bytes.as_mut())
     } else {
-        Err(anyhow!(concat!(
-            "iCloud dataless placeholder; run `stream-transcribe` to request it through ",
-            "the native macOS FileManager API, or use Finder 'Download Now', before hashing"
-        )))
+        Err(anyhow!(
+            "iCloud dataless placeholder; run `codec-carver-library <root> \
+             stream-transcribe --path {:?}` to request it through the native macOS \
+             FileManager API, or use Finder 'Download Now', before hashing",
+            pending.relative_path
+        ))
     };
     let (sha256, error) = match result {
         Ok(hash) => (Some(hash), None),
@@ -650,28 +732,45 @@ fn is_dataless(_metadata: &fs::Metadata) -> bool {
 }
 
 fn hash_file(path: &Path, capture: Option<&mut Vec<u8>>) -> Result<String> {
-    let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    let mut reader = BufReader::with_capacity(1024 * 1024, file);
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0_u8; 1024 * 1024];
-    let mut capture = capture;
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        if let Some(bytes) = capture.as_deref_mut() {
-            bytes.extend_from_slice(&buffer[..read]);
-        }
+    hash_open_file(open_regular_no_follow(path)?, capture)
+}
+
+fn open_regular_no_follow(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options
+        .open(path)
+        .with_context(|| format!("cannot securely open regular file {}", path.display()))?;
+    if !file.metadata()?.is_file() {
+        bail!("path is not a regular file: {}", path.display());
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(file)
+}
+
+fn capture_tmk_chunk(capture: &mut Option<&mut Vec<u8>>, chunk: &[u8]) -> Result<()> {
+    let Some(bytes) = capture.as_deref_mut() else {
+        return Ok(());
+    };
+    let captured = bytes
+        .len()
+        .checked_add(chunk.len())
+        .ok_or_else(|| anyhow!("TMK capture size overflow"))?;
+    if captured > MAX_TMK_CAPTURE_BYTES {
+        bail!(
+            "TMK metadata exceeds the {} byte capture limit",
+            MAX_TMK_CAPTURE_BYTES
+        );
+    }
+    bytes.extend_from_slice(chunk);
+    Ok(())
 }
 
 fn hash_open_file(input: File, capture: Option<&mut Vec<u8>>) -> Result<String> {
-    let mut reader = BufReader::with_capacity(1024 * 1024, input);
+    let mut reader = BufReader::with_capacity(IO_BUFFER_BYTES, input);
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut buffer = vec![0_u8; IO_BUFFER_BYTES];
     let mut capture = capture;
     loop {
         let read = reader.read(&mut buffer)?;
@@ -679,9 +778,7 @@ fn hash_open_file(input: File, capture: Option<&mut Vec<u8>>) -> Result<String> 
             break;
         }
         hasher.update(&buffer[..read]);
-        if let Some(bytes) = capture.as_deref_mut() {
-            bytes.extend_from_slice(&buffer[..read]);
-        }
+        capture_tmk_chunk(&mut capture, &buffer[..read])?;
     }
     Ok(format!("{:x}", hasher.finalize()))
 }
@@ -760,15 +857,19 @@ fn copy_and_hash_open_file(
     destination: &Path,
     capture: Option<&mut Vec<u8>>,
 ) -> Result<String> {
-    let output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut output_options = OpenOptions::new();
+    output_options.write(true).create_new(true);
+    #[cfg(unix)]
+    output_options
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .mode(0o600);
+    let output = output_options
         .open(destination)
         .with_context(|| format!("cannot create {}", destination.display()))?;
-    let mut reader = BufReader::with_capacity(1024 * 1024, input);
-    let mut writer = BufWriter::with_capacity(1024 * 1024, output);
+    let mut reader = BufReader::with_capacity(IO_BUFFER_BYTES, input);
+    let mut writer = BufWriter::with_capacity(IO_BUFFER_BYTES, output);
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut buffer = vec![0_u8; IO_BUFFER_BYTES];
     let mut capture = capture;
     loop {
         let read = reader.read(&mut buffer)?;
@@ -777,9 +878,7 @@ fn copy_and_hash_open_file(
         }
         writer.write_all(&buffer[..read])?;
         hasher.update(&buffer[..read]);
-        if let Some(bytes) = capture.as_deref_mut() {
-            bytes.extend_from_slice(&buffer[..read]);
-        }
+        capture_tmk_chunk(&mut capture, &buffer[..read])?;
     }
     writer.flush()?;
     writer.get_ref().sync_all()?;
@@ -809,6 +908,34 @@ fn copy_and_hash_staged_source(
 }
 
 #[cfg(target_os = "macos")]
+fn open_coordinated_regular_beneath(
+    root: &Path,
+    relative_path: &Path,
+    coordinated_url: &objc2_foundation::NSURL,
+) -> Result<File> {
+    let coordinated_path = coordinated_url.to_file_path().ok_or_else(|| {
+        anyhow!(
+            "iCloud coordinator returned a non-file URL for {}",
+            relative_path.display()
+        )
+    })?;
+    let coordinated_relative = coordinated_path.strip_prefix(root).with_context(|| {
+        format!(
+            "iCloud coordinated URL escaped library root: {}",
+            coordinated_path.display()
+        )
+    })?;
+    if coordinated_relative != relative_path {
+        bail!(
+            "iCloud coordinated URL changed the requested library path: expected {}, got {}",
+            relative_path.display(),
+            coordinated_relative.display()
+        );
+    }
+    open_regular_beneath(root, coordinated_relative)
+}
+
+#[cfg(target_os = "macos")]
 fn coordinated_copy_and_hash_file(
     root: &Path,
     relative_path: &Path,
@@ -829,11 +956,15 @@ fn coordinated_copy_and_hash_file(
     let coordinator = NSFileCoordinator::new();
     let result = RefCell::new(None);
     let capture = RefCell::new(capture);
-    let reader = StackBlock::new(|_coordinated_url| {
+    let reader = StackBlock::new(|coordinated_url: std::ptr::NonNull<NSURL>| {
         let capture = capture.borrow_mut().take();
-        result.replace(Some(open_regular_beneath(root, relative_path).and_then(
-            |input| copy_and_hash_open_file(input, destination, capture),
-        )));
+        // SAFETY: NSFileCoordinator's accessor contract supplies a live, non-null
+        // NSURL for the duration of this synchronous callback.
+        let coordinated_url = unsafe { coordinated_url.as_ref() };
+        result.replace(Some(
+            open_coordinated_regular_beneath(root, relative_path, coordinated_url)
+                .and_then(|input| copy_and_hash_open_file(input, destination, capture)),
+        ));
     });
     let mut coordination_error = None;
     coordinator.coordinateReadingItemAtURL_options_error_byAccessor(
@@ -902,47 +1033,45 @@ fn parse_tmk_markers(bytes: &[u8]) -> Vec<f64> {
 }
 
 fn correlate_tmk(files: &mut [FileRecord]) {
-    type TmkDetails = (Option<usize>, Option<f64>, Option<Vec<f64>>);
-
     let mut exact = HashMap::new();
     let mut normalized = HashMap::new();
-    for record in files.iter().filter(|record| record.kind == FileKind::Tmk) {
-        let path = Path::new(&record.path);
-        exact.insert(sidecar_key(path, false), record.path.clone());
-        normalized
-            .entry(sidecar_key(path, true))
-            .or_insert_with(|| record.path.clone());
-    }
-    let tmk_details: HashMap<String, TmkDetails> = files
+    for (index, record) in files
         .iter()
-        .filter(|record| record.kind == FileKind::Tmk)
-        .map(|record| {
-            (
-                record.path.clone(),
-                (
-                    record.tmk_marker_count,
-                    record.tmk_last_marker_seconds,
-                    record.tmk_markers_seconds.clone(),
-                ),
-            )
-        })
-        .collect();
-    for record in files
-        .iter_mut()
-        .filter(|record| record.kind == FileKind::Audio)
+        .enumerate()
+        .filter(|(_, record)| record.kind == FileKind::Tmk)
     {
         let path = Path::new(&record.path);
-        let matched = exact
-            .get(&sidecar_key(path, false))
-            .or_else(|| normalized.get(&sidecar_key(path, true)));
-        if let Some(tmk_path) = matched {
-            record.tmk_path = Some(tmk_path.clone());
-            if let Some((count, last, markers)) = tmk_details.get(tmk_path) {
-                record.tmk_marker_count = *count;
-                record.tmk_last_marker_seconds = *last;
-                record.tmk_markers_seconds = markers.clone();
-            }
-        }
+        exact.insert(sidecar_key(path, false), index);
+        normalized.entry(sidecar_key(path, true)).or_insert(index);
+    }
+    let matches: Vec<(usize, usize)> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| record.kind == FileKind::Audio)
+        .filter_map(|(audio_index, record)| {
+            let path = Path::new(&record.path);
+            exact
+                .get(&sidecar_key(path, false))
+                .or_else(|| normalized.get(&sidecar_key(path, true)))
+                .copied()
+                .map(|tmk_index| (audio_index, tmk_index))
+        })
+        .collect();
+    for (audio_index, tmk_index) in matches {
+        let (tmk_path, count, last, markers) = {
+            let tmk = &files[tmk_index];
+            (
+                tmk.path.clone(),
+                tmk.tmk_marker_count,
+                tmk.tmk_last_marker_seconds,
+                tmk.tmk_markers_seconds.clone(),
+            )
+        };
+        let audio = &mut files[audio_index];
+        audio.tmk_path = Some(tmk_path);
+        audio.tmk_marker_count = count;
+        audio.tmk_last_marker_seconds = last;
+        audio.tmk_markers_seconds = markers;
     }
 }
 
@@ -1186,6 +1315,45 @@ fn component_name(component: &std::ffi::OsStr, path: &Path) -> Result<CString> {
 }
 
 #[cfg(unix)]
+fn open_directory_path_no_follow(path: &Path, create: bool) -> Result<File> {
+    let anchor = if path.is_absolute() { "/" } else { "." };
+    let mut directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(anchor)
+        .with_context(|| {
+            format!(
+                "cannot open directory traversal anchor for {}",
+                path.display()
+            )
+        })?;
+    for component in path.components() {
+        let value = match component {
+            Component::RootDir | Component::CurDir => continue,
+            Component::Normal(value) => value,
+            Component::ParentDir | Component::Prefix(_) => {
+                bail!("unsafe directory traversal path: {}", path.display())
+            }
+        };
+        let name = component_name(value, path)?;
+        match open_child_directory(&directory, &name, path) {
+            Ok(opened) => directory = opened,
+            Err(error)
+                if create
+                    && error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|source| source.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                create_child_directory(&directory, &name, path)?;
+                directory = open_child_directory(&directory, &name, path)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
 fn open_child_directory(parent: &File, name: &CString, path: &Path) -> Result<File> {
     let descriptor = unsafe {
         libc::openat(
@@ -1195,8 +1363,12 @@ fn open_child_directory(parent: &File, name: &CString, path: &Path) -> Result<Fi
         )
     };
     if descriptor < 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("cannot securely open mutation parent {}", path.display()));
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "cannot securely open directory component of {}",
+                path.display()
+            )
+        });
     }
     Ok(unsafe { File::from_raw_fd(descriptor) })
 }
@@ -1208,7 +1380,10 @@ fn create_child_directory(parent: &File, name: &CString, path: &Path) -> Result<
         let source = std::io::Error::last_os_error();
         if source.kind() != std::io::ErrorKind::AlreadyExists {
             return Err(source).with_context(|| {
-                format!("cannot securely create mutation parent {}", path.display())
+                format!(
+                    "cannot securely create directory component of {}",
+                    path.display()
+                )
             });
         }
     }
@@ -1479,6 +1654,29 @@ fn move_mutation(root: &File, operation: &MutationOperation) -> Result<()> {
 }
 
 #[cfg(unix)]
+fn rollback_completed<F>(completed: &[MutationOperation], mut mover: F) -> Vec<String>
+where
+    F: FnMut(&MutationOperation) -> Result<()>,
+{
+    let mut errors = Vec::new();
+    for operation in completed.iter().rev() {
+        let reverse = MutationOperation {
+            action: operation.action,
+            source: operation.destination.clone(),
+            destination: operation.source.clone(),
+            sha256: operation.sha256.clone(),
+        };
+        if let Err(error) = mover(&reverse) {
+            errors.push(format!(
+                "{} -> {}: {error:#}",
+                reverse.source, reverse.destination
+            ));
+        }
+    }
+    errors
+}
+
+#[cfg(unix)]
 fn apply_plan_unix(plan: &MutationPlan, execute: bool, root: &Path) -> Result<ApplyJournal> {
     let root_directory = open_locked_root(root)?;
     let mut destinations = HashSet::new();
@@ -1494,24 +1692,25 @@ fn apply_plan_unix(plan: &MutationPlan, execute: bool, root: &Path) -> Result<Ap
         validate_mutation_operation(&root_directory, operation)?;
     }
 
-    let mut completed = Vec::new();
+    let mut completed: Vec<MutationOperation> = Vec::new();
     if execute {
         for operation in &plan.operations {
             if let Err(error) = move_mutation(&root_directory, operation) {
-                for rollback in completed.iter().rev() {
-                    let rollback: &MutationOperation = rollback;
-                    let reverse = MutationOperation {
-                        action: rollback.action,
-                        source: rollback.destination.clone(),
-                        destination: rollback.source.clone(),
-                        sha256: rollback.sha256.clone(),
-                    };
-                    let _ = move_mutation(&root_directory, &reverse);
-                }
+                let rollback_errors = rollback_completed(&completed, |reverse| {
+                    move_mutation(&root_directory, reverse)
+                });
+                let rollback_status = if rollback_errors.is_empty() {
+                    "completed operations were rolled back".to_string()
+                } else {
+                    format!(
+                        "rollback incomplete; rollback errors: {}",
+                        rollback_errors.join(" | ")
+                    )
+                };
                 return Err(error).with_context(|| {
                     format!(
-                        "failed to move {} to {}; completed operations were rolled back",
-                        operation.source, operation.destination
+                        "failed to move {} to {}; {rollback_status}",
+                        operation.source, operation.destination,
                     )
                 });
             }
@@ -1546,6 +1745,85 @@ pub fn apply_plan_file(
     Ok(payload)
 }
 
+#[cfg(unix)]
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let directory = open_directory_path_no_follow(parent, true).with_context(|| {
+        format!(
+            "cannot securely create/open atomic output parent {}",
+            parent.display()
+        )
+    })?;
+    let metadata = directory.metadata()?;
+    let effective_uid = unsafe { libc::geteuid() };
+    if metadata.uid() != effective_uid && metadata.uid() != 0 {
+        bail!(
+            "atomic output parent has an unapproved owner: {}",
+            parent.display()
+        );
+    }
+    if metadata.mode() & 0o022 != 0 {
+        bail!(
+            "atomic output parent is group/world-writable: {}",
+            parent.display()
+        );
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("output path has no file name"))?;
+    let destination_name = component_name(file_name, path)?;
+    let sequence = ATOMIC_WRITE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+    let temporary_name_text = format!(
+        ".{}.tmp-{}-{sequence}",
+        file_name.to_string_lossy(),
+        std::process::id()
+    );
+    let temporary_name = component_name(std::ffi::OsStr::new(&temporary_name_text), path)?;
+    let descriptor = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            temporary_name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "cannot create private atomic output beneath {}",
+                parent.display()
+            )
+        });
+    }
+    let mut file = unsafe { File::from_raw_fd(descriptor) };
+    let write_result = (|| -> Result<()> {
+        file.write_all(contents)?;
+        file.sync_all()?;
+        let renamed = unsafe {
+            libc::renameat(
+                directory.as_raw_fd(),
+                temporary_name.as_ptr(),
+                directory.as_raw_fd(),
+                destination_name.as_ptr(),
+            )
+        };
+        if renamed != 0 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("cannot atomically replace {}", path.display()));
+        }
+        directory.sync_all()?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = unsafe { libc::unlinkat(directory.as_raw_fd(), temporary_name.as_ptr(), 0) };
+    }
+    write_result
+}
+
+#[cfg(not(unix))]
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -1562,11 +1840,10 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         std::process::id()
     ));
     let write_result = (|| -> Result<()> {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = options.open(&temporary)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
         file.write_all(contents)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
@@ -1575,8 +1852,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     if write_result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    write_result?;
-    Ok(())
+    write_result
 }
 
 fn pretty_json<T: Serialize>(value: &T) -> String {
@@ -1594,7 +1870,7 @@ mod tests {
 
     fn temporary_directory(label: &str) -> PathBuf {
         let sequence = TEMP_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "codec-carver-core-{label}-{}-{sequence}",
             std::process::id()
         ));
@@ -1724,6 +2000,12 @@ mod tests {
         assert!(inspect_relative(&root, Path::new("linked.wav")).is_err());
         assert!(stage_relative(&root, Path::new("linked.wav"), &staging).is_err());
         assert!(!staging.join("linked.wav.partial").exists());
+        fs::remove_dir(&staging).unwrap();
+        symlink(&target, &staging).unwrap();
+        let staging_error = stage_relative(&root, Path::new("target/audio.wav"), &staging)
+            .unwrap_err()
+            .to_string();
+        assert!(staging_error.contains("cannot securely open directory component"));
 
         let dataless = PendingFile {
             absolute_path: root.join("dataless.wav"),
@@ -1796,8 +2078,43 @@ mod tests {
         assert_eq!(repeated.staged_path, result.staged_path);
 
         fs::write(&result.staged_path, b"corrupt").unwrap();
+        let corrupt_error = stage_relative(&root, Path::new("240102_0304.wav"), &staging)
+            .unwrap_err()
+            .to_string();
+        assert!(corrupt_error.contains("cached staged artifact SHA-256 mismatch"));
+        assert_eq!(fs::read(&result.staged_path).unwrap(), b"corrupt");
+        fs::remove_file(&result.staged_path).unwrap();
         let repaired = stage_relative(&root, Path::new("240102_0304.wav"), &staging).unwrap();
         assert_eq!(fs::read(&repaired.staged_path).unwrap(), b"audio");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt, symlink};
+
+            fs::remove_file(&repaired.staged_path).unwrap();
+            symlink(root.join("240102_0304.wav"), &repaired.staged_path).unwrap();
+            let linked_error = stage_relative(&root, Path::new("240102_0304.wav"), &staging)
+                .unwrap_err()
+                .to_string();
+            assert!(linked_error.contains("cached staged artifact is not a regular file"));
+            fs::remove_file(&repaired.staged_path).unwrap();
+
+            let linked_staging = base.join("linked-staging");
+            symlink(&staging, &linked_staging).unwrap();
+            assert!(
+                stage_relative(
+                    &root,
+                    Path::new("240102_0304.wav"),
+                    &linked_staging.join("nested")
+                )
+                .is_err()
+            );
+            fs::remove_file(&linked_staging).unwrap();
+
+            fs::set_permissions(&staging, fs::Permissions::from_mode(0o777)).unwrap();
+            assert!(stage_relative(&root, Path::new("240102_0304.wav"), &staging).is_err());
+            fs::set_permissions(&staging, fs::Permissions::from_mode(0o700)).unwrap();
+        }
 
         fs::write(
             root.join("240102_0304.tmk"),
@@ -1912,6 +2229,24 @@ mod tests {
                     .file_type()
                     .is_symlink()
             );
+
+            let outside_parent = root.join("outside-parent");
+            let linked_parent = root.join("linked-parent");
+            fs::create_dir(&outside_parent).unwrap();
+            symlink(&outside_parent, &linked_parent).unwrap();
+            assert!(atomic_write(&linked_parent.join("escaped.json"), b"blocked").is_err());
+            assert!(!outside_parent.join("escaped.json").exists());
+
+            let nested_outside = outside_parent.join("nested");
+            fs::create_dir(&nested_outside).unwrap();
+            assert!(
+                atomic_write(
+                    &linked_parent.join("nested/ancestor-escaped.json"),
+                    b"blocked"
+                )
+                .is_err()
+            );
+            assert!(!nested_outside.join("ancestor-escaped.json").exists());
         }
         assert!(atomic_write(&root, b"cannot replace a directory").is_err());
         assert!(
@@ -2057,6 +2392,15 @@ mod tests {
         );
         assert_eq!(captured, b"audio");
         assert!(hash_file(&root.join("missing.wav"), None).is_err());
+        let oversized_tmk = root.join("oversized.tmk");
+        fs::write(&oversized_tmk, vec![b'x'; MAX_TMK_CAPTURE_BYTES + 1]).unwrap();
+        let mut oversized_capture = Vec::new();
+        assert!(
+            hash_file(&oversized_tmk, Some(&mut oversized_capture))
+                .unwrap_err()
+                .to_string()
+                .contains("TMK metadata exceeds")
+        );
 
         let copied = root.join("copied.wav");
         let mut copied_bytes = Vec::new();
@@ -2362,6 +2706,18 @@ mod tests {
         assert!(error.contains("rolled back"));
         assert!(root.join("rollback.wav").is_file());
         assert!(!root.join("first.wav").exists());
+
+        let synthetic_rollback = MutationOperation {
+            action: MutationAction::Rename,
+            source: "source.wav".to_string(),
+            destination: "destination.wav".to_string(),
+            sha256: Some("a".repeat(64)),
+        };
+        let rollback_errors = rollback_completed(&[synthetic_rollback], |_| {
+            Err(anyhow!("synthetic rollback failure"))
+        });
+        assert_eq!(rollback_errors.len(), 1);
+        assert!(rollback_errors[0].contains("synthetic rollback failure"));
         fs::remove_dir_all(root).unwrap();
     }
 

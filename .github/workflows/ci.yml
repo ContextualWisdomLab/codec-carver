@@ -41,3 +41,19 @@ jobs:
 
       - name: Verify console entry point
         run: codec-carver --help
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Report Rust toolchain
+        run: |
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path rust-core/Cargo.toml -- --check
+
+      - name: Test Rust backend
+        run: cargo test --locked --all-targets --manifest-path rust-core/Cargo.toml

@@ -147,8 +147,8 @@ preferred interface for recording curation.
   a sealed owner-only execution inode and binds every Rust launch to that
   independent snapshot, so a later source-path replacement cannot redirect
   execution. `ffprobe` and MLX decoding `ffmpeg` come only from fixed approved
-  system roots; their environment variables can select but not extend those
-  allowlists. MLX receives the decoded waveform instead of a path, preventing
+  system roots; ambient environment variables cannot change those allowlists.
+  MLX receives the decoded waveform instead of a path, preventing
   its dependency from launching a bare PATH-resolved ffmpeg. Rust, ffprobe, and
   ffmpeg subprocesses receive a minimal environment without dynamic-loader
   injection variables. MLX-VLM preflight runs Python in isolated mode from the

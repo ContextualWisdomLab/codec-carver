@@ -1376,31 +1376,15 @@ class GpuTranscriber:
         }
 
 
-def trusted_media_binary(
-    environment_key: str, approved_paths: tuple[Path, ...]
-) -> Path | None:
+def trusted_media_binary(approved_paths: tuple[Path, ...]) -> Path | None:
     """Resolve one media tool only from fixed, owner-controlled system paths."""
 
-    configured = os.environ.get(environment_key)
-    configured_candidate: Path | None = None
-    candidates: list[Path] = []
-    if configured:
-        configured_path = Path(configured).expanduser()
-        if not configured_path.is_absolute():
-            raise ValueError(f"{environment_key} must be an absolute path")
-        if configured_path not in approved_paths:
-            raise ValueError(f"{environment_key} is not an approved system path")
-        configured_candidate = configured_path
-        candidates.append(configured_path)
-    candidates.extend(approved_paths)
-    for candidate in dict.fromkeys(candidates):
+    for candidate in dict.fromkeys(approved_paths):
         if not candidate.is_file():
             continue
         try:
             resolved, _digest = trusted_executable(candidate, allow_symlink=True)
         except (OSError, ValueError):
-            if configured_candidate == candidate:
-                raise
             continue
         return resolved
     return None
@@ -1409,13 +1393,13 @@ def trusted_media_binary(
 def trusted_ffprobe_binary() -> Path | None:
     """Resolve ffprobe only from fixed, owner-controlled system paths."""
 
-    return trusted_media_binary("CODEC_CARVER_FFPROBE", APPROVED_FFPROBE_PATHS)
+    return trusted_media_binary(APPROVED_FFPROBE_PATHS)
 
 
 def trusted_ffmpeg_binary() -> Path | None:
     """Resolve ffmpeg only from fixed, owner-controlled system paths."""
 
-    return trusted_media_binary("CODEC_CARVER_FFMPEG", APPROVED_FFMPEG_PATHS)
+    return trusted_media_binary(APPROVED_FFMPEG_PATHS)
 
 
 def audio_duration_seconds(

@@ -172,8 +172,8 @@ from a stable, no-follow source descriptor into an independent owner-only
 execution inode, seals its directory, and forces every Rust command to that
 SHA-256-pinned snapshot. Replacing the configured source path after validation
 therefore cannot change the bytes that execute. Duration probing uses only the
-approved fixed system `ffprobe` locations. `CODEC_CARVER_FFPROBE` may select one
-of those fixed paths but cannot introduce an arbitrary executable. MLX audio is
+approved fixed system `ffprobe` locations; ambient environment variables cannot
+change the selected executable. MLX audio is
 decoded first by an equivalently approved absolute `ffmpeg` and passed to
 Whisper as an in-memory waveform, so `mlx-whisper` never resolves a bare
 `ffmpeg` from caller-controlled `PATH`. Rust, ffprobe, and ffmpeg children all
