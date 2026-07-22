@@ -201,6 +201,12 @@ below 0.5 seconds skip model inference and receive a durable quality flag. When
 word timestamps are enabled, an ultra-short segment below 0.5 seconds with mean
 word probability below 0.25 remains in the JSON evidence with a
 `low_confidence` flag but is excluded from usable text and filename descriptions.
+SHA identity alone is not sufficient for cache reuse: the sidecar must also
+match the selected accelerator, allowlisted model, immutable model revision,
+and requested language. A caller requesting word timestamps requires a cache
+that recorded them, while a timestamped cache remains a valid evidence superset
+for a caller that does not require them. Legacy sidecars without this pinned
+runtime identity are retranscribed rather than silently reused.
 The quality gate also receives the recording duration from the GPU adapter. A
 result of at least 120 seconds in which the same non-acknowledgement fragment
 appears at least twice, dominates a set with at most one trusted segment per 30

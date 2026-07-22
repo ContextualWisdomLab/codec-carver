@@ -77,6 +77,22 @@ def _record(path: str, sha256: str, **updates):
     return record
 
 
+def _cached_transcript(text: str, *, sha256: str | None = None) -> dict[str, object]:
+    """Build a cache fixture matching the default mocked MLX runtime."""
+
+    transcript: dict[str, object] = {
+        "text": text,
+        "accelerator": "mlx",
+        "model": "model",
+        "model_revision": None,
+        "requested_language": "ko",
+        "word_timestamps": False,
+    }
+    if sha256 is not None:
+        transcript["sha256"] = sha256
+    return transcript
+
+
 def _test_backend(binary: Path) -> RustBackend:
     """Construct a content-bound executable fixture."""
 
@@ -731,6 +747,64 @@ class NamingTests(unittest.TestCase):
         )
         self.assertEqual(
             transcript_description({"segments": unique_segments}), "개별항목0"
+        )
+
+    def test_transcript_cache_requires_pinned_runtime_identity(self) -> None:
+        record = {"sha256": HASH_A, "sha256_verified": True}
+        cached = {
+            "sha256": HASH_A,
+            "text": "검증된 전사",
+            "segments": [{"text": "검증된 전사"}],
+            "accelerator": "mlx",
+            "model": "approved-model",
+            "model_revision": "approved-revision",
+            "requested_language": "ko",
+            "word_timestamps": True,
+        }
+        identity = {
+            "accelerator": "mlx",
+            "model": "approved-model",
+            "model_revision": "approved-revision",
+            "requested_language": "ko",
+            "require_word_timestamps": True,
+        }
+        self.assertTrue(
+            audio_library.transcript_cache_matches_record(record, cached, **identity)
+        )
+        for field in (
+            "accelerator",
+            "model",
+            "model_revision",
+            "requested_language",
+        ):
+            with self.subTest(field=field):
+                tampered = {**cached, field: "different"}
+                self.assertFalse(
+                    audio_library.transcript_cache_matches_record(
+                        record, tampered, **identity
+                    )
+                )
+        without_words = {
+            key: value for key, value in cached.items() if key != "word_timestamps"
+        }
+        self.assertFalse(
+            audio_library.transcript_cache_matches_record(
+                record, without_words, **identity
+            )
+        )
+        self.assertTrue(
+            audio_library.transcript_cache_matches_record(
+                record,
+                without_words,
+                **{**identity, "require_word_timestamps": False},
+            )
+        )
+        self.assertFalse(
+            audio_library.transcript_cache_matches_record(
+                record,
+                {**cached, "sha256": HASH_B},
+                **identity,
+            )
         )
 
     def test_semantic_description_sampling_validation_and_mlx_generation(self) -> None:
@@ -2936,6 +3010,8 @@ class GpuTranscriberTests(unittest.TestCase):
             )
         self.assertEqual(result["text"], "")
         self.assertEqual(result["quality_flags"], ["too_short_for_reliable_speech"])
+        self.assertEqual(result["requested_language"], "ko")
+        self.assertFalse(result["word_timestamps"])
         decode.assert_not_called()
         whisper.transcribe.assert_not_called()
 
@@ -2992,6 +3068,8 @@ class GpuTranscriberTests(unittest.TestCase):
             result["quality_flags"],
             [audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG],
         )
+        self.assertEqual(result["requested_language"], "ko")
+        self.assertFalse(result["word_timestamps"])
 
     def test_mlx_marks_sparse_repeated_long_form_output(self) -> None:
         package, _, whisper = self._mlx_modules()
@@ -4131,7 +4209,8 @@ class AudioLibraryTests(unittest.TestCase):
             state = root / ".codec-carver"
             atomic_json_write(state / "inventory.json", _manifest(root))
             atomic_json_write(
-                state / "transcripts" / f"{HASH_A}.json", {"text": "cached"}
+                state / "transcripts" / f"{HASH_A}.json",
+                _cached_transcript("cached"),
             )
             (root / "canonical.wav").write_bytes(b"one")
             backend = Mock()
@@ -5111,7 +5190,7 @@ class AudioLibraryTests(unittest.TestCase):
             )
             atomic_json_write(
                 state / "transcripts" / f"{HASH_B}.json",
-                {"text": "cached local"},
+                _cached_transcript("cached local"),
             )
             (root / "local.wav").write_bytes(b"local")
             backend = Mock()
@@ -5213,7 +5292,7 @@ class AudioLibraryTests(unittest.TestCase):
             )
             atomic_json_write(
                 state / "transcripts" / f"{HASH_B}.json",
-                {"text": "원본 이름을 우선 선택"},
+                _cached_transcript("원본 이름을 우선 선택"),
             )
             (root / "FOLDER01").mkdir()
             (root / original["path"]).write_bytes(b"original")
@@ -5542,7 +5621,8 @@ class AudioLibraryTests(unittest.TestCase):
             )
 
             atomic_json_write(
-                state / "transcripts" / f"{HASH_B}.json", {"text": "cached"}
+                state / "transcripts" / f"{HASH_B}.json",
+                _cached_transcript("cached"),
             )
             fake.reset_mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):

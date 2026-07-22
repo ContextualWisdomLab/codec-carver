@@ -1210,9 +1210,11 @@ class GpuTranscriber:
                 "text": "",
                 "segments": [],
                 "language": self.config.language,
+                "requested_language": self.config.language,
                 "accelerator": self.accelerator,
                 "model": self.model,
                 "model_revision": self.model_revision,
+                "word_timestamps": self.config.word_timestamps,
                 "duration_seconds": round(duration_seconds, 6),
                 "quality_flags": ["too_short_for_reliable_speech"],
                 "elapsed_seconds": round(time.perf_counter() - started, 3),
@@ -1370,9 +1372,11 @@ class GpuTranscriber:
             "text": text,
             "segments": segments,
             "language": language,
+            "requested_language": self.config.language,
             "accelerator": self.accelerator,
             "model": self.model,
             "model_revision": self.model_revision,
+            "word_timestamps": self.config.word_timestamps,
             "duration_seconds": duration_seconds,
             "tmk_chunked": bool(chunk_ranges),
             "transcription_chunks": len(chunk_ranges) if chunk_ranges else 1,
@@ -1675,14 +1679,33 @@ def transcript_cache_is_usable(transcript: Any) -> bool:
     )
 
 
-def transcript_cache_matches_record(record: dict[str, Any], transcript: Any) -> bool:
-    """Accept cached speech only when its embedded identity matches the record."""
+def transcript_cache_matches_record(
+    record: dict[str, Any],
+    transcript: Any,
+    *,
+    accelerator: str,
+    model: str,
+    model_revision: str | None,
+    requested_language: str | None,
+    require_word_timestamps: bool,
+) -> bool:
+    """Accept cached speech only when content and pinned runtime identity match."""
 
     if not transcript_cache_is_usable(transcript):
         return False
     try:
         validate_transcript_record_identity(record, transcript)
     except (TypeError, ValueError):
+        return False
+    if transcript.get("accelerator") != accelerator:
+        return False
+    if transcript.get("model") != model:
+        return False
+    if transcript.get("model_revision") != model_revision:
+        return False
+    if transcript.get("requested_language") != requested_language:
+        return False
+    if require_word_timestamps and transcript.get("word_timestamps") is not True:
         return False
     return True
 
@@ -4146,7 +4169,15 @@ class AudioLibrary:
                 output = safe_transcript_path(transcript_dir, sha256)
                 text_output = safe_transcript_path(transcript_dir, sha256, ".txt")
                 cached_transcript = read_optional_private_json(output)
-                if transcript_cache_matches_record(record, cached_transcript):
+                if transcript_cache_matches_record(
+                    record,
+                    cached_transcript,
+                    accelerator=transcriber.accelerator,
+                    model=transcriber.model,
+                    model_revision=vars(transcriber).get("model_revision"),
+                    requested_language=config.language,
+                    require_word_timestamps=config.word_timestamps,
+                ):
                     skipped += 1
                     status = "cached"
                 else:
@@ -4168,6 +4199,11 @@ class AudioLibrary:
                         {
                             "schema_version": 1,
                             "sha256": sha256,
+                            "accelerator": transcriber.accelerator,
+                            "model": transcriber.model,
+                            "model_revision": vars(transcriber).get("model_revision"),
+                            "requested_language": config.language,
+                            "word_timestamps": config.word_timestamps,
                             "source_path": record["path"],
                             "recorded_at": record.get("recorded_at"),
                             "location": record.get("location"),
@@ -4659,7 +4695,15 @@ class AudioLibrary:
                 transcript_path = safe_transcript_path(transcript_dir, sha256)
                 text_path = safe_transcript_path(transcript_dir, sha256, ".txt")
                 cached_transcript = read_optional_private_json(transcript_path)
-                if transcript_cache_matches_record(record, cached_transcript):
+                if transcript_cache_matches_record(
+                    record,
+                    cached_transcript,
+                    accelerator=transcriber.accelerator,
+                    model=transcriber.model,
+                    model_revision=vars(transcriber).get("model_revision"),
+                    requested_language=config.language,
+                    require_word_timestamps=config.word_timestamps,
+                ):
                     cached += 1
                     status = "cached"
                 else:
@@ -4754,6 +4798,11 @@ class AudioLibrary:
                         {
                             "schema_version": 1,
                             "sha256": sha256,
+                            "accelerator": transcriber.accelerator,
+                            "model": transcriber.model,
+                            "model_revision": vars(transcriber).get("model_revision"),
+                            "requested_language": config.language,
+                            "word_timestamps": config.word_timestamps,
                             "source_path": record["path"],
                             "recorded_at": record.get("recorded_at"),
                             "location": record.get("location"),
