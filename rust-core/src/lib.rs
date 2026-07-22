@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::os::macos::fs::MetadataExt as MacosMetadataExt;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Local, NaiveDate, TimeZone};
+use chrono::{DateTime, Local, LocalResult, NaiveDate, TimeZone};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1119,12 +1119,9 @@ fn infer_recorded_at(
             .expect("regex matched digits");
         if let Some(naive) = NaiveDate::from_ymd_opt(year, month, day)
             .and_then(|date| date.and_hms_opt(hour, minute, second))
+            && let Some(value) = earliest_local_rfc3339(Local.from_local_datetime(&naive))
         {
-            let value = Local
-                .from_local_datetime(&naive)
-                .earliest()
-                .expect("a valid standardized recording time resolves locally");
-            return (Some(value.to_rfc3339()), Some(TimeSource::StandardFilename));
+            return (Some(value), Some(TimeSource::StandardFilename));
         }
     }
     if let Some(capture) = ISO_TIME_RE.captures(filename)
@@ -1157,6 +1154,14 @@ fn infer_recorded_at(
         .map_or((None, None), |(time, source)| {
             (Some(system_time_to_rfc3339(time)), Some(source))
         })
+}
+
+fn earliest_local_rfc3339<Tz>(value: LocalResult<DateTime<Tz>>) -> Option<String>
+where
+    Tz: TimeZone,
+    Tz::Offset: Display,
+{
+    value.earliest().map(|resolved| resolved.to_rfc3339())
 }
 
 fn system_time_to_rfc3339(time: SystemTime) -> String {
@@ -2447,6 +2452,7 @@ mod tests {
         );
         assert!(infer_recorded_at("991332_9999.wav", &metadata).0.is_some());
         assert!(infer_recorded_at("plain.wav", &metadata).0.is_some());
+        assert_eq!(earliest_local_rfc3339::<Local>(LocalResult::None), None);
         assert!(!system_time_to_rfc3339(SystemTime::now()).is_empty());
         assert_eq!(infer_location(""), None);
         assert_eq!(
