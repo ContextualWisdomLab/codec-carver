@@ -50,25 +50,23 @@ class DetectChaptersTest(unittest.TestCase):
         self.assertEqual(chapters[0].end, 305.0)
         self.assertEqual(chapters[1].start, 305.0)
         self.assertEqual(chapters[1].end, 600.0)
-        self.assertEqual(
-            [c.title for c in chapters], ["Chapter 1", "Chapter 2"]
-        )
+        self.assertEqual([c.title for c in chapters], ["Chapter 1", "Chapter 2"])
 
     def test_short_silence_does_not_split(self) -> None:
         """Silences shorter than min_gap_seconds produce no boundary."""
 
         silences = [FakeSilence(300.0, 301.0)]
-        chapters = detect_chapters(
-            silences, total_duration=600.0, min_gap_seconds=3.0
-        )
+        chapters = detect_chapters(silences, total_duration=600.0, min_gap_seconds=3.0)
         self.assertEqual(len(chapters), 1)
 
     def test_boundary_helper_drops_timeline_extremes(self) -> None:
-        """Defensive boundary validation rejects out-of-range midpoints."""
+        """The private boundary helper rejects extreme normalized spans."""
+
+        normalized_spans = [(-10.0, 0.0), (600.0, 610.0)]
 
         self.assertEqual(
             chapters._boundaries_from_silences(
-                [(-10.0, 0.0), (600.0, 610.0)],
+                normalized_spans,
                 total_duration=600.0,
                 min_gap_seconds=3.0,
             ),
@@ -197,9 +195,7 @@ class ExportTest(unittest.TestCase):
     def test_json_round_trip(self) -> None:
         """JSON output parses back into the same chapter fields."""
 
-        chapters = detect_chapters(
-            [FakeSilence(300.0, 310.0)], total_duration=600.0
-        )
+        chapters = detect_chapters([FakeSilence(300.0, 310.0)], total_duration=600.0)
         payload = json.loads(to_json(chapters))
         self.assertEqual(
             payload,

@@ -31,7 +31,8 @@ usage() {
         "Create or refresh a persistent MLX runtime outside iCloud File Provider." \
         "" \
         "Options:" \
-        "  --runtime-dir PATH  Direct child of ~/Library/Caches/codec-carver/venvs" \
+        "  --runtime-dir ABSOLUTE_PATH" \
+        "                      Direct child of ~/Library/Caches/codec-carver/venvs" \
         "                      (default: .../gpu-py312)" \
         "  --python VERSION    Python version for uv (default: 3.12)" \
         "  --uv-bin PATH       Reviewed uv executable (default: /opt/homebrew/bin/uv)" \
@@ -52,21 +53,18 @@ sha256_file() {
     printf '%s\n' "$digest"
 }
 
-directory_metadata() {
+path_metadata() {
     local value
-    value="$("$STAT_BIN" -f '%d:%i:%u:%Lp' -- "$1" 2>/dev/null || true)"
-    if [[ "$value" =~ ^[0-9]+:[0-9]+:[0-9]+:[0-7]+$ ]]; then
-        printf '%s\n' "$value"
-        return 0
-    fi
-    "$STAT_BIN" -c '%d:%i:%u:%a' -- "$1"
+    value="$("$STAT_BIN" -f '%d:%i:%u:%Lp' -- "$1")" || return 1
+    [[ "$value" =~ ^[0-9]+:[0-9]+:[0-9]+:[0-7]+$ ]] || return 1
+    printf '%s\n' "$value"
 }
 
 secure_directory_identity() {
     local -r path="$1"
     local -r label="$2"
     local metadata device inode owner mode mode_value
-    metadata="$(directory_metadata "$path")" || fail "$label metadata is unavailable"
+    metadata="$(path_metadata "$path")" || fail "$label metadata is unavailable"
     IFS=: read -r device inode owner mode <<< "$metadata"
     [[ "$device" =~ ^[0-9]+$ && "$inode" =~ ^[0-9]+$ ]] || \
         fail "$label identity is malformed"
@@ -76,6 +74,23 @@ secure_directory_identity() {
     (( (mode_value & 8#022) == 0 )) || \
         fail "$label must not be group- or world-writable"
     printf '%s:%s\n' "$device" "$inode"
+}
+
+secure_regular_file() {
+    local -r path="$1"
+    local -r label="$2"
+    local metadata device inode owner mode mode_value
+    [[ -f "$path" && ! -L "$path" ]] || fail "$label is not a regular file"
+    metadata="$(path_metadata "$path")" || fail "$label metadata is unavailable"
+    IFS=: read -r device inode owner mode <<< "$metadata"
+    [[ "$device" =~ ^[0-9]+$ && "$inode" =~ ^[0-9]+$ ]] || \
+        fail "$label identity is malformed"
+    [[ "$owner" == "$EUID" || "$owner" == "0" ]] || \
+        fail "$label has an unapproved owner"
+    [[ "$mode" =~ ^[0-7]+$ ]] || fail "$label permissions are malformed"
+    mode_value=$((8#$mode))
+    (( (mode_value & 8#022) == 0 )) || \
+        fail "$label must not be group- or world-writable"
 }
 
 on_error() {
@@ -120,13 +135,12 @@ done
 [[ "$("$UNAME_BIN" -m)" == "arm64" ]] || fail "this bootstrap supports Apple Silicon arm64 only"
 [[ "$RUNTIME_DIR" == /* ]] || fail "runtime path must be absolute"
 [[ -n "$PYTHON_VERSION" ]] || fail "Python version must not be empty"
-[[ -f "$LOCK_FILE" && ! -L "$LOCK_FILE" ]] || \
-    fail "hash-locked macOS MLX requirements are missing"
 for helper in "$DIRNAME_BIN" "$BASENAME_BIN" "$UNAME_BIN" "$STAT_BIN" \
     "$XATTR_BIN" "$MKDIR_BIN" "$CP_BIN" "$CHMOD_BIN" "$RM_BIN" \
     "$MKTEMP_BIN" "$SHASUM_BIN"; do
     [[ -x "$helper" && ! -L "$helper" ]] || fail "trusted helper is unavailable: $helper"
 done
+secure_regular_file "$LOCK_FILE" "hash-locked macOS MLX requirements"
 
 HOME_PHYSICAL="$(cd -- "$HOME" && pwd -P)"
 TRUSTED_RUNTIME_ROOT="$HOME_PHYSICAL/Library/Caches/codec-carver/venvs"
