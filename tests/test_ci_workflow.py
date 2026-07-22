@@ -15,12 +15,14 @@ class CiWorkflowTests(unittest.TestCase):
         """Require edition-2024 Rust and rustfmt before formatting or tests run."""
 
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-        install = (
-            "rustup toolchain install 1.88.0 --profile minimal --component rustfmt"
+        toolchain = "1.88.0"
+        install = f"rustup toolchain install {toolchain} --profile minimal --component rustfmt"
+        formatting = (
+            f"rustup run {toolchain} cargo fmt --manifest-path "
+            "rust-core/Cargo.toml -- --check"
         )
-        formatting = "rustup run 1.88.0 cargo fmt --manifest-path rust-core/Cargo.toml -- --check"
         tests = (
-            "rustup run 1.88.0 cargo test --locked --all-targets "
+            f"rustup run {toolchain} cargo test --locked --all-targets "
             "--manifest-path rust-core/Cargo.toml"
         )
 
@@ -29,6 +31,14 @@ class CiWorkflowTests(unittest.TestCase):
         self.assertIn(tests, workflow)
         self.assertLess(workflow.index(install), workflow.index(formatting))
         self.assertLess(workflow.index(install), workflow.index(tests))
+
+    def test_rust_job_compiles_linux_and_macos_backends(self) -> None:
+        """Compile platform-specific Rust paths on Linux and macOS runners."""
+
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("runs-on: ${{ matrix.os }}", workflow)
+        self.assertIn("os: [ubuntu-latest, macos-latest]", workflow)
 
 
 if __name__ == "__main__":  # pragma: no cover
