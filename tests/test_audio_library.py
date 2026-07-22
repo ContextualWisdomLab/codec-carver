@@ -338,10 +338,43 @@ class NamingTests(unittest.TestCase):
                 title="기억나는데-기억나",
                 central_idea="왜 이렇게 기억나는데 왜 이렇게 말해",
                 outcome="기억나는 상태",
-                evidence_segment_ids=("S001", "S002"),
+                evidence_segment_ids=("S001", "S002", "S003"),
                 confidence="high",
                 grounding_text=sparse_long_recording_evidence,
             )
+        rich_but_narrow_long_recording_evidence = "\n".join(
+            [
+                "[S001] 수기 경영 보고 지연 문제가 계속되어 담당자가 원인을 확인합니다",
+                "[S002] 설비 데이터 통합을 우선 추진하고 공통 기준을 정하기로 합니다",
+                "[S003] 설비 데이터 통합으로 경영 보고 지연을 줄이기로 결정합니다",
+                "[S004] 현장 담당자는 다음 일정과 참석자를 다시 확인합니다",
+                "[S005] 회의실 장비와 화면 연결 상태를 점검합니다",
+                "[S006] 외부 사례를 참고할 자료 목록을 전달합니다",
+                "[S007] 다음 회의 전까지 각자 확인할 항목을 정리합니다",
+                "[S008] 남은 질문은 후속 회의에서 답하기로 합니다",
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "insufficient transcript evidence"):
+            audio_library.validate_contextual_description(
+                title="경영보고지연-설비데이터통합",
+                central_idea="수기 경영 보고 지연 문제가 계속되어 설비 데이터 통합을 우선 추진합니다.",
+                outcome="설비 데이터 통합을 추진합니다.",
+                evidence_segment_ids=("S001", "S002"),
+                confidence="high",
+                grounding_text=rich_but_narrow_long_recording_evidence,
+            )
+        broad_long_recording_context = audio_library.validate_contextual_description(
+            title="경영보고지연-설비데이터통합",
+            central_idea="수기 경영 보고 지연 문제가 계속되어 설비 데이터 통합을 우선 추진합니다.",
+            outcome="설비 데이터 통합을 추진합니다.",
+            evidence_segment_ids=("S001", "S002", "S003"),
+            confidence="high",
+            grounding_text=rich_but_narrow_long_recording_evidence,
+        )
+        self.assertEqual(
+            broad_long_recording_context.evidence_segment_ids,
+            ("S001", "S002", "S003"),
+        )
         rich_long_recording = {
             "segments": [
                 {"text": "왜 이렇게 기억나는데"},

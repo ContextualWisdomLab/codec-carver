@@ -2081,6 +2081,16 @@ def contextual_evidence_segments(grounding_text: str) -> dict[str, str]:
     return segments
 
 
+def minimum_context_evidence_count(segment_count: int) -> int:
+    """Require broader support when a long transcript offers many excerpts."""
+
+    if segment_count >= 8:
+        return 3
+    if segment_count >= 2:
+        return 2
+    return 1
+
+
 def validate_context_claim(
     claim: str,
     *,
@@ -2214,7 +2224,7 @@ def validate_contextual_description(
             evidence_id.strip().upper() for evidence_id in evidence_segment_ids
         )
     )
-    minimum_evidence = 2 if len(available_ids) >= 2 else 1
+    minimum_evidence = minimum_context_evidence_count(len(available_ids))
     if len(selected_ids) < minimum_evidence:
         raise ValueError("insufficient transcript evidence for the central idea")
     invalid_ids = [
@@ -2437,7 +2447,7 @@ def select_context_evidence(
                 break
             chosen.append(supplemental)
             missing = uncovered_terms(target, chosen)
-    minimum_evidence = min(2, len(segments))
+    minimum_evidence = minimum_context_evidence_count(len(segments))
     for evidence_id in original_ids:
         if len(chosen) >= minimum_evidence:
             break
@@ -2523,7 +2533,7 @@ def rescue_contextual_description(
     evidence_ids = tuple(
         dict.fromkeys(SEMANTIC_EVIDENCE_ID_RE.findall(fields["EVIDENCE"].upper()))
     )
-    minimum_evidence = 2 if len(segments) >= 2 else 1
+    minimum_evidence = minimum_context_evidence_count(len(segments))
     if len(evidence_ids) < minimum_evidence:
         raise ValueError("insufficient transcript evidence for contextual rescue")
     if any(evidence_id not in segments for evidence_id in evidence_ids):
@@ -2568,7 +2578,7 @@ def literal_evidence_contextual_description(
     evidence_ids = tuple(
         dict.fromkeys(SEMANTIC_EVIDENCE_ID_RE.findall(fields["EVIDENCE"].upper()))
     )
-    minimum_evidence = 2 if len(segments) >= 2 else 1
+    minimum_evidence = minimum_context_evidence_count(len(segments))
     if len(evidence_ids) < minimum_evidence:
         raise ValueError("insufficient transcript evidence for literal rescue")
     if any(evidence_id not in segments for evidence_id in evidence_ids):
@@ -2653,7 +2663,7 @@ def parse_contextual_description(
     evidence_ids = SEMANTIC_EVIDENCE_ID_RE.findall(fields["EVIDENCE"].upper())
     segments = contextual_evidence_segments(grounding_text)
     original_evidence_ids = tuple(dict.fromkeys(evidence_ids))
-    minimum_evidence = 2 if len(segments) >= 2 else 1
+    minimum_evidence = minimum_context_evidence_count(len(segments))
     if len(original_evidence_ids) < minimum_evidence:
         raise ValueError("insufficient transcript evidence for the central idea")
     invalid_ids = [
@@ -2988,8 +2998,9 @@ class GemmaDescriptionGenerator:
             "구분하세요. 도구나 기술은 목적과 구별하고, 대화 전체를 대표하지 않는 "
             "부수적 예시는 제목에서 제외하세요. 여러 주제가 병렬이거나 중심 사상을 "
             "확정할 근거가 부족하면 CONFIDENCE를 low로 쓰세요. EVIDENCE에는 판단을 "
-            "직접 뒷받침하는 구간 ID를 두 개 이상 쓰세요. 단, 구간이 하나뿐이면 "
-            "한 개를 허용합니다. OUTCOME은 왜 이 논의를 하는지 또는 무엇이 달라져야 "
+            "직접 뒷받침하는 구간 ID를 쓰세요. 녹취 구간이 8개 이상이면 세 개 이상, "
+            "2~7개이면 두 개 이상을 쓰고, 구간이 하나뿐이면 한 개를 허용합니다. "
+            "OUTCOME은 왜 이 논의를 하는지 또는 무엇이 달라져야 "
             "하는지를 답해야 합니다. 프로젝트 추진·검토 진행처럼 CENTRAL_IDEA를 "
             "되풀이하는 작업 상태만 쓰지 마세요.\n\n"
             "출력은 설명이나 목록 없이 아래 다섯 줄만 허용됩니다:\n"
@@ -3053,7 +3064,8 @@ class GemmaDescriptionGenerator:
                 "아래 후보는 형식 또는 품질 검사를 통과하지 못한 신뢰할 수 없는 "
                 "모델 출력입니다. 원 후보의 결론을 신뢰하지 말고 녹취 근거로 다시 "
                 "판단하세요. 중심 사상·결론·근거·신뢰도를 먼저 확정한 뒤 제목을 "
-                "만드세요. 근거가 부족하면 CONFIDENCE를 low로 쓰세요. 출력은 다른 "
+                "만드세요. 녹취 구간이 8개 이상이면 EVIDENCE를 세 개 이상 쓰고, "
+                "근거가 부족하면 CONFIDENCE를 low로 쓰세요. 출력은 다른 "
                 "설명 없이 OUTCOME에 구체적인 목적·결정 대상을 쓰고, 프로젝트 추진·"
                 "검토 진행처럼 중심 문장을 되풀이하지 마세요. "
                 "인용한 근거에 그래야·위해·목적·목표로 표현된 목적이 있으면 OUTCOME에 "
@@ -3099,7 +3111,8 @@ class GemmaDescriptionGenerator:
                     grounding_repair_prompt = (
                         "앞선 두 번의 분석이 인용 근거에 없는 추상어 또는 바꿔 쓴 "
                         "표현을 추가해 거부되었습니다. 이번에는 먼저 EVIDENCE 구간을 "
-                        "두 개 이상 고르고, CENTRAL_IDEA와 OUTCOME의 내용어를 그 구간 "
+                        "고르세요. 녹취 구간이 8개 이상이면 세 개 이상, 2~7개이면 두 "
+                        "개 이상 고르고, CENTRAL_IDEA와 OUTCOME의 내용어를 그 구간 "
                         "원문에 실제로 나온 표현만으로 작성하세요. 앞선 후보를 재사용하지 "
                         "말고 새로운 동의어·상위개념·추론 표현을 만들지 마세요. 조사는 "
                         "문장을 완성하는 데 쓸 수 있지만 "
