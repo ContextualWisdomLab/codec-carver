@@ -418,7 +418,7 @@ pub fn stage_relative(
             fs::remove_file(&partial)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::rename(&partial, &staged_path)?;
+            finalize_staged_partial(&partial, &staged_path)?;
         }
         Err(error) => {
             let _ = fs::remove_file(&partial);
@@ -453,6 +453,23 @@ pub fn stage_relative(
         },
         staged_path: staged_path.to_string_lossy().nfc().collect(),
     })
+}
+
+fn finalize_staged_partial(partial: &Path, staged_path: &Path) -> Result<()> {
+    if let Err(rename_error) = fs::rename(partial, staged_path) {
+        if let Err(cleanup_error) = fs::remove_file(partial) {
+            return Err(rename_error).with_context(|| {
+                format!(
+                    "cannot finalize staged artifact {}; additionally cannot remove partial {}: {cleanup_error}",
+                    staged_path.display(),
+                    partial.display()
+                )
+            });
+        }
+        return Err(rename_error)
+            .with_context(|| format!("cannot finalize staged artifact {}", staged_path.display()));
+    }
+    Ok(())
 }
 
 /// Stage one file and serialize its record plus scratch path.
@@ -2154,6 +2171,25 @@ mod tests {
 
         let error = ensure_complete_stage(source, &partial, 5).unwrap_err();
         assert!(error.to_string().contains("cannot stat staged partial"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn failed_stage_finalize_removes_the_partial_file() {
+        let base = temporary_directory("failed-stage-finalize");
+        let partial = base.join("placeholder.partial");
+        let staged_path = base.join("cached.wav");
+        fs::write(&partial, b"audio").unwrap();
+        fs::create_dir(&staged_path).unwrap();
+
+        let error = finalize_staged_partial(&partial, &staged_path).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot finalize staged artifact")
+        );
+        assert!(!partial.exists());
         fs::remove_dir_all(base).unwrap();
     }
 
