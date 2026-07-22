@@ -155,6 +155,7 @@ CONTEXT_GENERIC_TITLE_TOKENS = SEMANTIC_GENERIC_TOKENS | frozenset(
     }
 )
 CONTEXT_TITLE_RELATION_MARKERS = (
+    "뒤",
     "마다",
     "부터",
     "까지",
@@ -196,6 +197,8 @@ CONTEXT_TITLE_PROBLEM_MARKERS = (
 )
 DESCRIPTION_PARTICLE_SUFFIXES = (
     "하자",
+    "입니다",
+    "이다",
     "으로부터",
     "에서부터",
     "에게서",
@@ -339,7 +342,7 @@ DESCRIPTION_STOPWORDS = frozenset(
 )
 DESCRIPTION_DISPLAY_STOPWORDS = frozenset({"결론적", "관해서", "내가", "되게"})
 SEMANTIC_DESCRIPTION_RE = re.compile(r"^[0-9A-Za-z가-힣]+(?:-[0-9A-Za-z가-힣]+){1,5}$")
-SEMANTIC_DESCRIPTION_VALIDATION = "context_evidence_title_v6"
+SEMANTIC_DESCRIPTION_VALIDATION = "context_evidence_title_v7"
 SEMANTIC_EVIDENCE_ID_RE = re.compile(r"\bS\d{3}\b")
 SEMANTIC_EVIDENCE_LABEL_RE = re.compile(r"^\[(S\d{3})\]\s+(.+)$", re.MULTILINE)
 SEMANTIC_CONTEXT_CUE_RE = re.compile(
@@ -1703,6 +1706,58 @@ def trusted_transcript_text(
     return "" if segments else fallback.strip()
 
 
+def is_context_rich_segment(value: str) -> bool:
+    """Return whether one segment has diverse, non-stock contextual language."""
+
+    sanitized = sanitize_component(value, limit=512)
+    tokens = [
+        token.casefold()
+        for token in DESCRIPTION_TOKEN_RE.findall(value)
+        if not token.isdecimal() and token.casefold() not in DESCRIPTION_STOPWORDS
+    ]
+    unique_tokens = set(tokens)
+    return (
+        not STOCK_HALLUCINATION_RE.search(sanitized)
+        and not REPEATED_KOREAN_CHUNK_RE.search(value)
+        and len(tokens) >= 6
+        and len(unique_tokens) >= 5
+        and len(unique_tokens) * 2 >= len(tokens)
+    )
+
+
+def has_sustained_contextual_speech(segment_texts: Iterable[str]) -> bool:
+    """Return whether adjacent segments contain enough diverse language for context.
+
+    Long ambient recordings can contain hours of stock hallucinations before a
+    real conversation or programme begins.  A recording-level repetition flag
+    must not hide a sustained, lexically diverse run that can support a useful
+    contextual filename.
+    """
+
+    run_tokens: list[str] = []
+    run_segments = 0
+    for value in segment_texts:
+        tokens = [
+            token.casefold()
+            for token in DESCRIPTION_TOKEN_RE.findall(value)
+            if not token.isdecimal() and token.casefold() not in DESCRIPTION_STOPWORDS
+        ]
+        if is_context_rich_segment(value):
+            run_segments += 1
+            run_tokens.extend(tokens)
+            if (
+                run_segments >= 3
+                and len(run_tokens) >= 24
+                and len(set(run_tokens)) >= 16
+                and len(set(run_tokens)) * 2 >= len(run_tokens)
+            ):
+                return True
+        else:
+            run_segments = 0
+            run_tokens = []
+    return False
+
+
 def transcript_quality_flags(transcript: Any) -> list[str]:
     """Explain transcript-shaped output dominated by background or repetition."""
 
@@ -1805,7 +1860,11 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
         and repeated_segment_count * 3 >= len(segment_texts)
         and repeated_segment.casefold() not in REPEATED_ACKNOWLEDGEMENTS
     )
-    if background_or_repetition and REPETITIVE_OR_BACKGROUND_AUDIO_FLAG not in flags:
+    if (
+        background_or_repetition
+        and not has_sustained_contextual_speech(segment_texts)
+        and REPETITIVE_OR_BACKGROUND_AUDIO_FLAG not in flags
+    ):
         flags.append(REPETITIVE_OR_BACKGROUND_AUDIO_FLAG)
     insufficient_context = (
         len(segment_texts) == 1
@@ -1914,6 +1973,10 @@ def semantic_transcript_excerpt(
         for segment in transcript.get("segments", [])
         if not segment.get("low_confidence")
         and flatten_semantic_evidence_text(segment.get("text", ""))
+        and CONTEXTLESS_COURTESY_RE.fullmatch(
+            flatten_semantic_evidence_text(segment.get("text", ""))
+        )
+        is None
         and not STOCK_HALLUCINATION_RE.search(
             sanitize_component(
                 flatten_semantic_evidence_text(segment.get("text", "")), limit=256
@@ -1939,6 +2002,9 @@ def semantic_transcript_excerpt(
             >= len(DESCRIPTION_TOKEN_RE.findall(value))
         )
     ]
+    context_rich_values = [value for value in values if is_context_rich_segment(value)]
+    if len(context_rich_values) >= 8:
+        values = context_rich_values
     if len(values) > max_segments:
         indexed_values = list(enumerate(values))
         cue_limit = max(1, max_segments // 4)
@@ -2159,6 +2225,20 @@ def validate_contextual_description(
             "context evidence references absent transcript segments: "
             + ", ".join(invalid_ids)
         )
+    if len(available_ids) >= 8:
+        selected_evidence = [segments[evidence_id] for evidence_id in selected_ids]
+        selected_terms = {
+            key
+            for value in selected_evidence
+            for _display, key in description_terms(value)
+        }
+        if (
+            sum(len(value) for value in selected_evidence) < 60
+            or len(selected_terms) < 8
+        ):
+            raise ValueError(
+                "selected evidence is too sparse to represent a long recording"
+            )
     validate_explicit_contextual_purpose(
         normalized_outcome,
         selected_ids=selected_ids,
@@ -4767,6 +4847,7 @@ class AudioLibrary:
                     validated_cached_filename_description(transcript) is not None
                 )
                 quality_flags = transcript_quality_flags(transcript)
+                transcript["quality_flags"] = quality_flags
                 repetitive_background = (
                     REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags
                 )

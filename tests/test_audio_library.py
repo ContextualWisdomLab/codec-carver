@@ -240,6 +240,7 @@ class NamingTests(unittest.TestCase):
         self.assertIn("프로젝트-예산-검토", transcript_description(transcript))
         self.assertEqual(transcript_description({"text": ""}), "무음-또는-전사불명")
         self.assertIn(("VOC", "voc"), audio_library.description_terms("VOC들을"))
+        self.assertIn(("직업", "직업"), audio_library.description_terms("직업이다"))
         self.assertIn(
             ("구현", "구현"), audio_library.description_terms("기능을 구현하자는")
         )
@@ -306,6 +307,59 @@ class NamingTests(unittest.TestCase):
             audio_library.transcript_quality_flags(single_stock),
         )
         self.assertEqual(audio_library.semantic_transcript_excerpt(single_stock), "")
+        courtesy_then_context = {
+            "segments": [
+                {"text": "감사합니다."},
+                {"text": "주인공이 가수를 만나 재기를 돕습니다."},
+            ]
+        }
+        self.assertNotIn(
+            "감사합니다",
+            audio_library.semantic_transcript_excerpt(courtesy_then_context),
+        )
+        self.assertIn(
+            "가수를 만나 재기를 돕습니다",
+            audio_library.semantic_transcript_excerpt(courtesy_then_context),
+        )
+        sparse_long_recording_evidence = "\n".join(
+            [
+                "[S001] 왜 이렇게 기억나는데",
+                "[S002] 왜 이렇게 말해",
+                "[S003] 주인공이 섬에서 살아남았습니다",
+                "[S004] 가수를 만나 다시 노래합니다",
+                "[S005] 방송국 피디가 주인공을 발견합니다",
+                "[S006] 두 사람은 과거의 약속을 기억합니다",
+                "[S007] 드라마 전개가 뒤에서 연결됩니다",
+                "[S008] 처음보다 나중이 재미있다고 평가합니다",
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "evidence is too sparse"):
+            audio_library.validate_contextual_description(
+                title="기억나는데-기억나",
+                central_idea="왜 이렇게 기억나는데 왜 이렇게 말해",
+                outcome="기억나는 상태",
+                evidence_segment_ids=("S001", "S002"),
+                confidence="high",
+                grounding_text=sparse_long_recording_evidence,
+            )
+        rich_long_recording = {
+            "segments": [
+                {"text": "왜 이렇게 기억나는데"},
+                *[
+                    {
+                        "text": (
+                            f"주인공은 사건 {index} 이후 과거의 약속을 기억하고 "
+                            "가수의 무대 복귀를 함께 돕기로 결정합니다"
+                        )
+                    }
+                    for index in range(8)
+                ],
+            ]
+        }
+        self.assertNotIn(
+            "왜 이렇게 기억나는데",
+            audio_library.semantic_transcript_excerpt(rich_long_recording),
+        )
         courtesy_only = {"segments": [{"text": "감사합니다."}]}
         self.assertIn(
             audio_library.INSUFFICIENT_CONTEXT_AUDIO_FLAG,
@@ -421,6 +475,32 @@ class NamingTests(unittest.TestCase):
         self.assertNotIn(
             audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
             audio_library.transcript_quality_flags(acknowledgement_heavy_dialogue),
+        )
+        mixed_background_and_context = {
+            "duration_seconds": 12_173.0,
+            "quality_flags": [
+                audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            ],
+            "segments": [
+                *[{"text": "아멘"} for _ in range(80)],
+                {
+                    "text": "두 주인공은 가정폭력을 피해 섬으로 떠나기로 약속하고 "
+                    "탈출 비용을 모으면서 서로를 돕기로 결정합니다"
+                },
+                {
+                    "text": "폭풍 뒤 홀로 살아남은 주인공은 방송국 피디에게 발견된 "
+                    "다음 오랫동안 좋아한 가수를 만나 재기를 돕습니다"
+                },
+                {
+                    "text": "처음에는 전개가 느렸지만 과거의 인물들이 현재 사건과 "
+                    "연결되면서 이야기가 재미있어졌다고 평가합니다"
+                },
+                *[{"text": "감사합니다"} for _ in range(20)],
+            ],
+        }
+        self.assertNotIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(mixed_background_and_context),
         )
         dominant_background = {"text": "도움말 " * 20 + "종료 안내"}
         self.assertIn(
@@ -669,6 +749,13 @@ class NamingTests(unittest.TestCase):
                 grounding_text="경영 보고 지연 문제로 설비 데이터 통합을 결정했습니다",
             ),
             "경영보고지연-설비데이터통합",
+        )
+        self.assertEqual(
+            validate_semantic_description(
+                "DESCRIPTION: 가정폭력탈출뒤-무인도생존",
+                grounding_text="가정폭력 탈출 뒤 무인도 생존",
+            ),
+            "가정폭력탈출뒤-무인도생존",
         )
         self.assertEqual(
             validate_semantic_description(
