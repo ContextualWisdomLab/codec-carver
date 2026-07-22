@@ -406,6 +406,34 @@ class NamingTests(unittest.TestCase):
             audio_library.INSUFFICIENT_CONTEXT_AUDIO_FLAG,
             audio_library.transcript_quality_flags(sparse_transcript),
         )
+        sparse_repeated_background = {
+            "duration_seconds": 218.960726,
+            "segments": [
+                {"text": "한글자막 by 한효정"},
+                {"text": "2라운드"},
+                {"text": "고춧가루"},
+                {"text": "한글자막 by 한효정"},
+                {"text": "아멘"},
+            ],
+        }
+        self.assertIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(sparse_repeated_background),
+        )
+        short_sparse_repetition = {
+            "duration_seconds": 59.0,
+            "segments": [
+                {"text": "검토 대기"},
+                {"text": "검토 대기"},
+                {"text": "일정 확인"},
+                {"text": "결과 공유"},
+                {"text": "담당 지정"},
+            ],
+        }
+        self.assertNotIn(
+            audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
+            audio_library.transcript_quality_flags(short_sparse_repetition),
+        )
         short_fragment = {
             "duration_seconds": 3.0,
             "segments": [{"text": "HDMI 이쪽에는 전원"}],
@@ -2959,6 +2987,39 @@ class GpuTranscriberTests(unittest.TestCase):
         ):
             result = GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(
                 Path("background.wav")
+            )
+        self.assertEqual(
+            result["quality_flags"],
+            [audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG],
+        )
+
+    def test_mlx_marks_sparse_repeated_long_form_output(self) -> None:
+        package, _, whisper = self._mlx_modules()
+        whisper.transcribe.return_value = {
+            "text": "한글자막 by 한효정 2라운드 고춧가루 한글자막 by 한효정 아멘",
+            "segments": [
+                {"start": 29.30, "end": 29.56, "text": "한글자막 by 한효정"},
+                {"start": 58.58, "end": 59.98, "text": "2라운드"},
+                {"start": 88.48, "end": 89.88, "text": "고춧가루"},
+                {"start": 146.72, "end": 148.20, "text": "한글자막 by 한효정"},
+                {"start": 192.68, "end": 194.08, "text": "아멘"},
+            ],
+            "language": "ko",
+        }
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=218.960726),
+            patch("audio_library.decode_audio_for_mlx", return_value=object()),
+        ):
+            result = GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(
+                Path("sparse-background.wav")
             )
         self.assertEqual(
             result["quality_flags"],

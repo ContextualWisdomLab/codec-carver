@@ -1357,7 +1357,13 @@ class GpuTranscriber:
             language = getattr(info, "language", None)
         if isinstance(audio_source, VerifiedStagedArtifact):
             audio_source.verify_unchanged()
-        quality_flags = transcript_quality_flags({"text": text, "segments": segments})
+        quality_flags = transcript_quality_flags(
+            {
+                "text": text,
+                "segments": segments,
+                "duration_seconds": duration_seconds,
+            }
+        )
         if not text and not any(segment.get("text") for segment in segments):
             quality_flags.append("no_speech_detected")
         return {
@@ -1867,10 +1873,16 @@ def transcript_quality_flags(transcript: Any) -> list[str]:
         or len(bigrams) >= 10
         and dominant_intra_segment_bigram_count >= 5
         and dominant_bigram_count * 5 >= len(bigrams)
-        or len(segment_texts) >= 3
-        and repeated_segment_count >= 3
+        or len(segment_texts) >= 2
+        and repeated_segment_count >= 2
         and repeated_segment_count * 3 >= len(segment_texts)
         and repeated_segment.casefold() not in REPEATED_ACKNOWLEDGEMENTS
+        and (
+            repeated_segment_count >= 3
+            or duration_seconds >= 120.0
+            and len(segment_texts) * 30.0 <= duration_seconds
+            and len(lexical_tokens) < 20
+        )
     )
     if (
         background_or_repetition

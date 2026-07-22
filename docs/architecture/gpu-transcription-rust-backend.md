@@ -201,6 +201,17 @@ below 0.5 seconds skip model inference and receive a durable quality flag. When
 word timestamps are enabled, an ultra-short segment below 0.5 seconds with mean
 word probability below 0.25 remains in the JSON evidence with a
 `low_confidence` flag but is excluded from usable text and filename descriptions.
+The quality gate also receives the recording duration from the GPU adapter. A
+result of at least 120 seconds in which the same non-acknowledgement fragment
+appears at least twice, dominates a set with at most one trusted segment per 30
+seconds, and supplies fewer than 20 lexical tokens is classified as
+repetitive/background audio unless a sustained,
+lexically diverse contextual run exists. This prevents isolated decoder text
+over non-speech or background-media intervals from becoming an authoritative
+meeting title while retaining every raw segment for audit. This conservative
+false-positive filter follows the documented long-form/non-speech hallucination
+risk in Yan et al. (IWSLT 2024) and the separate false-positive filtering
+architecture evaluated by Bondarenko et al. (NAACL 2025).
 
 The optional `describe` phase treats transcript text as escaped JSON data,
 reserves part of its at-most-48-segment sample for problem, decision, and
@@ -315,6 +326,12 @@ decoder or CUDA runtime.
   Supervision*, arXiv:2212.04356. Repository copy:
   `docs/papers/2212.04356-whisper.pdf` (SHA-256
   `6337bde031b2f237547a977b022f831169a7e05b4d9047f29501166d83594566`).
+- Yan, B. et al. (2024), *CMU's IWSLT 2024 Offline Speech Translation System:
+  A Cascaded Approach For Long-Form Robustness*, IWSLT 2024,
+  <https://doi.org/10.18653/v1/2024.iwslt-1.22>.
+- Bondarenko, I. et al. (2025), *Pisets: A Robust Speech Recognition System for
+  Lectures and Interviews*, NAACL 2025 Industry Track,
+  <https://doi.org/10.18653/v1/2025.naacl-industry.74>.
 - National Institute of Standards and Technology (2015), *Secure Hash Standard
   (SHS), FIPS PUB 180-4*. Repository copy:
   `docs/standards/NIST.FIPS.180-4.pdf` (SHA-256
