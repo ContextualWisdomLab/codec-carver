@@ -86,6 +86,7 @@ EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
 REPETITIVE_OR_BACKGROUND_AUDIO_FLAG = "repetitive_or_background_audio"
 INSUFFICIENT_CONTEXT_AUDIO_FLAG = "insufficient_context_for_filename"
 QUALITY_FLAG_DESCRIPTION_VALIDATION = "quality_flag_title_v1"
+REPETITIVE_BACKGROUND_DESCRIPTION = "반복배경음만이어지고-유의미한발화는확인되지않음"
 MANUAL_DESCRIPTION_SOURCE = "manual_transcript_context_review"
 MANUAL_REVIEW_EVIDENCE_FIELD = "filename_description_reviewed_evidence"
 MANUAL_REVIEW_EVIDENCE_METHOD = "manual_review_of_mlx_word_timestamps"
@@ -3185,7 +3186,7 @@ def validated_cached_filename_description(
     ):
         quality_flags = transcript_quality_flags(transcript)
         expected = (
-            "배경음-전사불명"
+            REPETITIVE_BACKGROUND_DESCRIPTION
             if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags
             else (
                 "무음-또는-전사불명"
@@ -3316,7 +3317,7 @@ def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> st
         semantic = None
     quality_flags = transcript_quality_flags(transcript)
     if REPETITIVE_OR_BACKGROUND_AUDIO_FLAG in quality_flags:
-        return "배경음-전사불명"
+        return REPETITIVE_BACKGROUND_DESCRIPTION
     if INSUFFICIENT_CONTEXT_AUDIO_FLAG in quality_flags:
         return "짧은발화-맥락불명"
     if isinstance(semantic, str):
@@ -4778,7 +4779,7 @@ class AudioLibrary:
                     status = "cached"
                 elif repetitive_background or explained_empty or insufficient_context:
                     quality_title = (
-                        "배경음-전사불명"
+                        REPETITIVE_BACKGROUND_DESCRIPTION
                         if repetitive_background
                         else (
                             "무음-또는-전사불명"
@@ -5299,6 +5300,11 @@ class AudioLibrary:
         manifest["mutation_state_reconciled"] = True
 
         transcript_dir = self.state_dir / "transcripts"
+        tmk_records_by_path = {
+            current["path"]: current
+            for current in manifest["files"]
+            if current.get("kind") == "tmk"
+        }
         for record in unique_audio_records(manifest):
             transcript_path = safe_transcript_path(transcript_dir, record["sha256"])
             transcript = read_optional_private_json(transcript_path)
@@ -5314,6 +5320,27 @@ class AudioLibrary:
                     "tmk_last_marker_seconds"
                 )
                 transcript["tmk_markers_seconds"] = record.get("tmk_markers_seconds")
+                hint_path = transcript.get("tmk_chunk_hint_path")
+                if hint_path in rename_paths:
+                    hint_path = rename_paths[hint_path]
+                hint_record = tmk_records_by_path.get(hint_path)
+                hint_sha256 = transcript.get("tmk_chunk_hint_sha256")
+                if hint_path is not None and (
+                    hint_record is None or hint_record.get("sha256") != hint_sha256
+                ):
+                    primary_tmk_path = record.get("tmk_path")
+                    primary_tmk = tmk_records_by_path.get(primary_tmk_path)
+                    if (
+                        primary_tmk is not None
+                        and primary_tmk.get("sha256") == hint_sha256
+                    ):
+                        hint_path = primary_tmk_path
+                    else:
+                        for field in TMK_CHUNK_HINT_FIELDS:
+                            transcript.pop(field, None)
+                        hint_path = None
+                if hint_path is not None:
+                    transcript["tmk_chunk_hint_path"] = hint_path
                 atomic_json_write(transcript_path, transcript)
         atomic_json_write(self.state_dir / "inventory.json", manifest)
 

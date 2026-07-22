@@ -259,7 +259,10 @@ class NamingTests(unittest.TestCase):
             audio_library.REPETITIVE_OR_BACKGROUND_AUDIO_FLAG,
             audio_library.transcript_quality_flags(repeated_background),
         )
-        self.assertEqual(transcript_description(repeated_background), "배경음-전사불명")
+        self.assertEqual(
+            transcript_description(repeated_background),
+            "반복배경음만이어지고-유의미한발화는확인되지않음",
+        )
         invalid_current_cache = {
             "filename_description": "불완전",
             "filename_description_validation": (
@@ -493,7 +496,7 @@ class NamingTests(unittest.TestCase):
                     "segments": [{"text": "다음 영상에서 만나요."}],
                 }
             ),
-            "배경음-전사불명",
+            "반복배경음만이어지고-유의미한발화는확인되지않음",
         )
         self.assertEqual(
             transcript_description(
@@ -531,7 +534,7 @@ class NamingTests(unittest.TestCase):
                     ],
                 }
             ),
-            "배경음-전사불명",
+            "반복배경음만이어지고-유의미한발화는확인되지않음",
         )
 
         long_segments = [{"text": f"도입 잡음 문장 {index}"} for index in range(12)] + [
@@ -3249,8 +3252,28 @@ class AudioLibraryTests(unittest.TestCase):
                     "sha256": HASH_A,
                     "source_path": "old.wav",
                     "tmk_path": "old.tmk",
+                    "tmk_chunk_hint_path": "old.tmk",
+                    "tmk_chunk_hint_sha256": TMK_HASH,
+                    "tmk_chunk_hint_marker_count": 1,
+                    "tmk_chunk_hint_last_marker_seconds": 300.0,
+                    "tmk_chunk_hint_markers_seconds": [300.0],
                     "text": "진료병원 접수",
                     "segments": [{"text": "진료병원 접수"}],
+                },
+            )
+            atomic_json_write(
+                library.state_dir / "transcripts" / f"{HASH_B}.json",
+                {
+                    "sha256": HASH_B,
+                    "source_path": "without.wav",
+                    "tmk_path": "drop.tmk",
+                    "tmk_chunk_hint_path": "drop.tmk",
+                    "tmk_chunk_hint_sha256": TMK_HASH,
+                    "tmk_chunk_hint_marker_count": 1,
+                    "tmk_chunk_hint_last_marker_seconds": 300.0,
+                    "tmk_chunk_hint_markers_seconds": [300.0],
+                    "text": "후속 진료",
+                    "segments": [{"text": "후속 진료"}],
                 },
             )
             operations = [
@@ -3313,6 +3336,35 @@ class AudioLibraryTests(unittest.TestCase):
             )
             self.assertEqual(transcript["source_path"], "renamed.wav")
             self.assertEqual(transcript["tmk_path"], "renamed.tmk")
+            self.assertEqual(transcript["tmk_chunk_hint_path"], "renamed.tmk")
+            self.assertEqual(transcript["tmk_chunk_hint_sha256"], TMK_HASH)
+            without_transcript = json.loads(
+                (library.state_dir / "transcripts" / f"{HASH_B}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIsNone(without_transcript["tmk_path"])
+            for field in audio_library.TMK_CHUNK_HINT_FIELDS:
+                self.assertNotIn(field, without_transcript)
+
+            transcript["tmk_chunk_hint_path"] = "missing-copy.tmk"
+            atomic_json_write(
+                library.state_dir / "transcripts" / f"{HASH_A}.json", transcript
+            )
+            library._reconcile_executed_mutation_state(
+                {"operations": []},
+                {
+                    "executed": True,
+                    "operation_count": 0,
+                    "completed": [],
+                },
+            )
+            rebound = json.loads(
+                (library.state_dir / "transcripts" / f"{HASH_A}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(rebound["tmk_chunk_hint_path"], "renamed.tmk")
 
             with (
                 patch.object(library, "_validate_mutation_plan", return_value=plan),
@@ -5771,7 +5823,8 @@ class CliTests(unittest.TestCase):
             )
             stored_background = json.loads(background_path.read_text(encoding="utf-8"))
             self.assertEqual(
-                stored_background["filename_description"], "배경음-전사불명"
+                stored_background["filename_description"],
+                "반복배경음만이어지고-유의미한발화는확인되지않음",
             )
             self.assertEqual(
                 stored_background["filename_description_validation"],
