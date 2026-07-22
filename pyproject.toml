@@ -22,7 +22,7 @@ classifiers = [
 # relying on requirements.txt side effects.
 dependencies = [
     "aiofiles==25.1.0",
-    "fastapi==0.139.0",
+    "fastapi==0.139.2",
     "httpx==0.28.1",
     "mcp==1.28.1",
     "python-multipart==0.0.32",
@@ -30,12 +30,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-web = ["fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1"]
+web = ["fastapi==0.139.2", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1"]
 mcp = ["mcp==1.28.1"]
 transcribe = ["faster-whisper==1.2.1"]
 dev = [
     "interrogate==1.7.0",
-    "fastapi==0.139.0",
+    "fastapi==0.139.2",
     "uvicorn==0.51.0",
     "python-multipart==0.0.32",
     "aiofiles==25.1.0",
@@ -44,7 +44,7 @@ dev = [
     "mcp==1.28.1",
 ]
 all = [
-    "fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1",
+    "fastapi==0.139.2", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1",
     "mcp==1.28.1",
     "faster-whisper==1.2.1",
 ]
