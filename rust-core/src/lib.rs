@@ -629,7 +629,11 @@ fn pending_file(
     kind: FileKind,
     extension: String,
 ) -> Result<PendingFile> {
-    let metadata = fs::metadata(path).with_context(|| format!("cannot stat {}", path.display()))?;
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("cannot stat without following links: {}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        bail!("scanned path is not a regular file: {}", path.display());
+    }
     let relative_path: String = path
         .strip_prefix(root)
         .context("scanned path escaped root")?
@@ -2362,6 +2366,15 @@ mod tests {
             let outside = temporary_directory("outside");
             fs::write(outside.join("240102_0304.wav"), b"outside").unwrap();
             symlink(outside.join("240102_0304.wav"), root.join("escape.wav")).unwrap();
+            assert!(
+                pending_file(
+                    &root,
+                    &root.join("escape.wav"),
+                    FileKind::Audio,
+                    "wav".to_string()
+                )
+                .is_err()
+            );
             assert!(inspect_relative(&root, Path::new("escape.wav")).is_err());
             assert!(stage_relative(&root, Path::new("escape.wav"), &root.join("stage")).is_err());
 

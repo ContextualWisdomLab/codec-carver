@@ -94,11 +94,13 @@ class MacosGpuBootstrapTests(unittest.TestCase):
                 self.assertIsNotNone(match)
                 assert match is not None
                 self.assertIn(
-                    "\"numpy==2.2.6; python_version < '3.11'\"",
+                    "\"numpy==2.2.6; platform_system == 'Darwin' and "
+                    "platform_machine == 'arm64' and python_version < '3.11'\"",
                     match.group(1),
                 )
                 self.assertIn(
-                    "\"numpy==2.4.6; python_version >= '3.11'\"",
+                    "\"numpy==2.4.6; platform_system == 'Darwin' and "
+                    "platform_machine == 'arm64' and python_version >= '3.11'\"",
                     match.group(1),
                 )
 

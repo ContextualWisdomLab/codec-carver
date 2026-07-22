@@ -125,6 +125,10 @@ quarantines exact duplicates. Byte-heavy scanning and mutations run in Rust,
 while Python keeps one GPU Whisper model loaded for the batch. Ollama is never
 used and GPU mode does not fall back to CPU.
 
+The editable install below is for local checkout development only. The hardened
+persistent macOS GPU bootstrap installs hash-locked dependencies and runs the
+checkout directly instead of installing the project editable.
+
 ```bash
 cargo build --release --manifest-path rust-core/Cargo.toml
 python3.12 -m venv .venv
