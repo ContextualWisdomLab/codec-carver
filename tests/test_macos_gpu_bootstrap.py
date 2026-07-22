@@ -80,7 +80,9 @@ class MacosGpuBootstrapTests(unittest.TestCase):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, lock)
 
-    def test_mlx_extras_declare_the_direct_numpy_runtime_dependency(self) -> None:
+    def test_mlx_extras_declare_python_compatible_numpy_runtime_dependencies(
+        self,
+    ) -> None:
         project = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
         for extra in ("transcribe-mlx", "all"):
@@ -91,7 +93,14 @@ class MacosGpuBootstrapTests(unittest.TestCase):
                 )
                 self.assertIsNotNone(match)
                 assert match is not None
-                self.assertIn('"numpy==2.4.6"', match.group(1))
+                self.assertIn(
+                    "\"numpy==2.2.6; python_version < '3.11'\"",
+                    match.group(1),
+                )
+                self.assertIn(
+                    "\"numpy==2.4.6; python_version >= '3.11'\"",
+                    match.group(1),
+                )
 
     def test_permission_mask_checks_only_group_and_world_write_bits(self) -> None:
         script = BOOTSTRAP.read_text(encoding="utf-8")

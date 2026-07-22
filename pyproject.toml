@@ -36,7 +36,8 @@ transcribe = ["faster-whisper==1.2.1", "huggingface-hub==1.23.0"]
 transcribe-mlx = [
     "huggingface-hub==1.23.0",
     "mlx-whisper==0.4.3; platform_system == 'Darwin' and platform_machine == 'arm64'",
-    "numpy==2.4.6",
+    "numpy==2.2.6; python_version < '3.11'",
+    "numpy==2.4.6; python_version >= '3.11'",
 ]
 describe-mlx = [
     "mlx-vlm==0.6.4; platform_system == 'Darwin' and platform_machine == 'arm64'",
@@ -59,7 +60,8 @@ all = [
     "huggingface-hub==1.23.0",
     "mlx-whisper==0.4.3; platform_system == 'Darwin' and platform_machine == 'arm64'",
     "mlx-vlm==0.6.4; platform_system == 'Darwin' and platform_machine == 'arm64'",
-    "numpy==2.4.6",
+    "numpy==2.2.6; python_version < '3.11'",
+    "numpy==2.4.6; python_version >= '3.11'",
 ]
 
 [project.urls]
