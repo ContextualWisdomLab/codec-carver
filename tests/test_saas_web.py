@@ -52,7 +52,9 @@ class TestSaasWeb(unittest.TestCase):
 
         self.assertIn("const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;", html)
         self.assertIn("['B', 'KiB', 'MiB', 'GiB']", html)
-        self.assertIn("File exceeds 5 GiB limit.", html)
+        self.assertIn("const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);", html)
+        self.assertIn("'File exceeds ' + limitText + ' limit.'", html)
+        self.assertIn("' (exceeds ' + limitText + ' limit)'", html)
         self.assertIn("preview.style.color = '#0f6674';", html)
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
 
@@ -594,6 +596,8 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertIn('onchange="updateBatchFilePreview(this)"', html)
         self.assertIn('id="batch_files_preview"', html)
         self.assertIn('function updateBatchFilePreview(input)', html)
+        self.assertIn("totalSize > MAX_UPLOAD_BYTES", html)
+        self.assertIn("Total file size exceeds", html)
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
