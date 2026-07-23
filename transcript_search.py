@@ -67,7 +67,10 @@ def tokenize(text: str) -> list[str]:
     Returns:
         List of lowercase tokens (possibly empty).
     """
-    return _WORD_RE.findall(text.lower())
+    lower_text = text.lower()
+    if lower_text.isalnum():
+        return [lower_text] if lower_text else []
+    return _WORD_RE.findall(lower_text)
 
 
 @dataclass(frozen=True)
