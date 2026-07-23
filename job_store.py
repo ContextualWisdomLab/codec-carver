@@ -44,7 +44,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     output_name TEXT,
     error       TEXT,
     temp_dir    TEXT
-)
+);
+-- Bolt ⚡: Optimization for list_jobs queries.
+-- Composite indexes drastically speed up queries by preventing full table scans and memory file sorts
+-- when querying and ordering by status and created_at.
+CREATE INDEX IF NOT EXISTS idx_jobs_status_created_id ON jobs(status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_jobs_created_id ON jobs(created_at, id);
 """
 
 _COLUMNS = (
@@ -95,7 +100,7 @@ class JobStore:
         self._db_path = str(db_path)
         self._lock = threading.Lock()
         with self._connect() as conn:
-            conn.execute(_SCHEMA)
+            conn.executescript(_SCHEMA)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
