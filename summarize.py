@@ -94,7 +94,11 @@ def _content_words(sentence):
     """
     words = []
     for raw in sentence.split():
-        token = _TOKEN_STRIP_RE.sub("", raw).lower()
+        # 최적화: 순수 영숫자로 이루어진 단어는 정규표현식 오버헤드를 우회합니다.
+        if raw.isalnum():
+            token = raw.lower()
+        else:
+            token = _TOKEN_STRIP_RE.sub("", raw).lower()
         if token and token not in _STOPWORDS:
             words.append(token)
     return words
