@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 from job_store import JobStore
 import media_shrinker
 
@@ -532,9 +533,9 @@ def shrink_media(
         # Collect every generated output. Long recordings are split into several
         # segments; returning only the first would silently drop the rest.
         outputs = _existing_outputs(results)
-        background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
 
         if not outputs:
+            cleanup_temp_dir(temp_dir_path)
             logger.error("Processing produced no output: %r", results)
             return {"error": "Processing failed or no output generated"}
 
@@ -550,6 +551,7 @@ def shrink_media(
             path=output_path,
             filename=output_path.name,
             media_type=media_type,
+            background=BackgroundTask(cleanup_temp_dir, temp_dir_path),
         )
 
     except Exception:
@@ -671,11 +673,11 @@ def shrink_media_batch(
         logger.exception("Failed to build batch archive")
         return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
 
-    background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
     return FileResponse(
         path=zip_path,
         filename="codec_carver_batch.zip",
         media_type="application/zip",
+        background=BackgroundTask(cleanup_temp_dir, temp_dir_path),
     )
 
 # --- Async job model --------------------------------------------------------
@@ -852,7 +854,6 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
         return JSONResponse(
             status_code=410, content={"error": "Result no longer available"}
         )
-    background_tasks.add_task(_cleanup_job, job_id)
     media_type = (
         "application/zip" if output_path.suffix == ".zip" else "application/octet-stream"
     )
@@ -860,6 +861,7 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
         path=output_path,
         filename=job["output_name"],
         media_type=media_type,
+        background=BackgroundTask(_cleanup_job, job_id),
     )
 
 

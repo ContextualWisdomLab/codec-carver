@@ -60,3 +60,8 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+
+## 2026-07-25 - [Sentinel: FastAPI 파일 다운로드 취소 시 임시 디렉토리 누수 취약점 해결]
+**취약점:** FastAPI에서 `BackgroundTasks`를 통해 추가된 백그라운드 작업은 응답이 완전히 성공적으로 전송된 *이후*에 실행됩니다. 클라이언트가 `FileResponse` 다운로드 중에 연결을 일찍 끊으면 `BackgroundTasks`는 실행되지 않습니다. 이로 인해 디스크에 남아있는 변환 작업용 임시 디렉토리들이 계속해서 쌓이게 되어 자원 고갈 (CWE-400 / CWE-770 Resource Exhaustion / DoS)을 유발합니다.
+**학습:** 스트림/파일 응답과 연관된 자원 정리를 위한 백그라운드 작업은 스트림이 중간에 끊기더라도 반드시 실행되어야 합니다.
+**예방:** `FileResponse`의 `background` 매개변수에 `starlette.background.BackgroundTask` 객체를 명시적으로 전달해야 합니다. 이렇게 하면 백그라운드 작업이 응답 실행 생명주기 자체에 연결되어, 클라이언트의 취소 여부와 상관없이 스트림 컨텍스트가 닫힐 때 실행됨을 보장합니다.
