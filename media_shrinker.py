@@ -257,14 +257,6 @@ def find_candidates(
 
             file_path_str = os.path.join(dirpath_str, f)
 
-            try:
-                st = os.lstat(file_path_str)
-                if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-                    continue
-                size = st.st_size
-            except OSError:
-                continue
-
             if excluded_exact_strs:
                 resolved_file_str = os.path.join(resolved_dir_str, f)
                 if (
@@ -272,6 +264,14 @@ def find_candidates(
                     or resolved_file_str.startswith(excluded_prefix_strs)
                 ):
                     continue
+
+            try:
+                st = os.lstat(file_path_str)
+                if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                    continue
+                size = st.st_size
+            except OSError:
+                continue
 
             if include_under_limit or size > size_limit_bytes:
                 candidates.append((Path(file_path_str), size))

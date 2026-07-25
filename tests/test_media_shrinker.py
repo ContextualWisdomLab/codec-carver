@@ -249,7 +249,7 @@ class FindCandidateTests(unittest.TestCase):
 
             with patch("os.walk", return_value=[(root_str, [], ["link.wav"])]):
                 with patch("os.lstat", fake_lstat):
-                    candidates = find_candidates(root, include_under_limit=True)
+                    candidates = find_candidates(root, include_under_limit=True, exclude_paths=[Path("/something")])
 
             self.assertEqual(candidates, [])
 
