@@ -47,7 +47,7 @@ DEFAULT_CUDA_MODEL_REPOSITORY = "dropbox-dash/faster-whisper-large-v3-turbo"
 DEFAULT_CUDA_MODEL_REVISION = "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
 DEFAULT_GEMMA_DESCRIPTION_MODEL = "mlx-community/gemma-4-e2b-it-4bit"
 DEFAULT_GEMMA_DESCRIPTION_REVISION = "238767527555cb75a05732a84dff5d6ba0dd6809"
-DEFAULT_MLX_IMPORT_TIMEOUT_SECONDS = 60
+DEFAULT_MLX_IMPORT_TIMEOUT_SECONDS = 300
 APPROVED_FFPROBE_PATHS = (
     Path("/opt/homebrew/bin/ffprobe"),
     Path("/usr/local/bin/ffprobe"),
@@ -5120,7 +5120,12 @@ class AudioLibrary:
                     valid_cache = False
                     if same_generation:
                         try:
-                            excerpt = semantic_transcript_excerpt(transcript)
+                            excerpt = (
+                                validated_manual_review_grounding(transcript)
+                                if manual_review
+                                and MANUAL_REVIEW_EVIDENCE_FIELD in transcript
+                                else semantic_transcript_excerpt(transcript)
+                            )
                             context = transcript.get("filename_description_context")
                             if transcript.get(
                                 "filename_description_validation"

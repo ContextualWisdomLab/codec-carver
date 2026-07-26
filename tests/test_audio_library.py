@@ -1912,6 +1912,7 @@ class NamingTests(unittest.TestCase):
         )
 
     def test_mlx_vlm_preflight_is_bounded_and_reports_failures(self) -> None:
+        self.assertEqual(audio_library.DEFAULT_MLX_IMPORT_TIMEOUT_SECONDS, 300)
         with (
             patch.dict(sys.modules, {"mlx_vlm": types.ModuleType("mlx_vlm")}),
             patch("audio_library.subprocess.run") as run,
@@ -6213,14 +6214,25 @@ class CliTests(unittest.TestCase):
                     "filename_description_model": "manual-transcript-review",
                     "filename_description_revision": "manual-review-1",
                     "duration_seconds": 3.0,
+                    audio_library.MANUAL_REVIEW_EVIDENCE_FIELD: {},
                 }
             )
             atomic_json_write(
                 audio_library.safe_transcript_path(transcript_dir, HASH_A), manual_a
             )
-            with patch("audio_library.GemmaDescriptionGenerator") as generator_class:
+            manual_grounding = (
+                "[S001] BAS 공정 데이터 검토 진행으로 공정 데이터를 확인합니다."
+            )
+            with (
+                patch(
+                    "audio_library.validated_manual_review_grounding",
+                    return_value=manual_grounding,
+                ) as validate_manual_grounding,
+                patch("audio_library.GemmaDescriptionGenerator") as generator_class,
+            ):
                 manual_cached = library.describe(relative_paths=["a.wav"])
             self.assertEqual(manual_cached["cached"], 1)
+            validate_manual_grounding.assert_called_once()
             generator_class.assert_not_called()
 
             stored_a.pop("filename_description_validation")
