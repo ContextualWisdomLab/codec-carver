@@ -255,6 +255,13 @@ HTML_TEMPLATE = """
                     );
                 });
 
+                if (this.value === '') {
+                    preview.innerText = '';
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
+                    return;
+                }
+
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
@@ -281,6 +288,13 @@ HTML_TEMPLATE = """
                         !e.isTrusted && presetValue === val ? 'true' : 'false'
                     );
                 });
+
+                if (this.value === '') {
+                    preview.innerText = '';
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
+                    return;
+                }
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
