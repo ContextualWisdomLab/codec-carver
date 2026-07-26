@@ -247,6 +247,34 @@ class NamingTests(unittest.TestCase):
             normalize_segment({"start": "1", "end": 2, "text": " hello "}),
             {"start": 1.0, "end": 2.0, "text": "hello"},
         )
+        self.assertEqual(
+            normalize_segment(
+                {
+                    "start": 1,
+                    "end": 2,
+                    "text": "단어",
+                    "words": [
+                        {
+                            "start": 1.1,
+                            "end": 1.4,
+                            "word": " 단어 ",
+                            "probability": 0.8754321,
+                        },
+                        {"start": "bad", "end": 2, "word": "제외"},
+                        {"start": -1, "end": 2, "word": "음수제외"},
+                        "invalid",
+                    ],
+                }
+            )["words"],
+            [
+                {
+                    "start": 1.1,
+                    "end": 1.4,
+                    "word": "단어",
+                    "probability": 0.875432,
+                }
+            ],
+        )
         transcript = {
             "segments": [
                 {"text": "어 그러니까 프로젝트 예산 검토를 시작하겠습니다."},
@@ -2842,12 +2870,40 @@ class GpuTranscriberTests(unittest.TestCase):
             {
                 "text": "첫째",
                 "language": "ko",
-                "segments": [{"start": 10, "end": 11, "text": "첫째"}],
+                "segments": [
+                    {
+                        "start": 10,
+                        "end": 11,
+                        "text": "첫째",
+                        "words": [
+                            {
+                                "start": 10.1,
+                                "end": 10.9,
+                                "word": "첫째",
+                                "probability": 0.9,
+                            }
+                        ],
+                    }
+                ],
             },
             {
                 "text": "둘째",
                 "language": "ko",
-                "segments": [{"start": 2, "end": 3, "text": "둘째"}],
+                "segments": [
+                    {
+                        "start": 2,
+                        "end": 3,
+                        "text": "둘째",
+                        "words": [
+                            {
+                                "start": 2.1,
+                                "end": 2.9,
+                                "word": "둘째",
+                                "probability": 0.8,
+                            }
+                        ],
+                    }
+                ],
             },
             {"text": "셋째", "language": "ko", "segments": []},
         ]
@@ -2896,6 +2952,16 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertTrue(result["automatic_chunked"])
         self.assertEqual(result["chunking_strategy"], "fixed_duration")
         self.assertEqual(result["transcription_chunks"], 3)
+        self.assertTrue(result["stored_word_timestamps"])
+        self.assertEqual(result["word_timestamp_count"], 2)
+        self.assertEqual(
+            [
+                (word["start"], word["end"])
+                for segment in result["segments"]
+                for word in segment["words"]
+            ],
+            [(10.1, 10.9), (301.1, 301.9)],
+        )
 
     def test_mlx_resumes_a_contiguous_tmk_chunk_checkpoint(self) -> None:
         package, _, whisper = self._mlx_modules()
@@ -3020,6 +3086,28 @@ class GpuTranscriberTests(unittest.TestCase):
                 [{**base, "segments": [{"start": -1, "end": 2, "text": "bad"}]}],
                 "segment range is invalid",
             ),
+            (
+                [
+                    {
+                        **base,
+                        "segments": [
+                            {
+                                "start": 1,
+                                "end": 2,
+                                "text": "bad word",
+                                "words": [
+                                    {
+                                        "start": 1,
+                                        "end": 31,
+                                        "word": "bad",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "word timestamp is invalid",
+            ),
             ([{**base, "language": 1}], "language is invalid"),
             ([{**base, "text": None}], "text is invalid"),
         ]
@@ -3031,6 +3119,21 @@ class GpuTranscriberTests(unittest.TestCase):
                 audio_library.validated_completed_transcription_chunks(
                     value, ranges, 30.0
                 )
+        valid_word = {
+            **base,
+            "segments": [
+                {
+                    "start": 1,
+                    "end": 2,
+                    "text": "valid word",
+                    "words": [{"start": 1.1, "end": 1.9, "word": "valid"}],
+                }
+            ],
+        }
+        validated = audio_library.validated_completed_transcription_chunks(
+            [valid_word], ranges, 30.0
+        )
+        self.assertEqual(validated[0]["segments"][0]["words"][0]["word"], "valid")
 
     def test_private_checkpoint_removal_rejects_nonfiles_and_foreign_owner(
         self,
@@ -3409,7 +3512,14 @@ class GpuTranscriberTests(unittest.TestCase):
                     start=0,
                     end=1,
                     text=" hello ",
-                    words=[types.SimpleNamespace(probability=0.9)],
+                    words=[
+                        types.SimpleNamespace(
+                            start=0.1,
+                            end=0.9,
+                            word=" hello ",
+                            probability=0.9,
+                        )
+                    ],
                 )
                 empty_segment = types.SimpleNamespace(
                     start=1, end=2, text="", words=None
@@ -3442,6 +3552,19 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertEqual(calls["transcribe"][1]["best_of"], 1)
         self.assertEqual(result["text"], "hello")
         self.assertEqual(result["segments"][0]["word_probability"], 0.9)
+        self.assertEqual(
+            result["segments"][0]["words"],
+            [
+                {
+                    "start": 0.1,
+                    "end": 0.9,
+                    "word": "hello",
+                    "probability": 0.9,
+                }
+            ],
+        )
+        self.assertTrue(result["stored_word_timestamps"])
+        self.assertEqual(result["word_timestamp_count"], 1)
         self.assertEqual(
             result["model_revision"], audio_library.DEFAULT_CUDA_MODEL_REVISION
         )

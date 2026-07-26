@@ -1221,6 +1221,8 @@ class GpuTranscriber:
                 "model": self.model,
                 "model_revision": self.model_revision,
                 "word_timestamps": self.config.word_timestamps,
+                "stored_word_timestamps": False,
+                "word_timestamp_count": 0,
                 "duration_seconds": round(duration_seconds, 6),
                 "quality_flags": ["too_short_for_reliable_speech"],
                 "elapsed_seconds": round(time.perf_counter() - started, 3),
@@ -1295,6 +1297,9 @@ class GpuTranscriber:
                     for segment in normalized_chunk:
                         segment["start"] += decode_start
                         segment["end"] += decode_start
+                        for word in segment.get("words", []):
+                            word["start"] += decode_start
+                            word["end"] += decode_start
                         midpoint = (segment["start"] + segment["end"]) / 2.0
                         if midpoint < logical_start:
                             continue
@@ -1364,7 +1369,13 @@ class GpuTranscriber:
                 words = getattr(segment, "words", None)
                 if words:
                     normalized["words"] = [
-                        {"probability": float(word.probability)} for word in words
+                        {
+                            "start": getattr(word, "start", None),
+                            "end": getattr(word, "end", None),
+                            "word": getattr(word, "word", ""),
+                            "probability": getattr(word, "probability", None),
+                        }
+                        for word in words
                     ]
                 segments.append(normalize_segment(normalized))
             text = trusted_transcript_text(segments)
@@ -1380,6 +1391,9 @@ class GpuTranscriber:
         )
         if not text and not any(segment.get("text") for segment in segments):
             quality_flags.append("no_speech_detected")
+        word_timestamp_count = sum(
+            len(segment.get("words", [])) for segment in segments
+        )
         return {
             "text": text,
             "segments": segments,
@@ -1389,6 +1403,8 @@ class GpuTranscriber:
             "model": self.model,
             "model_revision": self.model_revision,
             "word_timestamps": self.config.word_timestamps,
+            "stored_word_timestamps": word_timestamp_count > 0,
+            "word_timestamp_count": word_timestamp_count,
             "duration_seconds": duration_seconds,
             "tmk_chunked": bool(tmk_ranges),
             "automatic_chunked": bool(automatic_ranges),
@@ -1614,6 +1630,11 @@ def validated_completed_transcription_chunks(
                 and 0.0 <= start <= end <= duration_seconds + 1e-6
             ):
                 raise ValueError("completed transcription segment range is invalid")
+            for word in segment.get("words", []):
+                if not (0.0 <= word["start"] <= word["end"] <= duration_seconds + 1e-6):
+                    raise ValueError(
+                        "completed transcription word timestamp is invalid"
+                    )
             segments.append(segment)
         language = raw.get("language")
         if language is not None and not isinstance(language, str):
@@ -1767,11 +1788,54 @@ def normalize_segment(segment: dict[str, Any]) -> dict[str, Any]:
         "end": float(segment.get("end", 0.0)),
         "text": str(segment.get("text", "")).strip(),
     }
-    probabilities = [
-        float(word["probability"])
-        for word in segment.get("words", [])
-        if word.get("probability") is not None
-    ]
+    raw_words = segment.get("words", [])
+    raw_words = raw_words if isinstance(raw_words, list) else []
+    probabilities = []
+    words = []
+    for raw_word in raw_words:
+        if not isinstance(raw_word, dict):
+            continue
+        probability = raw_word.get("probability")
+        if (
+            not isinstance(probability, bool)
+            and isinstance(probability, (int, float))
+            and math.isfinite(float(probability))
+        ):
+            probabilities.append(float(probability))
+        start = raw_word.get("start")
+        end = raw_word.get("end")
+        word = str(raw_word.get("word", "")).strip()
+        if (
+            not word
+            or isinstance(start, bool)
+            or isinstance(end, bool)
+            or not isinstance(start, (int, float))
+            or not isinstance(end, (int, float))
+        ):
+            continue
+        start_value = float(start)
+        end_value = float(end)
+        if (
+            not math.isfinite(start_value)
+            or not math.isfinite(end_value)
+            or start_value < 0.0
+            or end_value < start_value
+        ):
+            continue
+        normalized_word = {
+            "start": start_value,
+            "end": end_value,
+            "word": word,
+        }
+        if (
+            not isinstance(probability, bool)
+            and isinstance(probability, (int, float))
+            and math.isfinite(float(probability))
+        ):
+            normalized_word["probability"] = round(float(probability), 6)
+        words.append(normalized_word)
+    if words:
+        normalized["words"] = words
     if probabilities:
         word_probability = sum(probabilities) / len(probabilities)
         normalized["word_probability"] = round(word_probability, 6)
