@@ -283,7 +283,11 @@ TMK offsets split long MLX recordings into bounded, one-second-overlap decode
 ranges while the same pinned Whisper model remains resident; midpoint ownership
 removes overlap duplicates and restores every segment to its recording-global
 timestamp. This avoids decoding an hours-long recording into one peak-memory
-waveform. A later dataless flag
+waveform. When a recording longer than ten minutes has no usable TMK vector,
+MLX falls back to deterministic five-minute ranges with the same overlap,
+global timestamps, and per-range checkpointing. The transcript distinguishes
+`tmk_markers`, `fixed_duration`, and `single_pass` chunking, and the run summary
+counts newly completed `automatic_chunked_recordings`. A later dataless flag
 does not cause the same TMK to be downloaded again. Four workers and a 60-second
 per-file timeout are the defaults because higher iCloud File Provider concurrency
 can delay every placeholder; rerunning resumes only unresolved sidecars. Repeat

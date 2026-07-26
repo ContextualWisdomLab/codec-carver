@@ -2832,6 +2832,69 @@ class GpuTranscriberTests(unittest.TestCase):
             [(10.0, 11.0), (301.0, 302.0)],
         )
         self.assertTrue(result["tmk_chunked"])
+        self.assertFalse(result["automatic_chunked"])
+        self.assertEqual(result["chunking_strategy"], "tmk_markers")
+        self.assertEqual(result["transcription_chunks"], 3)
+
+    def test_mlx_automatically_chunks_long_recording_without_tmk(self) -> None:
+        package, _, whisper = self._mlx_modules()
+        whisper.transcribe.side_effect = [
+            {
+                "text": "첫째",
+                "language": "ko",
+                "segments": [{"start": 10, "end": 11, "text": "첫째"}],
+            },
+            {
+                "text": "둘째",
+                "language": "ko",
+                "segments": [{"start": 2, "end": 3, "text": "둘째"}],
+            },
+            {"text": "셋째", "language": "ko", "segments": []},
+        ]
+        progress = Mock()
+        with (
+            patch.dict(
+                sys.modules,
+                {"mlx": package, "mlx.core": package.core, "mlx_whisper": whisper},
+            ),
+            patch(
+                "audio_library.resolve_pinned_whisper_model",
+                return_value=self._pinned_model("mlx"),
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=620.0),
+            patch(
+                "audio_library.decode_audio_for_mlx",
+                side_effect=[object(), object(), object()],
+            ) as decode,
+        ):
+            result = GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(
+                Path("long.m4a"), chunk_progress=progress
+            )
+        self.assertEqual(
+            decode.call_args_list,
+            [
+                call(
+                    Path("long.m4a"),
+                    start_seconds=0.0,
+                    duration_seconds=301.0,
+                ),
+                call(
+                    Path("long.m4a"),
+                    start_seconds=299.0,
+                    duration_seconds=302.0,
+                ),
+                call(
+                    Path("long.m4a"),
+                    start_seconds=599.0,
+                    duration_seconds=21.0,
+                ),
+            ],
+        )
+        self.assertEqual(progress.call_count, 3)
+        self.assertEqual(result["text"], "첫째 둘째 셋째")
+        self.assertFalse(result["tmk_chunked"])
+        self.assertTrue(result["automatic_chunked"])
+        self.assertEqual(result["chunking_strategy"], "fixed_duration")
         self.assertEqual(result["transcription_chunks"], 3)
 
     def test_mlx_resumes_a_contiguous_tmk_chunk_checkpoint(self) -> None:
@@ -2909,7 +2972,7 @@ class GpuTranscriberTests(unittest.TestCase):
                 return_value=self._pinned_model("mlx"),
             ),
             patch("audio_library.audio_duration_seconds", return_value=10.0),
-            self.assertRaisesRegex(ValueError, "require TMK-bounded audio"),
+            self.assertRaisesRegex(ValueError, "require bounded MLX audio"),
         ):
             GpuTranscriber(TranscriptionConfig(accelerator="mlx")).transcribe(
                 Path("short.m4a"), completed_chunks=[{"chunk_index": 0}]
@@ -3012,6 +3075,19 @@ class GpuTranscriberTests(unittest.TestCase):
             [(0.0, 5.0), (5.0, 10.0)],
         )
         self.assertEqual(audio_library.tmk_chunk_ranges([9.8], 10.0), [])
+
+    def test_automatic_mlx_chunk_ranges_bound_long_non_tmk_audio(self) -> None:
+        self.assertEqual(audio_library.automatic_mlx_chunk_ranges(None), [])
+        self.assertEqual(audio_library.automatic_mlx_chunk_ranges(float("nan")), [])
+        self.assertEqual(audio_library.automatic_mlx_chunk_ranges(600.0), [])
+        self.assertEqual(
+            audio_library.automatic_mlx_chunk_ranges(620.0),
+            [(0.0, 300.0), (300.0, 600.0), (600.0, 620.0)],
+        )
+        self.assertEqual(
+            audio_library.automatic_mlx_chunk_ranges(600.1),
+            [(0.0, 300.0), (300.0, 600.1)],
+        )
 
     def test_too_short_audio_skips_model_inference(self) -> None:
         package, _, whisper = self._mlx_modules()
@@ -5758,6 +5834,166 @@ class AudioLibraryTests(unittest.TestCase):
                 (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
             )
             self.assertEqual(transcript["text"], "첫째 둘째")
+
+    def test_stream_transcribe_checkpoints_long_non_tmk_mlx_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            audio = _record(
+                "long.m4a",
+                HASH_A,
+                materialized=True,
+                size_bytes=len(AUDIO_A_BYTES),
+                tmk_path=None,
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [audio],
+                    "duplicate_groups": [],
+                },
+            )
+            (root / audio["path"]).write_bytes(AUDIO_A_BYTES)
+            backend = Mock()
+            backend.inspect.return_value = audio
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {audio["path"]: HASH_A})
+            chunk_zero = {
+                "chunk_index": 0,
+                "chunk_total": 3,
+                "logical_start_seconds": 0.0,
+                "logical_end_seconds": 300.0,
+                "language": "ko",
+                "segments": [{"start": 1.0, "end": 2.0, "text": "첫째"}],
+                "text": "첫째",
+            }
+            chunk_one = {
+                "chunk_index": 1,
+                "chunk_total": 3,
+                "logical_start_seconds": 300.0,
+                "logical_end_seconds": 600.0,
+                "language": "ko",
+                "segments": [{"start": 301.0, "end": 302.0, "text": "둘째"}],
+                "text": "둘째",
+            }
+            chunk_two = {
+                "chunk_index": 2,
+                "chunk_total": 3,
+                "logical_start_seconds": 600.0,
+                "logical_end_seconds": 620.0,
+                "language": "ko",
+                "segments": [{"start": 601.0, "end": 602.0, "text": "셋째"}],
+                "text": "셋째",
+            }
+
+            def interrupted(_audio_input, **kwargs):
+                self.assertEqual(kwargs["completed_chunks"], [])
+                self.assertIsNone(kwargs["tmk_markers_seconds"])
+                kwargs["chunk_progress"](chunk_zero)
+                raise RuntimeError("simulated automatic chunk interruption")
+
+            first = Mock(
+                accelerator="mlx",
+                model="model",
+                model_revision="revision",
+            )
+            first.transcribe.side_effect = interrupted
+            with (
+                patch("audio_library.GpuTranscriber", return_value=first),
+                patch("audio_library.audio_duration_seconds", return_value=620.0),
+            ):
+                failed = library.stream_transcribe(evict_after=False)
+            self.assertEqual(failed["failed"], 1)
+            self.assertEqual(failed["transcription_checkpoints_written"], 1)
+            checkpoint_path = state / "transcripts" / f"{HASH_A}.partial.json"
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            self.assertEqual(checkpoint["chunking_strategy"], "fixed_duration")
+            self.assertEqual(
+                checkpoint["automatic_chunk_seconds"],
+                audio_library.AUTOMATIC_MLX_CHUNK_SECONDS,
+            )
+            self.assertNotIn("tmk_markers_seconds", checkpoint)
+            self.assertEqual(checkpoint["completed_chunks"], [chunk_zero])
+
+            def resumed(_audio_input, **kwargs):
+                self.assertEqual(kwargs["completed_chunks"], [chunk_zero])
+                kwargs["chunk_progress"](chunk_one)
+                kwargs["chunk_progress"](chunk_two)
+                return {
+                    "text": "첫째 둘째 셋째",
+                    "segments": (
+                        chunk_zero["segments"]
+                        + chunk_one["segments"]
+                        + chunk_two["segments"]
+                    ),
+                    "language": "ko",
+                    "automatic_chunked": True,
+                    "resumed_transcription_chunks": 1,
+                }
+
+            second = Mock(
+                accelerator="mlx",
+                model="model",
+                model_revision="revision",
+            )
+            second.transcribe.side_effect = resumed
+            with (
+                patch("audio_library.GpuTranscriber", return_value=second),
+                patch("audio_library.audio_duration_seconds", return_value=620.0),
+            ):
+                completed = library.stream_transcribe(evict_after=False)
+            self.assertEqual(completed["completed"], 1)
+            self.assertEqual(completed["automatic_chunked_recordings"], 1)
+            self.assertEqual(completed["resumed_transcription_chunks"], 1)
+            self.assertEqual(completed["transcription_checkpoints_written"], 2)
+            self.assertFalse(checkpoint_path.exists())
+
+    def test_stream_transcribe_keeps_non_tmk_cuda_on_direct_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            audio = _record(
+                "cuda.wav",
+                HASH_A,
+                materialized=True,
+                size_bytes=len(AUDIO_A_BYTES),
+                tmk_path=None,
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [audio],
+                    "duplicate_groups": [],
+                },
+            )
+            (root / audio["path"]).write_bytes(AUDIO_A_BYTES)
+            backend = Mock()
+            backend.inspect.return_value = audio
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {audio["path"]: HASH_A})
+            transcriber = Mock(
+                accelerator="cuda",
+                model="model",
+                model_revision="revision",
+            )
+            transcriber.transcribe.return_value = {
+                "text": "직접 전사",
+                "segments": [],
+                "language": "ko",
+            }
+            with (
+                patch("audio_library.GpuTranscriber", return_value=transcriber),
+                patch("audio_library.audio_duration_seconds") as duration,
+            ):
+                summary = library.stream_transcribe(evict_after=False)
+            self.assertEqual(summary["completed"], 1)
+            duration.assert_not_called()
+            transcriber.transcribe.assert_called_once()
+            self.assertEqual(transcriber.transcribe.call_args.kwargs, {})
 
     def test_stream_transcribe_uses_cached_hash_and_isolates_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -79,6 +79,8 @@ MACOS_PATH_MAX = 1024
 MIN_TRANSCRIBABLE_SECONDS = 0.5
 TMK_CHUNK_OVERLAP_SECONDS = 1.0
 MAX_TMK_CHUNK_MARKERS = 4096
+AUTOMATIC_MLX_CHUNK_SECONDS = 300.0
+AUTOMATIC_MLX_CHUNK_MIN_DURATION_SECONDS = 600.0
 TRANSCRIPTION_CHECKPOINT_SCHEMA_VERSION = 1
 EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
     {"no_speech_detected", "too_short_for_reliable_speech"}
@@ -1200,7 +1202,7 @@ class GpuTranscriber:
         completed_chunks: Any = None,
         chunk_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
-        """Transcribe one recording, checkpointing complete TMK-bounded chunks."""
+        """Transcribe one recording with resumable bounded MLX chunks."""
 
         started = time.perf_counter()
         duration_seconds = audio_duration_seconds(audio_source)
@@ -1227,7 +1229,11 @@ class GpuTranscriber:
         if self.accelerator == "mlx":
             import mlx_whisper  # type: ignore[import-not-found]
 
-            chunk_ranges = tmk_chunk_ranges(tmk_markers_seconds, duration_seconds)
+            tmk_ranges = tmk_chunk_ranges(tmk_markers_seconds, duration_seconds)
+            automatic_ranges = (
+                [] if tmk_ranges else automatic_mlx_chunk_ranges(duration_seconds)
+            )
+            chunk_ranges = tmk_ranges or automatic_ranges
 
             def infer(decoded_audio: Any) -> dict[str, Any]:
                 """Run the already-loaded MLX model with deterministic settings."""
@@ -1320,7 +1326,7 @@ class GpuTranscriber:
             else:
                 if completed_chunks:
                     raise ValueError(
-                        "completed transcription chunks require TMK-bounded audio"
+                        "completed transcription chunks require bounded MLX audio"
                     )
                 resumed_chunks = []
                 raw = infer(decode_audio_for_mlx(audio_source))
@@ -1332,6 +1338,8 @@ class GpuTranscriber:
                 )
                 language = raw.get("language")
         else:
+            tmk_ranges = []
+            automatic_ranges = []
             chunk_ranges = []
             raw_segments, info = self._cuda_model.transcribe(
                 (
@@ -1382,7 +1390,13 @@ class GpuTranscriber:
             "model_revision": self.model_revision,
             "word_timestamps": self.config.word_timestamps,
             "duration_seconds": duration_seconds,
-            "tmk_chunked": bool(chunk_ranges),
+            "tmk_chunked": bool(tmk_ranges),
+            "automatic_chunked": bool(automatic_ranges),
+            "chunking_strategy": (
+                "tmk_markers"
+                if tmk_ranges
+                else ("fixed_duration" if automatic_ranges else "single_pass")
+            ),
             "transcription_chunks": len(chunk_ranges) if chunk_ranges else 1,
             "resumed_transcription_chunks": len(resumed_chunks),
             "quality_flags": quality_flags,
@@ -1502,6 +1516,37 @@ def tmk_chunk_ranges(
             continue
         if end - start < MIN_TRANSCRIBABLE_SECONDS and ranges:
             ranges[-1] = (ranges[-1][0], float(duration_seconds))
+            break
+        ranges.append((start, end))
+        start = end
+    return ranges if len(ranges) > 1 else []
+
+
+def automatic_mlx_chunk_ranges(
+    duration_seconds: float | None,
+) -> list[tuple[float, float]]:
+    """Split long non-TMK recordings into bounded, resumable MLX work ranges."""
+
+    if (
+        duration_seconds is None
+        or not math.isfinite(duration_seconds)
+        or duration_seconds <= AUTOMATIC_MLX_CHUNK_MIN_DURATION_SECONDS
+    ):
+        return []
+    duration = float(duration_seconds)
+    desired_chunks = math.ceil(duration / AUTOMATIC_MLX_CHUNK_SECONDS)
+    chunk_count = min(desired_chunks, MAX_TMK_CHUNK_MARKERS + 1)
+    chunk_seconds = (
+        AUTOMATIC_MLX_CHUNK_SECONDS
+        if desired_chunks == chunk_count
+        else duration / chunk_count
+    )
+    ranges = []
+    start = 0.0
+    for index in range(1, chunk_count + 1):
+        end = duration if index == chunk_count else min(duration, index * chunk_seconds)
+        if end - start < MIN_TRANSCRIBABLE_SECONDS and ranges:
+            ranges[-1] = (ranges[-1][0], duration)
             break
         ranges.append((start, end))
         start = end
@@ -4642,6 +4687,7 @@ class AudioLibrary:
         prefetch_fallback_allowed = True
         prefetch_transcription_overlaps = 0
         tmk_chunk_hints_used = 0
+        automatic_chunked_recordings = 0
         resumed_transcription_chunks = 0
         transcription_checkpoints_written = 0
         completed = cached = failed = 0
@@ -4831,7 +4877,14 @@ class AudioLibrary:
                     if tmk_chunk_hint:
                         tmk_chunk_hints_used += 1
                     checkpoint_path: Path | None = None
+                    checkpoint_mode: str | None = None
                     if markers_seconds:
+                        checkpoint_mode = "tmk_markers"
+                    elif transcriber.accelerator == "mlx":
+                        duration_hint = audio_duration_seconds(audio_input)
+                        if automatic_mlx_chunk_ranges(duration_hint):
+                            checkpoint_mode = "fixed_duration"
+                    if checkpoint_mode is not None:
                         checkpoint_path = safe_transcription_checkpoint_path(
                             transcript_dir, sha256
                         )
@@ -4843,10 +4896,20 @@ class AudioLibrary:
                             "model_revision": vars(transcriber).get("model_revision"),
                             "language": config.language,
                             "word_timestamps": config.word_timestamps,
-                            "tmk_markers_seconds": canonical_tmk_markers(
-                                markers_seconds
-                            ),
                         }
+                        if checkpoint_mode == "tmk_markers":
+                            checkpoint_identity["tmk_markers_seconds"] = (
+                                canonical_tmk_markers(markers_seconds)
+                            )
+                        else:
+                            checkpoint_identity.update(
+                                {
+                                    "chunking_strategy": "fixed_duration",
+                                    "automatic_chunk_seconds": (
+                                        AUTOMATIC_MLX_CHUNK_SECONDS
+                                    ),
+                                }
+                            )
                         existing_checkpoint = read_optional_private_json(
                             checkpoint_path
                         )
@@ -4904,6 +4967,9 @@ class AudioLibrary:
                         result = transcriber.transcribe(audio_input)
                     resumed_transcription_chunks += int(
                         result.get("resumed_transcription_chunks", 0)
+                    )
+                    automatic_chunked_recordings += int(
+                        result.get("automatic_chunked") is True
                     )
                     result.update(
                         {
@@ -4972,6 +5038,7 @@ class AudioLibrary:
             "prefetch_fallback_suppressed": prefetch_fallback_suppressed,
             "prefetch_transcription_overlaps": prefetch_transcription_overlaps,
             "tmk_chunk_hints_used": tmk_chunk_hints_used,
+            "automatic_chunked_recordings": automatic_chunked_recordings,
             "resumed_transcription_chunks": resumed_transcription_chunks,
             "transcription_checkpoints_written": transcription_checkpoints_written,
             "recordings_selected": len(records),

@@ -43,6 +43,10 @@ preferred interface for recording curation.
   decode ranges with one-second overlap. The persistent pinned model processes
   those ranges serially on Metal; segment midpoint ownership removes overlap
   duplicates and converts timestamps back to the recording-global timeline.
+- If a recording exceeds ten minutes without usable TMK offsets, MLX creates
+  deterministic five-minute ranges instead. Those ranges use the same overlap,
+  global timestamp restoration, and owner-only resumable checkpoints; TMK
+  ranges remain authoritative whenever they exist.
 - Streaming order is based on the live macOS dataless flag rather than stale
   inventory state, so locally resident audio reaches the GPU before iCloud work.
 - Before a dataless stage, Rust calls Foundation's supported
@@ -202,7 +206,10 @@ rollback races.
 For long Sony recordings, the Rust-provided TMK vector bounds each MLX waveform
 decode instead of materializing the entire recording as one float array. This
 reduces peak memory without reloading the model or switching away from GPU
-inference; overlap protects speech at synthetic marker boundaries.
+inference; overlap protects speech at marker boundaries. Long recordings
+without a usable TMK vector use deterministic five-minute boundaries, so an
+interruption resumes from the last durable chunk instead of retranscribing the
+whole file.
 
 Both backends disable previous-window conditioning to avoid repetition loops
 and use greedy decoding (`temperature=0` on MLX, beam/best-of 1 on CUDA) to
