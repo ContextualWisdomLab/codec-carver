@@ -2612,10 +2612,6 @@ class PresetModuleTests(unittest.TestCase):
         self.assertIs(result, args)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class FastPathTests(unittest.TestCase):
     def test_copy_extended_attributes_dummy(self) -> None:
         from media_shrinker import _copy_extended_attributes
@@ -3152,12 +3148,12 @@ class OutputFormatTests(unittest.TestCase):
             media_shrinker.parse_args(["root", "--format", "wav"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class MediaShrinkerParseCoverageTests(unittest.TestCase):
     def test_parse_silencedetect_intervals_no_silence(self) -> None:
         stderr = "some random ffmpeg progress output"
         intervals = parse_silencedetect_intervals(stderr)
         self.assertEqual(intervals, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

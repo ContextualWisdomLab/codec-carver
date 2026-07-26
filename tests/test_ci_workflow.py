@@ -44,8 +44,27 @@ class CiWorkflowTests(unittest.TestCase):
         """Keep the read-only workflow token out of later build steps."""
 
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        lines = workflow.splitlines()
+        checkout_steps = []
+        for index, line in enumerate(lines):
+            if not line.strip().startswith("- uses: actions/checkout@"):
+                continue
+            indentation = len(line) - len(line.lstrip())
+            step = [line]
+            for candidate in lines[index + 1 :]:
+                candidate_indentation = len(candidate) - len(candidate.lstrip())
+                if (
+                    candidate.strip().startswith("- ")
+                    and candidate_indentation <= indentation
+                ):
+                    break
+                step.append(candidate)
+            checkout_steps.append("\n".join(step))
 
-        self.assertEqual(workflow.count("persist-credentials: false"), 2)
+        self.assertEqual(len(checkout_steps), 2)
+        for step in checkout_steps:
+            with self.subTest(step=step.splitlines()[0].strip()):
+                self.assertIn("persist-credentials: false", step)
 
 
 if __name__ == "__main__":  # pragma: no cover

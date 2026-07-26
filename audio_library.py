@@ -1621,6 +1621,35 @@ def validated_completed_transcription_chunks(
         for raw_segment in raw_segments:
             if not isinstance(raw_segment, dict):
                 raise ValueError("completed transcription segment must be an object")
+            raw_words = raw_segment.get("words", [])
+            if not isinstance(raw_words, list):
+                raise ValueError("completed transcription segment words must be a list")
+            for raw_word in raw_words:
+                if not isinstance(raw_word, dict):
+                    raise ValueError("completed transcription word must be an object")
+                word = str(raw_word.get("word", "")).strip()
+                start = raw_word.get("start")
+                end = raw_word.get("end")
+                if (
+                    not word
+                    or isinstance(start, bool)
+                    or isinstance(end, bool)
+                    or not isinstance(start, (int, float))
+                    or not isinstance(end, (int, float))
+                ):
+                    raise ValueError(
+                        "completed transcription word timestamp is invalid"
+                    )
+                start_value = float(start)
+                end_value = float(end)
+                if not (
+                    math.isfinite(start_value)
+                    and math.isfinite(end_value)
+                    and 0.0 <= start_value <= end_value <= duration_seconds + 1e-6
+                ):
+                    raise ValueError(
+                        "completed transcription word timestamp is invalid"
+                    )
             segment = normalize_segment(raw_segment)
             start = segment["start"]
             end = segment["end"]
@@ -1630,11 +1659,6 @@ def validated_completed_transcription_chunks(
                 and 0.0 <= start <= end <= duration_seconds + 1e-6
             ):
                 raise ValueError("completed transcription segment range is invalid")
-            for word in segment.get("words", []):
-                if not (0.0 <= word["start"] <= word["end"] <= duration_seconds + 1e-6):
-                    raise ValueError(
-                        "completed transcription word timestamp is invalid"
-                    )
             segments.append(segment)
         language = raw.get("language")
         if language is not None and not isinstance(language, str):
@@ -5795,7 +5819,12 @@ class AudioLibrary:
         """Rehash the exact current local bytes before cache or GPU use."""
 
         source = self.root / record["path"]
-        if not source.is_file() or is_icloud_dataless(source):
+        if not source.is_file():
+            raise FileNotFoundError(
+                "inventory path is missing; refresh inventory or reconcile the "
+                f"filename before transcription: {record['path']}"
+            )
+        if is_icloud_dataless(source):
             raise ValueError(
                 f"recording is not materialized; use stream-transcribe: {record['path']}"
             )

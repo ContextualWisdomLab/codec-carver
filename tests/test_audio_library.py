@@ -3083,6 +3083,29 @@ class GpuTranscriberTests(unittest.TestCase):
             ([{**base, "segments": {}}], "segments must be a list"),
             ([{**base, "segments": ["bad"]}], "segment must be an object"),
             (
+                [{**base, "segments": [{"start": 1, "end": 2, "words": {}}]}],
+                "segment words must be a list",
+            ),
+            (
+                [{**base, "segments": [{"start": 1, "end": 2, "words": ["bad"]}]}],
+                "word must be an object",
+            ),
+            (
+                [
+                    {
+                        **base,
+                        "segments": [
+                            {
+                                "start": 1,
+                                "end": 2,
+                                "words": [{"start": 1, "end": 2, "word": ""}],
+                            }
+                        ],
+                    }
+                ],
+                "word timestamp is invalid",
+            ),
+            (
                 [{**base, "segments": [{"start": -1, "end": 2, "text": "bad"}]}],
                 "segment range is invalid",
             ),
@@ -3699,6 +3722,26 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertFalse((root / ".codec-carver").exists())
             with self.assertRaisesRegex(ValueError, "must be an absolute path"):
                 AudioLibrary(root, Mock(), state_dir=Path("relative-state"))
+
+    def test_verify_materialized_record_identifies_missing_inventory_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = Mock()
+            library = AudioLibrary(Path(tmp), backend)
+            record = _record("missing.wav", HASH_A, materialized=True)
+
+            with self.assertRaisesRegex(FileNotFoundError, "inventory path is missing"):
+                library._verify_materialized_record(record)
+
+            (Path(tmp) / "missing.wav").write_bytes(AUDIO_A_BYTES)
+            with (
+                patch("audio_library.is_icloud_dataless", return_value=True),
+                self.assertRaisesRegex(ValueError, "recording is not materialized"),
+            ):
+                library._verify_materialized_record(record)
+
+            backend.inspect.assert_not_called()
 
     def test_selected_inventory_refresh_uses_rust_inspect_and_preserves_baseline(
         self,
