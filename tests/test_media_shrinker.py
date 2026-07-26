@@ -2083,7 +2083,7 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(MediaShrinkerError):
             calculate_audio_bitrate(10_000, 1, None)
 
-    def test_download_from_icloud_requires_brctl_and_reports_failure(self) -> None:
+    def test_download_from_icloud_handles_missing_failure_and_success(self) -> None:
         with patch("media_shrinker.shutil.which", return_value=None):
             with self.assertRaisesRegex(MediaShrinkerError, "was not found"):
                 media_shrinker.download_from_icloud(Path("source.wav"))
