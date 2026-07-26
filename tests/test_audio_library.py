@@ -2197,6 +2197,27 @@ class RustBackendTests(unittest.TestCase):
                 )
             self.assertEqual(result, {"ok": True})
 
+            vanished = Mock()
+            vanished.name = ".codec-carver-73-1.wav.partial"
+            vanished.stat.side_effect = FileNotFoundError
+            process = Mock(pid=73, returncode=0)
+            process.communicate.side_effect = [
+                subprocess.TimeoutExpired(["core", "stage"], 1),
+                ('{"ok": true}', ""),
+            ]
+            with (
+                patch("audio_library.subprocess.Popen", return_value=process),
+                patch("audio_library.Path.glob", side_effect=[[vanished], []]),
+                patch(
+                    "audio_library.time.monotonic",
+                    side_effect=[0.0, 0.0, 0.5, 0.5],
+                ),
+            ):
+                result = RustBackend._run_stage_json(
+                    ["core", "stage"], staging, stall_timeout_seconds=1
+                )
+            self.assertEqual(result, {"ok": True})
+
     def test_stage_retries_incomplete_icloud_reads_only_while_progressing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

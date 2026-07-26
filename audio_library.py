@@ -1006,12 +1006,16 @@ class RustBackend:
                     stdout, stderr = process.communicate(timeout=remaining)
                 except subprocess.TimeoutExpired as exc:
                     now = time.monotonic()
-                    current_sizes = tuple(
-                        sorted(
-                            (partial.name, partial.stat().st_size)
-                            for partial in staging_dir.glob(pattern)
-                        )
-                    )
+                    current_size_rows = []
+                    for partial in staging_dir.glob(pattern):
+                        try:
+                            size = partial.stat().st_size
+                        except FileNotFoundError:
+                            # The Rust backend can atomically finalize a partial
+                            # between the directory scan and this progress probe.
+                            continue
+                        current_size_rows.append((partial.name, size))
+                    current_sizes = tuple(sorted(current_size_rows))
                     if current_sizes != observed_sizes:
                         observed_sizes = current_sizes
                         last_activity = now
