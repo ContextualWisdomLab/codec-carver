@@ -368,7 +368,7 @@ pub fn stage_relative(
         std::process::id()
     ));
     let mut tmk_bytes = (kind == FileKind::Tmk)
-        .then(|| Vec::with_capacity(pending.size_bytes.min(1024 * 1024) as usize));
+        .then(|| Vec::with_capacity(pending.size_bytes.min(MAX_TMK_CAPTURE_BYTES as u64) as usize));
     let sha256 = match copy_and_hash_staged_source(
         &canonical_root,
         relative_path,
@@ -521,7 +521,7 @@ fn evict_icloud_file(path: &Path) -> Result<()> {
     use objc2_foundation::{NSFileManager, NSURL};
 
     let url = NSURL::from_file_path(path)
-        .expect("a canonical absolute filesystem path always has a file URL");
+        .ok_or_else(|| anyhow!("cannot create a file URL for {}", path.display()))?;
     NSFileManager::defaultManager()
         .evictUbiquitousItemAtURL_error(&url)
         .map_err(|error| anyhow!("cannot evict iCloud file {}: {error}", path.display()))
@@ -663,7 +663,7 @@ fn pending_file(
 fn process_file(pending: &PendingFile) -> FileRecord {
     let mut tmk_bytes = if pending.kind == FileKind::Tmk {
         Some(Vec::with_capacity(
-            pending.size_bytes.min(1024 * 1024) as usize
+            pending.size_bytes.min(MAX_TMK_CAPTURE_BYTES as u64) as usize,
         ))
     } else {
         None
@@ -672,9 +672,8 @@ fn process_file(pending: &PendingFile) -> FileRecord {
         hash_file(&pending.absolute_path, tmk_bytes.as_mut())
     } else {
         Err(anyhow!(
-            "iCloud dataless placeholder; run `codec-carver-library <root> \
-             stream-transcribe --path {:?}` to request it through the native macOS \
-             FileManager API, or use Finder 'Download Now', before hashing",
+            "iCloud dataless placeholder; materialize {:?} through Finder 'Download \
+             Now' or a native macOS FileManager API request before hashing",
             pending.relative_path
         ))
     };
@@ -2430,6 +2429,7 @@ mod tests {
         let error = record.error.unwrap();
         assert!(error.contains("dataless placeholder"));
         assert!(error.contains("native macOS FileManager API"));
+        assert!(!error.contains("codec-carver-library"));
         assert!(!error.contains("brctl download"));
         fs::remove_dir_all(root).unwrap();
     }

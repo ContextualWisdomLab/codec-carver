@@ -6749,6 +6749,18 @@ class CliTests(unittest.TestCase):
         )
         library.apply.assert_called_once_with(execute=True)
 
+    def test_main_rejects_backend_digest_without_explicit_binary(self) -> None:
+        with (
+            patch("audio_library.RustBackend") as backend,
+            patch("audio_library.AudioLibrary") as library,
+            self.assertRaisesRegex(
+                SystemExit, "--backend-sha256 requires --backend-binary"
+            ),
+        ):
+            audio_library.main([".", "--backend-sha256", "a" * 64, "inventory"])
+        backend.assert_not_called()
+        library.assert_not_called()
+
     def test_stream_parser_uses_field_tested_stage_stall_default(self) -> None:
         args = audio_library.build_parser().parse_args([".", "stream-transcribe"])
 

@@ -40,6 +40,13 @@ class CiWorkflowTests(unittest.TestCase):
         self.assertIn("runs-on: ${{ matrix.os }}", workflow)
         self.assertIn("os: [ubuntu-latest, macos-latest]", workflow)
 
+    def test_checkout_does_not_persist_credentials(self) -> None:
+        """Keep the read-only workflow token out of later build steps."""
+
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertEqual(workflow.count("persist-credentials: false"), 2)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

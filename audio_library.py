@@ -4922,35 +4922,42 @@ class AudioLibrary:
                                 "completed_chunks", []
                             )
 
-                        def checkpoint_chunk(chunk: dict[str, Any]) -> None:
+                        def checkpoint_chunk(
+                            chunk: dict[str, Any],
+                            *,
+                            _chunks=completed_checkpoint_chunks,
+                            _checkpoint_path=checkpoint_path,
+                            _checkpoint_identity=checkpoint_identity,
+                            _source_path=record["path"],
+                            _record_index=index,
+                            _record_total=len(records),
+                        ) -> None:
                             """Persist one contiguous chunk before starting the next."""
 
                             nonlocal transcription_checkpoints_written
-                            if not isinstance(completed_checkpoint_chunks, list):
+                            if not isinstance(_chunks, list):
                                 raise ValueError(
                                     "completed transcription checkpoint is not a list"
                                 )
-                            if chunk.get("chunk_index") != len(
-                                completed_checkpoint_chunks
-                            ):
+                            if chunk.get("chunk_index") != len(_chunks):
                                 raise ValueError(
                                     "transcription checkpoint chunks are not contiguous"
                                 )
-                            completed_checkpoint_chunks.append(chunk)
+                            _chunks.append(chunk)
                             atomic_json_write(
-                                checkpoint_path,
+                                _checkpoint_path,
                                 {
-                                    **checkpoint_identity,
-                                    "source_path": record["path"],
-                                    "completed_chunks": completed_checkpoint_chunks,
+                                    **_checkpoint_identity,
+                                    "source_path": _source_path,
+                                    "completed_chunks": _chunks,
                                 },
                             )
                             transcription_checkpoints_written += 1
                             if progress:
                                 progress(
-                                    index,
-                                    len(records),
-                                    record["path"],
+                                    _record_index,
+                                    _record_total,
+                                    _source_path,
                                     (
                                         "chunk_completed:"
                                         f"{chunk['chunk_index'] + 1}/{chunk['chunk_total']}"
@@ -6687,6 +6694,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     """Run inventory, GPU transcription, planning, or guarded application."""
 
     args = build_parser().parse_args(argv)
+    if args.backend_sha256 is not None and args.backend_binary is None:
+        raise SystemExit("--backend-sha256 requires --backend-binary")
     library = AudioLibrary(
         args.root,
         RustBackend(args.backend_binary, expected_sha256=args.backend_sha256),
