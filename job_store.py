@@ -95,7 +95,10 @@ class JobStore:
         self._db_path = str(db_path)
         self._lock = threading.Lock()
         with self._connect() as conn:
-            conn.execute(_SCHEMA)
+            # Optimize: PRAGMA journal_mode=WAL is persistent in the SQLite file.
+            # Setting it once during initialization (via executescript) avoids
+            # executing the pragma query on every short-lived connection.
+            conn.executescript("PRAGMA journal_mode=WAL;\n" + _SCHEMA)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -108,7 +111,6 @@ class JobStore:
         conn = sqlite3.connect(self._db_path, timeout=30.0)
         try:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
             yield conn
             conn.commit()
         finally:
