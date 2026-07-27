@@ -67,3 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2024-07-27 - [단어 토큰화 시 정규표현식 오버헤드를 줄이는 isalnum 빠른 경로]
+**학습:** 문자열 토큰화 작업 시 문장부호를 제거하기 위해 정규표현식을 사용할 때, 모든 단어에 대해 정규표현식을 실행하는 것은 큰 오버헤드를 발생시킵니다. 실제 대부분의 텍스트에서 단어는 영숫자로만 이루어진 경우가 많습니다.
+**실행:** 비단어 문자를 제거하는 정규표현식을 실행하기 전에 `str.isalnum()` (또는 `str.isalpha()`)을 사용하는 빠른 경로(fast-path) 검사를 추가하여, 순수 영숫자 단어에 대해서는 무거운 정규표현식 오버헤드를 건너뛰도록 합니다.
