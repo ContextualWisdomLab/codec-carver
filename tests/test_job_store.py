@@ -24,6 +24,12 @@ class JobStoreTestCase(unittest.TestCase):
 
 
 class TestCreateAndGet(JobStoreTestCase):
+    def test_wal_mode_is_persistent(self):
+        # ⚡ Bolt: 테스트 - PRAGMA journal_mode=WAL 이 지속적으로 적용되는지 확인합니다.
+        with self.store._connect() as conn:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            self.assertEqual(mode.lower(), "wal")
+
     def test_create_get_roundtrip(self):
         self.store.create("job-1", temp_dir="/tmp/job-1", now=T0)
         job = self.store.get("job-1")

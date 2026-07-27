@@ -121,7 +121,8 @@ class UsageStore:
         self._lock = threading.Lock()
         with closing(self._connect()) as conn:
             with conn:
-                conn.execute(_SCHEMA)
+                # ⚡ Bolt: WAL 모드는 파일 단위로 영구적이므로 연결마다 하지 않고 초기화 시 1회만 설정하여 오버헤드 최소화 (Performance optimization: set WAL mode once)
+                conn.executescript(f"PRAGMA journal_mode=WAL;\n{_SCHEMA}")
 
     def _connect(self) -> sqlite3.Connection:
         """Open a new short-lived connection with WAL mode enabled.
@@ -130,7 +131,6 @@ class UsageStore:
             A fresh :class:`sqlite3.Connection` to the store's database.
         """
         conn = sqlite3.connect(self._db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
     def record(

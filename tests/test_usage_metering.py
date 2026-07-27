@@ -7,6 +7,7 @@ deterministic and touch no network.
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
