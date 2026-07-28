@@ -52,9 +52,18 @@ class TestSaasWeb(unittest.TestCase):
 
         self.assertIn("const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;", html)
         self.assertIn("['B', 'KiB', 'MiB', 'GiB']", html)
-        self.assertIn("File exceeds 5 GiB limit.", html)
+        self.assertIn("File exceeds ' + formatBinaryBytes(MAX_UPLOAD_BYTES) + ' limit.", html)
         self.assertIn("preview.style.color = '#0f6674';", html)
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
+
+    def test_get_ui_includes_batch_file_size_validation(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+
+        self.assertIn("Total file size exceeds ' + formatBinaryBytes(MAX_UPLOAD_BYTES) + ' limit.", html)
+        self.assertIn("exceeds ' + formatBinaryBytes(MAX_UPLOAD_BYTES) + ' limit)", html)
+        self.assertIn('onchange="updateBatchFilePreview(this)"', html)
 
     def test_security_headers_present_without_plain_http_hsts(self):
         response = client.get("/")

@@ -1,3 +1,6 @@
+## 2024-07-28 - Dynamic File Size Formatting in Validation Messages
+**Learning:** Hardcoded human-readable strings for constant byte limits (e.g., '5 GiB' for 5 * 1024^3 bytes) lead to inaccurate or misleading error messages if the underlying constants change in the future.
+**Action:** When creating client-side UI error messages that rely on constant constraints (like MAX_UPLOAD_BYTES), dynamically format the limit using standard binary formatting functions (e.g., `formatBinaryBytes(MAX_UPLOAD_BYTES)`) rather than hardcoding the human-readable string.
 ## 2024-07-12 - Intercepting batch form submissions for testing visual loading states
 **Learning:** Extending the learning from 2024-06-13, intercepting form submissions using `e.preventDefault()` via `page.evaluate()` is essential for capturing screenshot and video evidence of loading states (e.g., button disabling, spinner appearing) on forms like batch upload where the submission would normally reload the page or download an archive.
 **Action:** When testing visual loading states with Playwright, always inject an event listener using `page.evaluate()` to call `e.preventDefault()` on the form's `submit` event to freeze the UI in its loading state for verification.
