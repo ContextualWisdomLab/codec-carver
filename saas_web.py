@@ -239,19 +239,30 @@ HTML_TEMPLATE = """
                 preview.innerText = 'Selected file size: ' + text;
             }
 
+            const targetButtons = Array.from(document.querySelectorAll('#preset_buttons_container .preset-btn')).map(btn => ({
+                el: btn,
+                val: parseInt(btn.dataset.bytes, 10)
+            }));
+
             document.getElementById('target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
+                if (this.value === '') {
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
+                    preview.innerText = '';
+                    targetButtons.forEach(item => item.el.setAttribute('aria-pressed', 'false'));
+                    return;
+                }
+
+                const val = parseInt(this.value, 10);
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
 
-                const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
-                buttons.forEach(btn => {
-                    const presetValue = Number.parseInt(btn.dataset.bytes, 10);
-                    btn.setAttribute(
+                targetButtons.forEach(item => {
+                    item.el.setAttribute(
                         'aria-pressed',
-                        !e.isTrusted && presetValue === val ? 'true' : 'false'
+                        !e.isTrusted && item.val === val ? 'true' : 'false'
                     );
                 });
 
@@ -266,19 +277,30 @@ HTML_TEMPLATE = """
 
             });
 
+            const batchTargetButtons = Array.from(document.querySelectorAll('#batch_preset_buttons_container .preset-btn')).map(btn => ({
+                el: btn,
+                val: parseInt(btn.dataset.bytes, 10)
+            }));
+
             document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
                 const preview = document.getElementById('batch_target_bytes_preview');
+                if (this.value === '') {
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
+                    preview.innerText = '';
+                    batchTargetButtons.forEach(item => item.el.setAttribute('aria-pressed', 'false'));
+                    return;
+                }
+
+                const val = parseInt(this.value, 10);
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
 
-                const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
-                buttons.forEach(btn => {
-                    const presetValue = Number.parseInt(btn.dataset.bytes, 10);
-                    btn.setAttribute(
+                batchTargetButtons.forEach(item => {
+                    item.el.setAttribute(
                         'aria-pressed',
-                        !e.isTrusted && presetValue === val ? 'true' : 'false'
+                        !e.isTrusted && item.val === val ? 'true' : 'false'
                     );
                 });
 
