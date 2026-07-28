@@ -67,3 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2024-05-24 - [isalnum 빠른 경로를 사용한 summarize.py의 구두점 제거 최적화]
+**학습:** 문자열에서 구두점을 제거할 때 정규표현식(`re.sub`)을 사용하는 것은 모든 단어에 대해 비용이 많이 듭니다. 대부분의 텍스트가 영숫자로 구성되어 있으므로 정규 표현식을 실행하기 전에 `str.isalnum()`을 사용한 빠른 경로 검사를 추가하면 성능이 크게 향상됩니다.
+**실행:** 문자열 토큰화 및 정규표현식을 사용한 정리 작업 시 순수 영숫자 텍스트에 대한 오버헤드를 우회하기 위해 `str.isalnum()`과 같은 빠른 경로 검사를 항상 고려하십시오.
