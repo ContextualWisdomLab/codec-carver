@@ -1,3 +1,6 @@
+## 2024-07-28 - Optimize persistent PRAGMA execution in short-lived SQLite connections
+**Learning:** SQLite settings like `PRAGMA journal_mode=WAL` persist across connections for a given database file. Executing them redundantly inside the `_connect()` method adds unnecessary query overhead and network/lock contention for every short-lived connection.
+**Action:** Move persistent PRAGMA setup to the database initialization phase (e.g. within the same `conn.executescript()` that creates the `_SCHEMA`). This ensures the settings are applied once without paying the cost on every connection.
 ## 2024-05-28 - Avoid O(N^2) Path.resolve() in Batch Processing
 **Learning:** Python's `pathlib.Path.resolve()` is relatively slow because it touches the filesystem to follow symlinks and resolve relative paths. When dealing with a batch operation (e.g., scanning large directories of media files), calculating protected files via `any(target == src.resolve() for src in sources)` on every check leads to massive O(N^2) CPU overhead.
 **Action:** Pre-resolve the entire list of candidate paths once into a `frozenset` at the beginning of the batch process. Pass this resolved set down the call stack so that collision/protection checks become O(1) hash map lookups instead of triggering millions of unnecessary disk access operations.
