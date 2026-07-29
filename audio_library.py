@@ -1802,8 +1802,40 @@ def transcript_cache_matches_record(
         return False
     if transcript.get("requested_language") != requested_language:
         return False
-    if require_word_timestamps and transcript.get("word_timestamps") is not True:
-        return False
+    if require_word_timestamps:
+        if transcript.get("word_timestamps") is not True:
+            return False
+        stored_word_timestamps = transcript.get("stored_word_timestamps")
+        word_timestamp_count = transcript.get("word_timestamp_count")
+        if (
+            isinstance(word_timestamp_count, bool)
+            or not isinstance(word_timestamp_count, int)
+            or word_timestamp_count < 0
+        ):
+            return False
+        segments = transcript.get("segments")
+        segment_word_count = (
+            sum(
+                len(words)
+                for segment in segments
+                if isinstance(segment, dict)
+                and isinstance((words := segment.get("words")), list)
+            )
+            if isinstance(segments, list)
+            else 0
+        )
+        if segment_word_count != word_timestamp_count:
+            return False
+        if word_timestamp_count > 0:
+            if stored_word_timestamps is not True:
+                return False
+        else:
+            flags = transcript.get("quality_flags")
+            if stored_word_timestamps is not False or not (
+                isinstance(flags, list)
+                and any(flag in EXPLAINED_EMPTY_TRANSCRIPT_FLAGS for flag in flags)
+            ):
+                return False
     return True
 
 

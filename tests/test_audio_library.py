@@ -783,12 +783,19 @@ class NamingTests(unittest.TestCase):
         cached = {
             "sha256": HASH_A,
             "text": "검증된 전사",
-            "segments": [{"text": "검증된 전사"}],
             "accelerator": "mlx",
             "model": "approved-model",
             "model_revision": "approved-revision",
             "requested_language": "ko",
             "word_timestamps": True,
+            "stored_word_timestamps": True,
+            "word_timestamp_count": 1,
+            "segments": [
+                {
+                    "text": "검증된 전사",
+                    "words": [{"start": 0.0, "end": 0.5, "word": "검증된"}],
+                }
+            ],
         }
         identity = {
             "accelerator": "mlx",
@@ -828,6 +835,50 @@ class NamingTests(unittest.TestCase):
                 **{**identity, "require_word_timestamps": False},
             )
         )
+        for tampered in (
+            {**cached, "stored_word_timestamps": False},
+            {**cached, "word_timestamp_count": True},
+            {**cached, "word_timestamp_count": -1},
+            {**cached, "word_timestamp_count": 0},
+            {**cached, "segments": "invalid"},
+        ):
+            self.assertFalse(
+                audio_library.transcript_cache_matches_record(
+                    record, tampered, **identity
+                )
+            )
+        without_stored_word_metadata = {
+            key: value
+            for key, value in cached.items()
+            if key not in {"stored_word_timestamps", "word_timestamp_count"}
+        }
+        self.assertFalse(
+            audio_library.transcript_cache_matches_record(
+                record, without_stored_word_metadata, **identity
+            )
+        )
+        no_speech = {
+            **cached,
+            "text": "",
+            "segments": [],
+            "stored_word_timestamps": False,
+            "word_timestamp_count": 0,
+            "quality_flags": ["no_speech_detected"],
+        }
+        self.assertTrue(
+            audio_library.transcript_cache_matches_record(
+                record, no_speech, **identity
+            )
+        )
+        for invalid_empty in (
+            {**no_speech, "stored_word_timestamps": True},
+            {**no_speech, "quality_flags": []},
+        ):
+            self.assertFalse(
+                audio_library.transcript_cache_matches_record(
+                    record, invalid_empty, **identity
+                )
+            )
         self.assertFalse(
             audio_library.transcript_cache_matches_record(
                 record,
