@@ -60,3 +60,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2024-05-24 - API 키 비교 시 유니코드 처리 취약점 (Unhandled Exception)
+**취약점:** `hmac.compare_digest` 함수가 유니코드 문자열을 인자로 받을 경우 `TypeError`를 발생시키며, 이를 통해 서버 에러(500)를 유발하는 DoS 공격이 가능했습니다.
+**학습:** 악의적인 사용자가 의도적으로 ASCII 범위를 벗어난 값이 포함된 `x-api-key` 헤더를 전송하여 어플리케이션을 크래시시킬 수 있었습니다. 외부 입력값은 항상 바이트로 변환한 후 안전하게 비교해야 합니다.
+**예방:** `hmac.compare_digest`를 호출하기 전에 두 문자열 인자를 항상 명시적으로 바이트(`.encode('utf-8')`)로 인코딩하여 타입 에러를 방지합니다.
