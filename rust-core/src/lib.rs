@@ -31,6 +31,7 @@ use unicode_normalization::UnicodeNormalization;
 use walkdir::{DirEntry, WalkDir};
 
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES: usize = 255;
 
 static COMPACT_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?P<yy>\d{2})(?P<month>\d{2})(?P<day>\d{2})[_-](?P<hour>\d{2})(?P<minute>\d{2})")
@@ -1287,11 +1288,17 @@ pub fn validate_relative_path(path: &str) -> Result<()> {
     if value.as_os_str().is_empty() || value.is_absolute() {
         bail!("mutation path must be non-empty and relative: {path:?}");
     }
-    if value
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        bail!("mutation path contains unsafe components: {path:?}");
+    for component in value.components() {
+        let Component::Normal(name) = component else {
+            bail!("mutation path contains unsafe components: {path:?}");
+        };
+        let normalized: String = name.to_string_lossy().nfd().collect();
+        if normalized.len() > PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES {
+            bail!(
+                "mutation path component exceeds {} NFD UTF-8 bytes: {path:?}",
+                PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES
+            );
+        }
     }
     Ok(())
 }
@@ -1980,6 +1987,13 @@ mod tests {
         assert!(validate_relative_path("../escape.wav").is_err());
         assert!(validate_relative_path("/absolute.wav").is_err());
         assert!(validate_relative_path("").is_err());
+        assert!(validate_relative_path(&format!("{}.wav", "가".repeat(20))).is_ok());
+        assert!(
+            validate_relative_path(&format!("{}.wav", "가".repeat(50)))
+                .unwrap_err()
+                .to_string()
+                .contains("255 NFD UTF-8 bytes")
+        );
     }
 
     #[test]

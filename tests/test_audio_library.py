@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import types
+import unicodedata
 import unittest
 import wave
 from pathlib import Path
@@ -2044,6 +2045,7 @@ class NamingTests(unittest.TestCase):
     def test_sanitize_and_standard_filename(self) -> None:
         self.assertEqual(sanitize_component(" a / b ::: ", limit=20), "a-b")
         self.assertEqual(sanitize_component("///", limit=20), "미상")
+        self.assertEqual(sanitize_component("가정", limit=20), "가정")
         name = standard_filename(
             _record("a.WAV", HASH_A),
             {"segments": [{"text": "프로젝트 일정 검토 회의"}]},
@@ -2063,6 +2065,48 @@ class NamingTests(unittest.TestCase):
                     {"text": "회의", "segments": []},
                     "2024-01-02T03:04:05+09:00",
                 )
+        long_name = standard_filename(
+            _record("a.wav", HASH_A, location=None),
+            {
+                "filename_description": (
+                    "가정폭력탈출뒤-무인도에서살아남은주인공이-가수재기를돕는"
+                    "드라마를-나중에재밌다고평가합니다"
+                ),
+                "segments": [
+                    {
+                        "text": (
+                            "가정폭력탈출뒤 무인도에서살아남은주인공이 가수재기를돕는 "
+                            "드라마를 나중에재밌다고평가합니다"
+                        )
+                    }
+                ],
+            },
+            "2023-11-01T02:31:00+09:00",
+        )
+        self.assertLessEqual(
+            len(unicodedata.normalize("NFD", long_name).encode("utf-8")),
+            audio_library.PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES,
+        )
+        self.assertTrue(long_name.endswith(f"__sha256-{HASH_A[:12]}.wav"))
+        self.assertRegex(Path(long_name).stem, audio_library.STANDARD_NAME_RE)
+        with self.assertRaisesRegex(ValueError, "cannot fit a fallback"):
+            audio_library.fit_component_to_nfd_utf8_budget("가", budget=1)
+        self.assertEqual(
+            audio_library.fit_component_to_nfd_utf8_budget("---", budget=18),
+            "미상",
+        )
+        with (
+            patch(
+                "audio_library.fit_component_to_nfd_utf8_budget",
+                return_value="가" * 100,
+            ),
+            self.assertRaisesRegex(ValueError, "exceeds the portable"),
+        ):
+            standard_filename(
+                _record("a.wav", HASH_A, location=None),
+                {"segments": [{"text": "회의"}]},
+                "2024-01-02T03:04:05+09:00",
+            )
 
     def test_existing_standard_filename_validation(self) -> None:
         recorded_at = "2024-01-02T03:04:05+09:00"

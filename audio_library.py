@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import wave
 import weakref
 from collections import Counter
@@ -82,6 +83,8 @@ MAX_TMK_CHUNK_MARKERS = 4096
 AUTOMATIC_MLX_CHUNK_SECONDS = 300.0
 AUTOMATIC_MLX_CHUNK_MIN_DURATION_SECONDS = 600.0
 TRANSCRIPTION_CHECKPOINT_SCHEMA_VERSION = 1
+PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES = 255
+PORTABLE_LOCATION_NFD_UTF8_MAX_BYTES = 72
 EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
     {"no_speech_detected", "too_short_for_reliable_speech"}
 )
@@ -3685,10 +3688,28 @@ def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> st
 def sanitize_component(value: str, *, limit: int) -> str:
     """Convert arbitrary transcript/address text into a portable filename component."""
 
-    normalized = SPACE_RE.sub("-", value.strip())
+    normalized = unicodedata.normalize("NFC", SPACE_RE.sub("-", value.strip()))
     normalized = UNSAFE_NAME_RE.sub("-", normalized)
     normalized = re.sub(r"-+", "-", normalized).strip("-._")
     return normalized[:limit].rstrip("-._") or "미상"
+
+
+def fit_component_to_nfd_utf8_budget(value: str, *, budget: int) -> str:
+    """Keep one NFC component inside a macOS/File Provider byte budget."""
+
+    fallback = "미상"
+    fallback_size = len(unicodedata.normalize("NFD", fallback).encode("utf-8"))
+    if budget < fallback_size:
+        raise ValueError("portable filename budget cannot fit a fallback component")
+    fitted = ""
+    used = 0
+    for character in unicodedata.normalize("NFC", value):
+        character_size = len(unicodedata.normalize("NFD", character).encode("utf-8"))
+        if used + character_size > budget:
+            break
+        fitted += character
+        used += character_size
+    return fitted.rstrip("-._") or fallback
 
 
 def standard_filename(
@@ -3699,13 +3720,32 @@ def standard_filename(
     timestamp = datetime.fromisoformat(recorded_at).strftime("%Y-%m-%d_%H-%M-%S")
     components = [timestamp]
     if record.get("location"):
-        components.append(sanitize_component(str(record["location"]), limit=32))
-    components.append(transcript_description(transcript))
-    components.append(f"sha256-{record['sha256'][:12]}")
-    stem = "__".join(components)
+        location = sanitize_component(str(record["location"]), limit=32)
+        components.append(
+            fit_component_to_nfd_utf8_budget(
+                location,
+                budget=PORTABLE_LOCATION_NFD_UTF8_MAX_BYTES,
+            )
+        )
+    prefix = "__".join(components) + "__"
+    suffix = f"__sha256-{record['sha256'][:12]}.{str(record['extension']).lower()}"
+    description_budget = PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES - len(
+        unicodedata.normalize("NFD", prefix + suffix).encode("utf-8")
+    )
+    description = fit_component_to_nfd_utf8_budget(
+        transcript_description(transcript),
+        budget=description_budget,
+    )
+    stem = f"{prefix}{description}__sha256-{record['sha256'][:12]}"
     if not STANDARD_NAME_RE.match(stem):
         raise ValueError(f"generated filename does not satisfy standard: {stem}")
-    return f"{stem}.{str(record['extension']).lower()}"
+    filename = f"{stem}.{str(record['extension']).lower()}"
+    if (
+        len(unicodedata.normalize("NFD", filename).encode("utf-8"))
+        > PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES
+    ):
+        raise ValueError("generated filename exceeds the portable NFD UTF-8 limit")
+    return filename
 
 
 def is_existing_standard_filename(record: dict[str, Any], recorded_at: str) -> bool:
