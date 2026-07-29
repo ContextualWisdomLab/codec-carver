@@ -1,3 +1,6 @@
+## 2026-07-29 - Dynamic File Size Limits and Batch Validation
+**Learning:** Hardcoding server limit variables like `MAX_UPLOAD_BYTES` in client-side error strings creates a brittle UX that goes out of sync. Furthermore, omitting total size checks for batch uploads forces users to wait for server-side rejection rather than getting immediate feedback.
+**Action:** Always dynamically format backend limits for client-side error strings using shared utilities, and implement inline validation with `setCustomValidity` and `aria-invalid` for both single and batch upload scenarios.
 ## 2024-07-12 - Intercepting batch form submissions for testing visual loading states
 **Learning:** Extending the learning from 2024-06-13, intercepting form submissions using `e.preventDefault()` via `page.evaluate()` is essential for capturing screenshot and video evidence of loading states (e.g., button disabling, spinner appearing) on forms like batch upload where the submission would normally reload the page or download an archive.
 **Action:** When testing visual loading states with Playwright, always inject an event listener using `page.evaluate()` to call `e.preventDefault()` on the form's `submit` event to freeze the UI in its loading state for verification.

@@ -1,3 +1,4 @@
+* 🎨 Palette: [UX improvement] 클라이언트 측 폼 검증 시 동적인 파일 크기 제한 메시지를 제공하고, 일괄 업로드의 총 용량 제한에 대한 인라인 에러 피드백을 추가했습니다.
 # Changelog
 
 ## [Unreleased]
