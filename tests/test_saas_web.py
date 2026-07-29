@@ -297,6 +297,7 @@ class TestSaasWeb(unittest.TestCase):
         html = response.text
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
+        self.assertIn("if (this.value === '')", html)
 
     def test_request_size_limit_rejects_streamed_body_over_limit(self):
         async def receive():

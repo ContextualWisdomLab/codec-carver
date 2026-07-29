@@ -240,8 +240,14 @@ HTML_TEMPLATE = """
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
                 const preview = document.getElementById('target_bytes_preview');
+                if (this.value === '') {
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
+                    preview.innerText = '';
+                    return;
+                }
+                const val = parseInt(this.value, 10);
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
@@ -267,8 +273,14 @@ HTML_TEMPLATE = """
             });
 
             document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
                 const preview = document.getElementById('batch_target_bytes_preview');
+                if (this.value === '') {
+                    this.setCustomValidity('');
+                    this.removeAttribute('aria-invalid');
+                    preview.innerText = '';
+                    return;
+                }
+                const val = parseInt(this.value, 10);
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
