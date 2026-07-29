@@ -1237,6 +1237,46 @@ class NamingTests(unittest.TestCase):
                 "DESCRIPTION: 설비데이터-통합추진",
                 grounding_text="[S001] 설비 데이터\n[S002] 통합 추진",
             )
+        sparse_long_candidate = (
+            "CENTRAL_IDEA: BERT 512토큰 한계를 LongBERT와 GPT 검토로 해결합니다.\n"
+            "OUTCOME: GPT 검토로 512토큰 한계를 해결합니다.\n"
+            "EVIDENCE: S001,S002\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: BERT512토큰한계-GPT검토로-해결합니다"
+        )
+        sparse_long_grounding = (
+            "[S001] BERT 512토큰 한계가 있습니다.\n"
+            "[S002] LongBERT를 검토합니다.\n"
+            "[S003] GPT 검토로 512토큰 한계를 해결합니다.\n"
+            "[S004] 별도 화면을 확인합니다.\n"
+            "[S005] 회의 시간을 조정합니다.\n"
+            "[S006] 문서를 다시 읽습니다.\n"
+            "[S007] 다음 일정을 공유합니다.\n"
+            "[S008] 작업 상태를 기록합니다."
+        )
+        with self.assertRaisesRegex(ValueError, "insufficient transcript evidence"):
+            audio_library.parse_contextual_description(
+                sparse_long_candidate,
+                grounding_text=sparse_long_grounding,
+            )
+        supplemented = audio_library.parse_contextual_description(
+            sparse_long_candidate,
+            grounding_text=sparse_long_grounding,
+            supplement_evidence=True,
+        )
+        self.assertEqual(
+            supplemented.evidence_segment_ids,
+            ("S003", "S001", "S002"),
+        )
+        with self.assertRaisesRegex(ValueError, "insufficient transcript evidence"):
+            audio_library.parse_contextual_description(
+                sparse_long_candidate,
+                grounding_text=sparse_long_grounding.replace(
+                    "[S003] GPT 검토로 512토큰 한계를 해결합니다.",
+                    "[S003] 별도 예산을 확인합니다.",
+                ),
+                supplement_evidence=True,
+            )
         with self.assertRaisesRegex(ValueError, "insufficient transcript evidence"):
             audio_library.validate_contextual_description(
                 title="설비데이터-통합추진",
@@ -1805,6 +1845,105 @@ class NamingTests(unittest.TestCase):
             )
         self.assertEqual(generate.call_count, 3)
         self.assertIn("allowed_terms", apply_chat_template.call_args.args[2])
+        generate.reset_mock()
+        generate.side_effect = [
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(
+                text=(
+                    "EVIDENCE: S001,S002\n"
+                    "CONFIDENCE: high\n"
+                    "DESCRIPTION: 경영보고지연-설비데이터-통합"
+                )
+            ),
+            types.SimpleNamespace(text=grounded_context.removeprefix("CENTRAL_IDEA: ")),
+            types.SimpleNamespace(text="DESCRIPTION: 경영보고지연-설비데이터-통합"),
+        ]
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.models": fake_models,
+                "mlx_vlm.models.gemma4": fake_gemma4_package,
+                "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
+                "mlx_vlm.prompt_utils": fake_prompt_utils,
+                "mlx_vlm.utils": fake_utils,
+                "transformers": fake_transformers,
+            },
+        ):
+            schema_retry_generator = GemmaDescriptionGenerator()
+            self.assertEqual(
+                schema_retry_generator.describe(
+                    {
+                        "segments": [
+                            {
+                                "text": (
+                                    "설비 데이터가 부서마다 달라 경영 보고가 늦어집니다"
+                                )
+                            },
+                            {"text": "설비 데이터 기준을 통합해야 합니다"},
+                            {"text": "그래야 경영 보고 지연을 줄입니다"},
+                        ]
+                    }
+                ),
+                "경영보고지연-설비데이터-통합",
+            )
+        self.assertEqual(generate.call_count, 5)
+        self.assertTrue(
+            generate.call_args_list[3].kwargs["prompt"].endswith("CENTRAL_IDEA: ")
+        )
+        self.assertIn(
+            "필수 줄을 누락",
+            apply_chat_template.call_args_list[-2].args[2],
+        )
+        generate.reset_mock()
+        generate.side_effect = [
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(
+                text=(
+                    "EVIDENCE: S001,S002\n"
+                    "CONFIDENCE: high\n"
+                    "DESCRIPTION: 경영보고지연-설비데이터-통합"
+                )
+            ),
+            types.SimpleNamespace(
+                text=unsupported_paraphrase.removeprefix("CENTRAL_IDEA: ")
+            ),
+        ]
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.models": fake_models,
+                "mlx_vlm.models.gemma4": fake_gemma4_package,
+                "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
+                "mlx_vlm.prompt_utils": fake_prompt_utils,
+                "mlx_vlm.utils": fake_utils,
+                "transformers": fake_transformers,
+            },
+        ):
+            schema_literal_generator = GemmaDescriptionGenerator()
+            self.assertEqual(
+                schema_literal_generator.describe(
+                    {
+                        "segments": [
+                            {
+                                "text": (
+                                    "설비 데이터가 부서마다 달라 경영 보고가 늦어집니다"
+                                )
+                            },
+                            {"text": "설비 데이터 기준을 통합해야 합니다"},
+                            {"text": "그래야 경영 보고 지연을 줄입니다"},
+                        ]
+                    }
+                ),
+                "설비데이터-경영보고지연",
+            )
+        self.assertEqual(generate.call_count, 4)
+        self.assertTrue(
+            generate.call_args_list[3].kwargs["prompt"].endswith("CENTRAL_IDEA: ")
+        )
         generate.reset_mock()
         valid_purpose_context = (
             "CENTRAL_IDEA: 바스 고도화 프로젝트를 추진합니다.\n"
