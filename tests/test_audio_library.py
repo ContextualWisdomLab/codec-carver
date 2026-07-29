@@ -2403,9 +2403,14 @@ class RustBackendTests(unittest.TestCase):
                 self.assertNotIn("--journal", run.call_args.args[0])
                 backend.inspect(Path(tmp), "a.wav", timeout_seconds=12)
                 self.assertEqual(run.call_args.kwargs["timeout"], 12)
+                backend.materialize(Path(tmp), "a.wav", timeout_seconds=9)
+                self.assertEqual(run.call_args.args[0][1], "materialize")
+                self.assertEqual(run.call_args.kwargs["timeout"], 9)
                 backend.evict(Path(tmp), "a.wav", timeout_seconds=8)
                 self.assertEqual(run.call_args.args[0][1], "evict")
                 self.assertEqual(run.call_args.kwargs["timeout"], 8)
+                with self.assertRaisesRegex(ValueError, "must be positive"):
+                    backend.materialize(Path(tmp), "a.wav", timeout_seconds=0)
                 with self.assertRaisesRegex(ValueError, "must be positive"):
                     backend.evict(Path(tmp), "a.wav", timeout_seconds=0)
 
@@ -2432,7 +2437,7 @@ class RustBackendTests(unittest.TestCase):
                 "linked/file.wav",
                 "bad\0path",
             ):
-                for method in ("inspect", "stage", "evict"):
+                for method in ("inspect", "stage", "materialize", "evict"):
                     with self.subTest(candidate=candidate, method=method):
                         with self.assertRaisesRegex(
                             ValueError,
@@ -3981,6 +3986,94 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertFalse((root / ".codec-carver").exists())
             with self.assertRaisesRegex(ValueError, "must be an absolute path"):
                 AudioLibrary(root, Mock(), state_dir=Path("relative-state"))
+
+    def test_materialize_queues_explicit_paths_and_isolates_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            paths = ["a.wav", "b.tmk", "c.wav", "d.wav", "e.wav", "f.wav"]
+            for path in paths:
+                (root / path).write_bytes(b"source")
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [
+                    _record(path, "", materialized=False)
+                    | {"kind": "tmk" if path.endswith(".tmk") else "audio"}
+                    for path in paths
+                ],
+                "duplicate_groups": [],
+            }
+            atomic_json_write(library.state_dir / "inventory.json", manifest)
+            backend.materialize.side_effect = [
+                {"path": "a.wav", "requested": True, "materialized": False},
+                {"path": "b.tmk", "requested": False, "materialized": True},
+                {"path": "c.wav", "requested": False, "materialized": False},
+                {"path": "wrong.wav", "requested": True, "materialized": False},
+                {"path": "e.wav", "requested": "yes", "materialized": False},
+                RuntimeError("synthetic request failure"),
+            ]
+            progress = Mock()
+            with patch(
+                "audio_library.is_icloud_dataless",
+                side_effect=[True, False, True],
+            ):
+                summary = library.materialize(
+                    relative_paths=[*paths, "a.wav"],
+                    timeout_seconds=7,
+                    progress=progress,
+                )
+
+            self.assertEqual(summary["selected"], 6)
+            self.assertEqual(summary["requested"], 1)
+            self.assertEqual(summary["already_materialized"], 1)
+            self.assertEqual(summary["materialized_now"], 1)
+            self.assertEqual(summary["failed"], 3)
+            self.assertEqual(len(summary["results"]), 3)
+            self.assertEqual(
+                [call.args[3] for call in progress.call_args_list],
+                [
+                    "requested",
+                    "materialized",
+                    "pending",
+                    "failed",
+                    "failed",
+                    "failed",
+                ],
+            )
+            backend.materialize.assert_any_call(root, "a.wav", timeout_seconds=7)
+            persisted = json.loads(
+                (library.state_dir / "materialization-run.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(persisted, summary)
+            inventory = json.loads(
+                (library.state_dir / "inventory.json").read_text(encoding="utf-8")
+            )
+            materialized = {
+                record["path"]: record["materialized"] for record in inventory["files"]
+            }
+            self.assertFalse(materialized["a.wav"])
+            self.assertTrue(materialized["b.tmk"])
+
+            backend.materialize.side_effect = None
+            backend.materialize.return_value = {
+                "path": "b.tmk",
+                "requested": False,
+                "materialized": True,
+            }
+            with patch("audio_library.is_icloud_dataless", return_value=False):
+                repeated = library.materialize(relative_paths=["b.tmk"])
+            self.assertEqual(repeated["already_materialized"], 1)
+
+            with self.assertRaisesRegex(ValueError, "must be positive"):
+                library.materialize(relative_paths=["a.wav"], timeout_seconds=0)
+            with self.assertRaisesRegex(ValueError, "at least one explicit path"):
+                library.materialize(relative_paths=[])
+            with self.assertRaisesRegex(ValueError, "absent from inventory"):
+                library.materialize(relative_paths=["missing.wav"])
 
     def test_verify_materialized_record_identifies_missing_inventory_path(
         self,
@@ -6640,9 +6733,13 @@ class CliTests(unittest.TestCase):
             audio_library.progress_line(1, 2, "a.wav", "completed")
             audio_library.tmk_progress_line(2, 3, "a.tmk", "completed")
             audio_library.description_progress_line(1, 1, "a.wav", "cached")
+            audio_library.materialization_progress_line(
+                1, 4, "remote.wav", "requested"
+            )
         self.assertIn("1/2", output.getvalue())
         self.assertIn("TMK\t2/3", output.getvalue())
         self.assertIn("DESCRIBE\t1/1", output.getvalue())
+        self.assertIn("MATERIALIZE\t1/4", output.getvalue())
         backend = Mock()
         library = Mock()
         library.inventory.return_value = {"ok": True}
@@ -7071,12 +7168,21 @@ class CliTests(unittest.TestCase):
     def test_main_routes_transcribe_stream_plan_and_apply(self) -> None:
         library = Mock()
         library.transcribe.return_value = {"mode": "transcribe"}
+        library.materialize.return_value = {"mode": "materialize"}
         library.hydrate_tmk_metadata.return_value = {"mode": "tmk"}
         library.stream_transcribe.return_value = {"mode": "stream"}
         library.describe.return_value = {"mode": "describe"}
         library.plan.return_value = {"mode": "plan"}
         library.apply.return_value = {"mode": "apply"}
         commands = [
+            [
+                ".",
+                "materialize",
+                "--path",
+                "a.wav",
+                "--timeout-seconds",
+                "5",
+            ],
             [
                 ".",
                 "hydrate-tmk",
@@ -7136,6 +7242,11 @@ class CliTests(unittest.TestCase):
             for command in commands:
                 self.assertEqual(audio_library.main(command), 0)
         library.transcribe.assert_called_once()
+        library.materialize.assert_called_once_with(
+            relative_paths=["a.wav"],
+            timeout_seconds=5.0,
+            progress=audio_library.materialization_progress_line,
+        )
         library.hydrate_tmk_metadata.assert_called_once_with(
             workers=2,
             inspect_timeout_seconds=3.0,

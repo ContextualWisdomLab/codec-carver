@@ -975,6 +975,28 @@ class RustBackend:
             timeout_seconds=timeout_seconds,
         )
 
+    def materialize(
+        self, root: Path, relative_path: str, *, timeout_seconds: float = 30
+    ) -> dict[str, Any]:
+        """Queue one iCloud download through native macOS FileManager."""
+
+        if timeout_seconds <= 0:
+            raise ValueError("materialization timeout must be positive")
+        relative_path = validate_relative_path(
+            Path(root), relative_path, label="backend materialization path"
+        )
+        return self._run_json(
+            [
+                str(self.binary),
+                "materialize",
+                "--root",
+                str(root),
+                "--path",
+                relative_path,
+            ],
+            timeout_seconds=timeout_seconds,
+        )
+
     @staticmethod
     def _run_stage_json(
         command: list[str],
@@ -4524,6 +4546,104 @@ class AudioLibrary:
             atomic_json_write(inventory_path, manifest)
         return manifest
 
+    def materialize(
+        self,
+        *,
+        relative_paths: Iterable[str],
+        timeout_seconds: float = 30,
+        progress: Callable[[int, int, str, str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Queue explicit iCloud audio/TMK downloads without waiting for bytes."""
+
+        if timeout_seconds <= 0:
+            raise ValueError("materialization timeout must be positive")
+        selected_paths = tuple(
+            dict.fromkeys(
+                validate_relative_path(
+                    self.root, value, label="selected materialization path"
+                )
+                for value in relative_paths
+            )
+        )
+        if not selected_paths:
+            raise ValueError("materialization requires at least one explicit path")
+        manifest = self._load_inventory()
+        records_by_path = {
+            record["path"]: record
+            for record in manifest["files"]
+            if record.get("kind") in {"audio", "tmk"}
+        }
+        missing_paths = [
+            relative_path
+            for relative_path in selected_paths
+            if relative_path not in records_by_path
+        ]
+        if missing_paths:
+            raise ValueError(
+                "materialization paths are absent from inventory: "
+                + ", ".join(missing_paths)
+            )
+
+        requested = already_materialized = materialized_now = failed = 0
+        failures = []
+        results = []
+        for index, relative_path in enumerate(selected_paths, start=1):
+            status = "failed"
+            try:
+                result = self.backend.materialize(
+                    self.root,
+                    relative_path,
+                    timeout_seconds=timeout_seconds,
+                )
+                if result.get("path") != relative_path:
+                    raise ValueError(
+                        "Rust materialization returned an unexpected path: "
+                        f"{result.get('path')!r} != {relative_path!r}"
+                    )
+                if type(result.get("requested")) is not bool or type(
+                    result.get("materialized")
+                ) is not bool:
+                    raise ValueError(
+                        "Rust materialization returned invalid state flags"
+                    )
+                source = self.root / relative_path
+                current_materialized = not is_icloud_dataless(source)
+                result = dict(result)
+                result["materialized_now"] = current_materialized
+                records_by_path[relative_path]["materialized"] = current_materialized
+                results.append(result)
+                requested += int(result["requested"])
+                already_materialized += int(result["materialized"])
+                materialized_now += int(current_materialized)
+                status = (
+                    "materialized"
+                    if current_materialized
+                    else "requested"
+                    if result["requested"]
+                    else "pending"
+                )
+            except Exception as exc:
+                failed += 1
+                failures.append(failure_entry(relative_path, exc))
+            if progress:
+                progress(index, len(selected_paths), relative_path, status)
+
+        rebuild_manifest_summary(manifest)
+        atomic_json_write(self.state_dir / "inventory.json", manifest)
+        summary = {
+            "schema_version": 1,
+            "mode": "native_icloud_materialization_request",
+            "selected": len(selected_paths),
+            "requested": requested,
+            "already_materialized": already_materialized,
+            "materialized_now": materialized_now,
+            "failed": failed,
+            "failures": failures,
+            "results": results,
+        }
+        atomic_json_write(self.state_dir / "materialization-run.json", summary)
+        return summary
+
     def transcribe(
         self,
         config: TranscriptionConfig = TranscriptionConfig(),
@@ -6809,6 +6929,14 @@ def description_progress_line(index: int, total: int, path: str, status: str) ->
     print(f"DESCRIBE\t{index}/{total}\t{status}\t{path}", flush=True)
 
 
+def materialization_progress_line(
+    index: int, total: int, path: str, status: str
+) -> None:
+    """Print a compact, flush-safe iCloud materialization progress record."""
+
+    print(f"MATERIALIZE\t{index}/{total}\t{status}\t{path}", flush=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create the command-line adapter around the Python API."""
 
@@ -6839,6 +6967,14 @@ def build_parser() -> argparse.ArgumentParser:
     inventory_parser.add_argument(
         "--inspect-timeout-seconds", type=float, default=14_400
     )
+    materialize_parser = subparsers.add_parser("materialize")
+    materialize_parser.add_argument(
+        "--path",
+        action="append",
+        required=True,
+        help="request this explicit audio/TMK path; repeat for a bounded batch",
+    )
+    materialize_parser.add_argument("--timeout-seconds", type=float, default=30)
     tmk_parser = subparsers.add_parser("hydrate-tmk")
     tmk_parser.add_argument("--workers", type=int, default=4)
     tmk_parser.add_argument("--inspect-timeout-seconds", type=float, default=60)
@@ -6940,6 +7076,12 @@ def main(argv: Iterable[str] | None = None) -> int:
             threads=args.threads,
             relative_paths=args.path,
             inspect_timeout_seconds=args.inspect_timeout_seconds,
+        )
+    elif args.command == "materialize":
+        result = library.materialize(
+            relative_paths=args.path,
+            timeout_seconds=args.timeout_seconds,
+            progress=materialization_progress_line,
         )
     elif args.command == "hydrate-tmk":
         result = library.hydrate_tmk_metadata(

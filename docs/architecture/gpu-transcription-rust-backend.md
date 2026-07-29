@@ -197,6 +197,11 @@ the named baseline records through Rust `inspect` and atomically merges their
 content hashes and TMK metadata in Python. A selected refresh never starts a
 full tree walk, so repairing one recording cannot accidentally hydrate unrelated
 multi-gigabyte iCloud files.
+Before that refresh, `materialize --path` queues a native Foundation download
+for each explicitly selected dataless audio/TMK path and returns without opening
+or hashing the source. Its persisted result distinguishes an accepted request,
+an already-local file, the current post-request dataless state, and a request
+failure; accepting a request is never treated as proof that the bytes arrived.
 For File Provider roots, `--state-dir` places mutable manifests, transcripts,
 plans, and journals in a separate owner-only local directory. Recording and TMK
 mutations remain rooted in the selected library, including SHA-addressed
@@ -272,10 +277,12 @@ silently replace it with the deterministic keyword fallback.
 `rust-core/codec-carver-core` owns bounded-buffer SHA-256, parallel scans,
 macOS dataless detection, filename/creation-time evidence, TMK decoding,
 duplicate grouping, and guarded filesystem changes. A single-file `inspect`
-command supports local single-file inspection. The `stage` command handles an
-iCloud placeholder in one coordinated pass: Foundation materializes it while
-Rust writes local system scratch and calculates SHA-256 concurrently, verifies
-any existing staged content, and returns the scratch path plus the original file
+command supports local single-file inspection. The `materialize` command
+validates one regular, non-symlink library child and queues Foundation's native
+iCloud download without waiting. The `stage` command handles an iCloud
+placeholder in one coordinated pass: Foundation materializes it while Rust
+writes local system scratch and calculates SHA-256 concurrently, verifies any
+existing staged content, and returns the scratch path plus the original file
 record. Already-local sources are opened component by component with `openat`,
 `O_NOFOLLOW`, and directory descriptors before that same single-pass
 copy-and-hash. The `evict` command releases local iCloud blocks with Foundation
@@ -286,8 +293,9 @@ uses macOS `renameatx_np(RENAME_EXCL)` or Linux
 `renameat2(RENAME_NOREPLACE)`; rollback follows the same descriptor-relative
 route. The Python API rejects mutation execution through mocks, wrappers, or
 other injected backends, so path-name semantics cannot replace this Rust
-boundary. The public Python `inspect`, `stage`, and `evict` methods also reject
-absolute, parent, non-portable, and symlink-component paths before constructing
+boundary. The public Python `inspect`, `stage`, `materialize`, and `evict`
+methods also reject absolute, parent, non-portable, and symlink-component paths
+before constructing
 native argv; Rust repeats its own descriptor-relative validation.
 
 ## Evidence precedence

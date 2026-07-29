@@ -128,6 +128,13 @@ pub struct StageResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaterializeResult {
+    pub path: String,
+    pub requested: bool,
+    pub materialized: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvictResult {
     pub path: String,
     pub evicted: bool,
@@ -480,6 +487,71 @@ pub fn stage_relative_to_json(
     staging_dir: &Path,
 ) -> Result<String> {
     stage_relative(root, relative_path, staging_dir).map(|result| pretty_json(&result))
+}
+
+/// Request one dataless iCloud file without waiting for its bytes to arrive.
+pub fn materialize_relative(root: &Path, relative_path: &Path) -> Result<MaterializeResult> {
+    #[cfg(target_os = "macos")]
+    return materialize_relative_with(root, relative_path, request_icloud_download);
+
+    #[cfg(not(target_os = "macos"))]
+    materialize_relative_with(root, relative_path, |_path| {
+        bail!("iCloud materialization is only supported on macOS")
+    })
+}
+
+fn materialize_relative_with<F>(
+    root: &Path,
+    relative_path: &Path,
+    request_download: F,
+) -> Result<MaterializeResult>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library root {}", root.display()))?;
+    validate_relative_path(&relative_path.to_string_lossy())?;
+    let requested_path = canonical_root.join(relative_path);
+    let requested_metadata = fs::symlink_metadata(&requested_path).with_context(|| {
+        format!(
+            "cannot stat without following links: {}",
+            requested_path.display()
+        )
+    })?;
+    if !requested_metadata.file_type().is_file() {
+        bail!(
+            "materialization path is not a regular file: {}",
+            requested_path.display()
+        );
+    }
+    let canonical_path = requested_path
+        .canonicalize()
+        .with_context(|| format!("cannot resolve library file {}", requested_path.display()))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        bail!("library file escaped root: {}", canonical_path.display());
+    }
+    let (kind, extension) = classify(&canonical_path)
+        .ok_or_else(|| anyhow!("unsupported audio/TMK file: {}", canonical_path.display()))?;
+    let pending = pending_file(&canonical_root, &canonical_path, kind, extension)?;
+    let requested = !pending.materialized;
+    if requested {
+        request_download(&canonical_path)?;
+    }
+    Ok(MaterializeResult {
+        path: pending.relative_path,
+        requested,
+        materialized: pending.materialized,
+    })
+}
+
+/// Request one file and serialize whether a native download was queued.
+pub fn materialize_relative_to_json(root: &Path, relative_path: &Path) -> Result<String> {
+    materialize_result_to_json(materialize_relative(root, relative_path))
+}
+
+fn materialize_result_to_json(result: Result<MaterializeResult>) -> Result<String> {
+    Ok(pretty_json(&result?))
 }
 
 /// Release one iCloud file's local blocks through the native macOS FileManager API.
@@ -2062,6 +2134,45 @@ mod tests {
         assert!(record.error.unwrap().contains("dataless placeholder"));
 
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn native_materialization_validates_paths_and_serializes_results() {
+        let root = temporary_directory("materialize");
+        let source = root.join("240102_0304.wav");
+        fs::write(&source, b"audio").unwrap();
+        let result = materialize_relative_with(&root, Path::new("240102_0304.wav"), |_| {
+            panic!("a materialized file must not request a download")
+        })
+        .unwrap();
+        assert_eq!(result.path, "240102_0304.wav");
+        assert!(!result.requested);
+        assert!(result.materialized);
+        assert!(
+            materialize_result_to_json(Ok(result))
+                .unwrap()
+                .contains("\"materialized\": true")
+        );
+        assert!(materialize_result_to_json(Err(anyhow!("synthetic materialization"))).is_err());
+        assert!(materialize_relative_with(&root, Path::new("../escape.wav"), |_| Ok(())).is_err());
+        assert!(materialize_relative_with(&root, Path::new("missing.wav"), |_| Ok(())).is_err());
+        fs::write(root.join("unsupported.txt"), b"text").unwrap();
+        assert!(
+            materialize_relative_with(&root, Path::new("unsupported.txt"), |_| Ok(())).is_err()
+        );
+        fs::create_dir(root.join("directory.wav")).unwrap();
+        assert!(materialize_relative_with(&root, Path::new("directory.wav"), |_| Ok(())).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&source, root.join("linked.wav")).unwrap();
+            assert!(materialize_relative_with(&root, Path::new("linked.wav"), |_| Ok(())).is_err());
+        }
+        assert!(
+            materialize_relative(&root.join("missing-root"), Path::new("240102_0304.wav")).is_err()
+        );
+        assert!(materialize_relative(&root, Path::new("240102_0304.wav")).is_ok());
+        assert!(materialize_relative_to_json(&root, Path::new("240102_0304.wav")).is_ok());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

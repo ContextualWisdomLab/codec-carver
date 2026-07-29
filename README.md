@@ -146,6 +146,11 @@ codec-carver-library /path/to/recordings inventory \
 codec-carver-library /path/to/recordings \
   --state-dir "$HOME/Library/Application Support/codec-carver/sony-icd-tx650" \
   inventory --path 'FOLDER01/231102_1840(1).wav'
+# Queue only explicitly selected dataless files through native FileManager and
+# return immediately. Repeat --path for a deliberately bounded download batch.
+codec-carver-library /path/to/recordings materialize \
+  --path 'FOLDER01/231113_1524.wav' \
+  --path 'FOLDER01/231113_1524(1).wav'
 codec-carver-library /path/to/recordings hydrate-tmk --workers 4
 codec-carver-library /path/to/recordings hydrate-tmk \
   --workers 1 --path 'FOLDER01/231101_0917.tmk'
@@ -231,6 +236,15 @@ keyword-only fallback. Planning reports an existing standard name when its
 entire basename differs from the timestamp, location, transcript-derived
 central-context title, and SHA suffix recomputed from current evidence, but a
 durable rename still requires explicit refresh authorization.
+
+`materialize` is the nonblocking iCloud request mode. Rust validates each
+explicit audio/TMK path beneath the library root, rejects symlinks, calls
+Foundation's `startDownloadingUbiquitousItem` only for a dataless placeholder,
+and reports whether the request was queued or the file was already local.
+Python rechecks the current dataless flag, updates the inventory, and writes an
+owner-only `materialization-run.json`; it does not infer that accepted requests
+have finished. This keeps download selection bounded while Finder is locked or
+unavailable.
 
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes

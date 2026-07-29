@@ -37,6 +37,13 @@ enum Command {
         #[arg(long)]
         staging_dir: PathBuf,
     },
+    /// Request a dataless iCloud file through native FileManager without waiting.
+    Materialize {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        path: PathBuf,
+    },
     /// Release a streamed iCloud file's local blocks through native FileManager.
     Evict {
         #[arg(long)]
@@ -71,6 +78,9 @@ fn main() -> Result<()> {
             path,
             staging_dir,
         } => codec_carver_core::stage_relative_to_json(&root, &path, &staging_dir)?,
+        Command::Materialize { root, path } => {
+            codec_carver_core::materialize_relative_to_json(&root, &path)?
+        }
         Command::Evict { root, path } => codec_carver_core::evict_relative_to_json(&root, &path)?,
         Command::Apply {
             plan,
