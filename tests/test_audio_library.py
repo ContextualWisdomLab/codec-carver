@@ -927,6 +927,31 @@ class NamingTests(unittest.TestCase):
             ),
             "수작업-VOC-과제선정에서-시스템-관리로",
         )
+        self.assertEqual(
+            validate_semantic_description(
+                "DESCRIPTION: 문정역에서-진료병원에방문하신-"
+                "접수가완료되었습니다-일주일전에와서-약받아가세요",
+                grounding_text=(
+                    "[S001] 이번역은 문정, 문정역입니다.\n"
+                    "[S002] 환자 정보가 조회 되었습니다 진료병원에 방문하신\n"
+                    "[S003] 접수가 완료되었습니다.\n"
+                    "[S004] 미리미리 일주일 전에 와서 약 받아가세요 "
+                    "회사 주소 알려주시면 두 달 먼저 나눠서 드릴게요 "
+                    "환자 정보가 조회되었습니다 다음 버튼을 눌러주세요"
+                ),
+            ),
+            "문정역에서-진료병원에방문하신-"
+            "접수가완료되었습니다-일주일전에와서-약받아가세요",
+        )
+        with self.assertRaisesRegex(ValueError, "absent from the transcript"):
+            validate_semantic_description(
+                "DESCRIPTION: 문정역에서-진료병원에방문하고-약받아갑니다",
+                grounding_text=(
+                    "[S001] 이번역은 문정, 문정역입니다.\n"
+                    "[S002] 진료병원에 방문하신\n"
+                    "[S003] 약 받아가세요"
+                ),
+            )
         contextual = audio_library.parse_contextual_description(
             "CENTRAL_IDEA: 수기 경영 보고의 지연을 설비 데이터 통합으로 해결해야 합니다.\n"
             "OUTCOME: 설비 데이터 통합을 우선 추진합니다.\n"

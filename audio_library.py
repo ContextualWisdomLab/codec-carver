@@ -2927,9 +2927,23 @@ def validate_semantic_description(
             key=len,
             reverse=True,
         )
+        compact_source_terms = set()
+        for source_segment in contextual_evidence_segments(grounding_text).values():
+            segment_tokens = [
+                token.casefold()
+                for token in DESCRIPTION_TOKEN_RE.findall(source_segment)
+            ]
+            for start in range(len(segment_tokens)):
+                compact = ""
+                for end in range(start, len(segment_tokens)):
+                    compact += segment_tokens[end]
+                    if len(compact) > limit:
+                        break
+                    if end > start:
+                        compact_source_terms.add(compact)
 
         def is_grounded(token: str) -> bool:
-            """Accept a literal, particle-normalized, or source-only compound term."""
+            """Accept literal, whitespace-compacted, or source-only compound terms."""
 
             base_candidates = tuple(
                 dict.fromkeys(
@@ -2955,6 +2969,8 @@ def validate_semantic_description(
                 )
             )
             for candidate in candidates:
+                if candidate in compact_source_terms:
+                    return True
                 if candidate in source_terms or any(
                     KOREAN_TERM_RE.fullmatch(candidate) is not None
                     and KOREAN_TERM_RE.fullmatch(source) is not None
