@@ -244,7 +244,9 @@ architecture evaluated by Bondarenko et al. (NAACL 2025).
 
 The optional `describe` phase treats transcript text as escaped JSON data,
 reserves part of its at-most-48-segment sample for problem, decision, and
-purpose cues, and uses greedy generation. It first requires a central idea,
+purpose cues, including input simplification, incentives, counts, information
+quality, use, empathy, benefits, and field interviews, and uses greedy
+generation. It first requires a central idea,
 concrete outcome, confidence, and valid segment IDs, then runs a separate title
 pass so tools and frequent nouns do not displace the recording's actual
 purpose. Explicit means-to-purpose clauses such as `그래야` cannot be reduced to
@@ -271,6 +273,22 @@ versions are regenerated rather than relabeled. No Ollama server is used and
 transcript text is not sent to a hosted inference API. A failed semantic
 analysis is checkpointed as an explicit deferral; mutation planning cannot
 silently replace it with the deterministic keyword fallback.
+
+`AudioLibrary.review_description()` and the `review-description` CLI are the
+evidence-preserving correction boundary for a reviewer who has inspected more
+context than the bounded model sample. The API requires a content-verified
+inventory record, an MLX transcript at a pinned model revision, and word
+timestamps. It sorts and de-duplicates two to 64 one-based source segment IDs,
+copies each segment's exact text and time range into a separate review-evidence
+object, and validates every central-idea, outcome, and title term against that
+bounded evidence. It does not rewrite the raw transcript. Korean grammatical
+particles may join a filename clause only when at least three semantic terms in
+that same token are transcript-derived; this permits a reviewed thesis rather
+than forcing another noun list without admitting an unsupported claim.
+Incomplete connective endings and deictic observations without an actionable
+decision are rejected. A successful review replaces stale automatic title
+fields atomically and records its source segment IDs, transcription
+model/revision, and review time in private state.
 
 ### Rust backend
 

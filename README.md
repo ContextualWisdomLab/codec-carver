@@ -165,6 +165,16 @@ codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
 # involved. Repeat --path to keep the description batch bounded.
 codec-carver-library /path/to/recordings describe \
   --path "recording-a.m4a" --path "recording-b.wav"
+# Bind a reviewer-corrected central-context title to exact one-based MLX
+# word-timestamp segments. Repeat --segment-id for direct supporting passages.
+codec-carver-library /path/to/recordings review-description \
+  --path "recording-b.wav" \
+  --title "VOC건수보다-정보질이중요하고-활용공유하며-등록절차가간소화" \
+  --central-idea "VOC 포상은 건수 최다 등록자가 합니다. 정보 질이 많이 떨어진 것 같습니다. 활용을 투명하게 공유하고 공감을 많이 받은 정보에 혜택을 연결하고 등록 절차를 간소화해야 합니다." \
+  --outcome "활용을 투명하게 공유하고 공감을 많이 받은 정보에 혜택을 연결하고 등록 절차를 간소화해야 합니다." \
+  --segment-id 164 --segment-id 263 --segment-id 317 --segment-id 318 \
+  --segment-id 359 --segment-id 362 --segment-id 444 --segment-id 467 \
+  --segment-id 891 --confidence high
 codec-carver-library /path/to/recordings plan
 # Bound both planning and later apply-time revalidation to one audio record and
 # its linked TMK. Repeat --path for an explicitly selected batch.
@@ -230,6 +240,18 @@ its own analysis fields. Old
 keyword-only caches are not silently upgraded. Planning consumes this
 evidence-backed description when present and retains the deterministic extractor
 as a no-model failure-safe.
+`review-description` provides the corresponding bounded correction path for a
+reviewer who has inspected the full transcript. It accepts only a SHA-verified
+MLX transcript with word timestamps and a pinned transcription revision, copies
+the exact selected segment text and time ranges into an owner-only evidence
+record, and validates the central idea, outcome, and title against those
+passages before replacing an automatic title. The review never edits raw
+transcript text. Review-time compound clauses may add Korean grammatical
+particles only when at least three transcript-derived semantic terms remain in
+the same filename token. Incomplete connective clauses and pronoun-only
+observations are rejected as non-outcomes. The selected original segment IDs,
+derived evidence IDs, transcription model/revision, and review timestamp remain
+auditable in the SHA-keyed sidecar and `manual-description-review.json`.
 Once semantic analysis has explicitly failed, its reason is checkpointed and
 the unstandardized recording is deferred instead of being renamed from a
 keyword-only fallback. Planning reports an existing standard name when its

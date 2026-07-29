@@ -347,13 +347,22 @@ DESCRIPTION_STOPWORDS = frozenset(
 )
 DESCRIPTION_DISPLAY_STOPWORDS = frozenset({"결론적", "관해서", "내가", "되게"})
 SEMANTIC_DESCRIPTION_RE = re.compile(r"^[0-9A-Za-z가-힣]+(?:-[0-9A-Za-z가-힣]+){1,5}$")
-SEMANTIC_DESCRIPTION_VALIDATION = "context_evidence_title_v7"
+SEMANTIC_DESCRIPTION_VALIDATION = "context_evidence_title_v8"
 SEMANTIC_EVIDENCE_ID_RE = re.compile(r"\bS\d{3}\b")
 SEMANTIC_EVIDENCE_LABEL_RE = re.compile(r"^\[(S\d{3})\]\s+(.+)$", re.MULTILINE)
 SEMANTIC_CONTEXT_CUE_RE = re.compile(
     r"문제|원하|하고\s*싶|필요|결정|추진|보류|완료|목표|목적|결론|그래야|"
     r"표준|고도화|상품화|정책|빠른|한계|위험|운영|이슈|해야|책임|이관|"
-    r"넘겨|날짜|확정|합시다"
+    r"넘겨|날짜|확정|합시다|간소화|동기|포상|건수|품질|정보\s*질|활용|"
+    r"공감|혜택|베네|인터뷰|등록\s*절차|투명"
+)
+CONTEXT_DANGLING_CLAUSE_RE = re.compile(
+    r"(?:만약(?:에)?|그리고|그런데|하지만|그러면|그래서|또는)$"
+)
+CONTEXT_DEICTIC_REFERENCE_RE = re.compile(r"(?:그걸|그거|그것|이걸|이거|이것)")
+CONTEXT_ACTIONABLE_OUTCOME_RE = re.compile(
+    r"결정|목표|목적|추진|간소화|개선|공유|연결|보상|포상|변경|유지|폐지|"
+    r"도입|확대|축소|해결|해야|합시다|하자"
 )
 CONTEXT_EXPLICIT_PURPOSE_RE = re.compile(
     r"그래야|(?:을|를|기|에)\s*위해|위한|목적|목표|해야|되어야|돼야|"
@@ -2448,8 +2457,16 @@ def validate_contextual_description(
     normalized_outcome = SPACE_RE.sub(" ", outcome).strip()
     if len(normalized_idea) < 8:
         raise ValueError("central idea is too short to express the recording's thesis")
+    if CONTEXT_DANGLING_CLAUSE_RE.search(normalized_idea.rstrip(".!?… ")):
+        raise ValueError("central idea ends with an incomplete connective clause")
     if len(normalized_outcome) < 2:
         raise ValueError("outcome is missing")
+    if CONTEXT_DEICTIC_REFERENCE_RE.search(
+        normalized_outcome
+    ) and not CONTEXT_ACTIONABLE_OUTCOME_RE.search(normalized_outcome):
+        raise ValueError(
+            "outcome is a deictic observation, not a concrete purpose or decision"
+        )
     normalized_confidence = confidence.strip().casefold()
     if normalized_confidence not in {"high", "medium"}:
         raise ValueError("context confidence is too low for an automatic filename")
@@ -2709,6 +2726,49 @@ def contextual_description_fields(value: str) -> dict[str, str]:
             raise ValueError(f"contextual description must include a {name} line")
         fields[name] = matches[-1].strip()
     return fields
+
+
+def complete_missing_contextual_evidence(
+    value: str, *, grounding_text: str
+) -> str:
+    """Add only a missing evidence line selected from transcript-grounded claims."""
+
+    if re.search(r"^EVIDENCE\s*:", value, flags=re.IGNORECASE | re.MULTILINE):
+        return value
+    fields = {}
+    for name in ("CENTRAL_IDEA", "OUTCOME", "CONFIDENCE", "DESCRIPTION"):
+        matches = re.findall(
+            rf"^{name}\s*:\s*([^\r\n]+)",
+            value,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        if not matches:
+            raise ValueError(f"contextual description must include a {name} line")
+        fields[name] = matches[-1].strip()
+    segments = contextual_evidence_segments(grounding_text)
+    evidence_ids = list(
+        select_context_evidence(
+            central_idea=fields["CENTRAL_IDEA"],
+            outcome=fields["OUTCOME"],
+            grounding_text=grounding_text,
+            model_evidence_segment_ids=(),
+        )
+    )
+    minimum_evidence = minimum_context_evidence_count(len(segments))
+    for evidence_id in segments:
+        if len(evidence_ids) >= minimum_evidence:
+            break
+        if evidence_id not in evidence_ids:
+            evidence_ids.append(evidence_id)
+    if len(evidence_ids) < minimum_evidence:
+        raise ValueError("insufficient transcript evidence for schema completion")
+    return (
+        f"CENTRAL_IDEA: {fields['CENTRAL_IDEA']}\n"
+        f"OUTCOME: {fields['OUTCOME']}\n"
+        f"EVIDENCE: {','.join(evidence_ids)}\n"
+        f"CONFIDENCE: {fields['CONFIDENCE']}\n"
+        f"DESCRIPTION: {fields['DESCRIPTION']}"
+    )
 
 
 def contextual_fallback_title(
@@ -3052,6 +3112,74 @@ def validate_semantic_description(
                         if candidate.startswith(term, start)
                     )
                 if len(candidate) in reachable:
+                    return True
+                grammar = (
+                    "으로",
+                    "에서",
+                    "에게",
+                    "한테",
+                    "께서",
+                    "처럼",
+                    "보다",
+                    "하고",
+                    "하며",
+                    "해서",
+                    "하여",
+                    "도록",
+                    "은",
+                    "는",
+                    "이",
+                    "가",
+                    "을",
+                    "를",
+                    "에",
+                    "의",
+                    "도",
+                    "와",
+                    "과",
+                    "로",
+                    "만",
+                )
+                semantic_reach: dict[tuple[int, bool], int] = {(0, False): 0}
+                for start in range(len(candidate)):
+                    for skipped_grammar in (False, True):
+                        match_count = semantic_reach.get(
+                            (start, skipped_grammar)
+                        )
+                        if match_count is None:
+                            continue
+                        for source in source_terms:
+                            if candidate.startswith(source, start):
+                                end = start + len(source)
+                                key = (end, skipped_grammar)
+                                semantic_reach[key] = max(
+                                    semantic_reach.get(key, -1),
+                                    match_count + 1,
+                                )
+                            elif (
+                                KOREAN_TERM_RE.fullmatch(source) is not None
+                                and KOREAN_TERM_RE.match(candidate[start:]) is not None
+                            ):
+                                for prefix_length in range(len(source) - 1, 1, -1):
+                                    prefix = source[:prefix_length]
+                                    if candidate.startswith(prefix, start):
+                                        end = start + prefix_length
+                                        key = (end, skipped_grammar)
+                                        semantic_reach[key] = max(
+                                            semantic_reach.get(key, -1),
+                                            match_count + 1,
+                                        )
+                                        break
+                        if match_count:
+                            for particle in grammar:
+                                if candidate.startswith(particle, start):
+                                    end = start + len(particle)
+                                    key = (end, True)
+                                    semantic_reach[key] = max(
+                                        semantic_reach.get(key, -1),
+                                        match_count,
+                                    )
+                if semantic_reach.get((len(candidate), True), -1) >= 3:
                     return True
             return False
 
@@ -3434,6 +3562,10 @@ class GemmaDescriptionGenerator:
                                 schema_repair_prompt,
                                 320,
                                 response_prefix="CENTRAL_IDEA: ",
+                            )
+                            schema_repair = complete_missing_contextual_evidence(
+                                schema_repair,
+                                grounding_text=excerpt,
                             )
                             try:
                                 analysis = parse_contextual_description(
@@ -5405,6 +5537,178 @@ class AudioLibrary:
         atomic_json_write(self.state_dir / "streaming-transcription-run.json", summary)
         return summary
 
+    def review_description(
+        self,
+        *,
+        relative_path: str,
+        title: str,
+        central_idea: str,
+        outcome: str,
+        source_segment_ids: Iterable[int],
+        confidence: str = "medium",
+    ) -> dict[str, Any]:
+        """Persist a reviewer-approved title bound to exact GPU transcript segments."""
+
+        selected_path = validate_relative_path(
+            self.root, relative_path, label="reviewed audio path"
+        )
+        manifest = self._load_inventory()
+        record = next(
+            (
+                item
+                for item in manifest["files"]
+                if item.get("kind") == "audio" and item.get("path") == selected_path
+            ),
+            None,
+        )
+        if record is None:
+            raise ValueError(f"audio path is absent from inventory: {selected_path}")
+        if not record_sha_is_verified(record):
+            raise ValueError("manual description review requires a verified SHA-256")
+        sha256 = validate_sha256(record.get("sha256"))
+        transcript_path = safe_transcript_path(
+            self.state_dir / "transcripts", sha256
+        )
+        transcript = read_optional_private_json(transcript_path)
+        if transcript is None:
+            raise FileNotFoundError(
+                f"verified transcript is missing for reviewed audio: {selected_path}"
+            )
+        validate_transcript_record_identity(record, transcript)
+        if transcript.get("accelerator") != "mlx":
+            raise ValueError("manual description review requires an MLX transcript")
+        if transcript.get("word_timestamps") is not True:
+            raise ValueError(
+                "manual description review requires GPU word timestamps"
+            )
+        model = transcript.get("model")
+        revision = transcript.get("model_revision")
+        if not isinstance(model, str) or not model:
+            raise ValueError("manual description review requires a transcript model")
+        if not isinstance(revision, str) or not revision:
+            raise ValueError(
+                "manual description review requires a pinned transcript revision"
+            )
+
+        raw_source_ids = list(source_segment_ids)
+        if any(
+            isinstance(source_id, bool) or not isinstance(source_id, int)
+            for source_id in raw_source_ids
+        ):
+            raise ValueError("review source segment ids must be integers")
+        selected_source_ids = sorted(dict.fromkeys(raw_source_ids))
+        if not 2 <= len(selected_source_ids) <= 64:
+            raise ValueError(
+                "manual description review requires two to 64 source segments"
+            )
+        raw_segments = transcript.get("segments")
+        if not isinstance(raw_segments, list):
+            raise ValueError("manual description review requires transcript segments")
+
+        evidence_items = []
+        for source_id in selected_source_ids:
+            if not 1 <= source_id <= len(raw_segments):
+                raise ValueError(
+                    f"review source segment id is out of range: {source_id}"
+                )
+            segment = raw_segments[source_id - 1]
+            if not isinstance(segment, dict):
+                raise ValueError(
+                    f"review source segment is not an object: {source_id}"
+                )
+            words = segment.get("words")
+            if not isinstance(words, list) or not any(
+                isinstance(word, dict)
+                and isinstance(word.get("start"), (int, float))
+                and not isinstance(word.get("start"), bool)
+                and isinstance(word.get("end"), (int, float))
+                and not isinstance(word.get("end"), bool)
+                and flatten_semantic_evidence_text(word.get("word", ""))
+                for word in words
+            ):
+                raise ValueError(
+                    f"review source segment lacks timestamped words: {source_id}"
+                )
+            evidence_items.append(
+                {
+                    "start": segment.get("start"),
+                    "end": segment.get("end"),
+                    "text": flatten_semantic_evidence_text(segment.get("text", "")),
+                    "source_segment_ids": [source_id],
+                }
+            )
+
+        reviewed_evidence = {
+            "schema_version": 1,
+            "method": MANUAL_REVIEW_EVIDENCE_METHOD,
+            "model": model,
+            "model_revision": revision,
+            "items": evidence_items,
+        }
+        review_candidate = {
+            **transcript,
+            MANUAL_REVIEW_EVIDENCE_FIELD: reviewed_evidence,
+        }
+        grounding_text = validated_manual_review_grounding(review_candidate)
+        evidence_segment_ids = tuple(
+            f"S{index:03d}" for index in range(1, len(evidence_items) + 1)
+        )
+        semantic = validate_contextual_description(
+            title=title,
+            central_idea=central_idea,
+            outcome=outcome,
+            evidence_segment_ids=evidence_segment_ids,
+            confidence=confidence,
+            grounding_text=grounding_text,
+        )
+        reviewed_title = validate_contextual_title_specificity(
+            semantic.title, outcome=semantic.outcome
+        )
+
+        for key in tuple(transcript):
+            if key.startswith("filename_description"):
+                transcript.pop(key)
+        reviewed_at = datetime.now().astimezone().isoformat()
+        transcript.update(
+            {
+                "filename_description": reviewed_title,
+                "filename_description_context": {
+                    "central_idea": semantic.central_idea,
+                    "outcome": semantic.outcome,
+                    "evidence_segment_ids": list(semantic.evidence_segment_ids),
+                    "confidence": semantic.confidence,
+                },
+                "filename_description_source": MANUAL_DESCRIPTION_SOURCE,
+                "filename_description_validation": (
+                    SEMANTIC_DESCRIPTION_VALIDATION
+                ),
+                "filename_description_reviewed_at": reviewed_at,
+                MANUAL_REVIEW_EVIDENCE_FIELD: reviewed_evidence,
+            }
+        )
+        atomic_json_write(transcript_path, transcript)
+        summary = {
+            "schema_version": 1,
+            "mode": MANUAL_DESCRIPTION_SOURCE,
+            "path": selected_path,
+            "sha256": sha256,
+            "recorded_at": record.get("recorded_at"),
+            "location": record.get("location"),
+            "tmk_path": record.get("tmk_path"),
+            "tmk_marker_count": record.get("tmk_marker_count"),
+            "transcript_model": model,
+            "transcript_model_revision": revision,
+            "word_timestamps": True,
+            "source_segment_ids": selected_source_ids,
+            "title": reviewed_title,
+            "central_idea": semantic.central_idea,
+            "outcome": semantic.outcome,
+            "confidence": semantic.confidence,
+            "reviewed_at": reviewed_at,
+        }
+        atomic_json_write(self.state_dir / "manual-description-review.json", summary)
+        return summary
+
     def describe(
         self,
         *,
@@ -7035,6 +7339,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     describe_parser.add_argument("--path", action="append", default=[])
     describe_parser.add_argument("--max-files", type=int)
+    review_parser = subparsers.add_parser("review-description")
+    review_parser.add_argument("--path", required=True)
+    review_parser.add_argument("--title", required=True)
+    review_parser.add_argument("--central-idea", required=True)
+    review_parser.add_argument("--outcome", required=True)
+    review_parser.add_argument(
+        "--segment-id",
+        action="append",
+        type=int,
+        required=True,
+        help="one-based GPU transcript segment id; repeat for direct evidence",
+    )
+    review_parser.add_argument(
+        "--confidence", choices=["high", "medium"], default="medium"
+    )
     plan_parser = subparsers.add_parser("plan")
     plan_parser.add_argument("--allow-missing-transcripts", action="store_true")
     plan_parser.add_argument("--defer-unready", action="store_true")
@@ -7126,6 +7445,15 @@ def main(argv: Iterable[str] | None = None) -> int:
             relative_paths=args.path,
             max_files=args.max_files,
             progress=description_progress_line,
+        )
+    elif args.command == "review-description":
+        result = library.review_description(
+            relative_path=args.path,
+            title=args.title,
+            central_idea=args.central_idea,
+            outcome=args.outcome,
+            source_segment_ids=args.segment_id,
+            confidence=args.confidence,
         )
     elif args.command == "plan":
         result = library.plan(

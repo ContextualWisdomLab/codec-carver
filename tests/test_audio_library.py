@@ -1004,6 +1004,41 @@ class NamingTests(unittest.TestCase):
                     "[S003] 약 받아가세요"
                 ),
             )
+        reviewer_grounding = (
+            "[S001] VOC 포상은 건수 최다 등록자가 받습니다.\n"
+            "[S002] 정보 품질이 중요하고 활용은 투명하게 공유합니다.\n"
+            "[S003] 등록 절차를 간소화해야 합니다.\n"
+            "[S004] 공감 받은 정보에 혜택을 연결합니다."
+        )
+        reviewer_title = (
+            "VOC건수보다-정보품질이중요하고-등록절차를간소화하며-"
+            "활용과공감에혜택연결"
+        )
+        self.assertEqual(
+            validate_semantic_description(
+                reviewer_title,
+                grounding_text=reviewer_grounding,
+            ),
+            reviewer_title,
+        )
+        with self.assertRaisesRegex(ValueError, "incomplete connective"):
+            audio_library.validate_contextual_description(
+                title=reviewer_title,
+                central_idea="VOC 포상과 정보 품질을 논의하며 팀장들이 만약에",
+                outcome="등록 절차를 간소화해야 합니다.",
+                evidence_segment_ids=("S001", "S002", "S003"),
+                confidence="high",
+                grounding_text=reviewer_grounding,
+            )
+        with self.assertRaisesRegex(ValueError, "deictic observation"):
+            audio_library.validate_contextual_description(
+                title=reviewer_title,
+                central_idea="VOC 포상보다 정보 품질을 중요하게 다룹니다.",
+                outcome="팀장들이 그걸 잘 못해요.",
+                evidence_segment_ids=("S001", "S002", "S003"),
+                confidence="high",
+                grounding_text=reviewer_grounding,
+            )
         contextual = audio_library.parse_contextual_description(
             "CENTRAL_IDEA: 수기 경영 보고의 지연을 설비 데이터 통합으로 해결해야 합니다.\n"
             "OUTCOME: 설비 데이터 통합을 우선 추진합니다.\n"
@@ -1017,6 +1052,59 @@ class NamingTests(unittest.TestCase):
         )
         self.assertEqual(contextual.title, "경영보고지연-설비데이터통합")
         self.assertEqual(contextual.evidence_segment_ids, ("S001", "S002"))
+        missing_evidence_candidate = (
+            "CENTRAL_IDEA: VOC 건수 때문에 정보 질이 떨어집니다.\n"
+            "OUTCOME: 공감 받은 VOC를 보상해야 합니다.\n"
+            "CONFIDENCE: high\n"
+            "DESCRIPTION: VOC-정보-공감"
+        )
+        missing_evidence_grounding = (
+            "[S001] VOC 건수 때문에 정보 질이 떨어집니다. "
+            "영업사원은 입력 동기를 잃습니다.\n"
+            "[S002] 공감 받은 VOC를 보상해야 합니다. "
+            "실제 사용자가 유용한 정보를 고르게 합니다.\n"
+            "[S003] 검색 조건을 늘립니다. "
+            "시장과 고객별로 정보를 찾아야 합니다.\n"
+            "[S004] 입력 화면을 간소화합니다.\n"
+            "[S005] 고객 정보를 공유합니다.\n"
+            "[S006] 팀별 업무가 다릅니다.\n"
+            "[S007] 결재 기록을 남깁니다.\n"
+            "[S008] 현업 인터뷰를 진행합니다."
+        )
+        completed_evidence = audio_library.complete_missing_contextual_evidence(
+            missing_evidence_candidate,
+            grounding_text=missing_evidence_grounding,
+        )
+        self.assertIn("EVIDENCE: S001,S002,S003", completed_evidence)
+        self.assertEqual(
+            audio_library.parse_contextual_description(
+                completed_evidence,
+                grounding_text=missing_evidence_grounding,
+            ).title,
+            "VOC-정보-공감",
+        )
+        existing_evidence = (
+            f"{missing_evidence_candidate}\nEVIDENCE: S001,S002,S003"
+        )
+        self.assertEqual(
+            audio_library.complete_missing_contextual_evidence(
+                existing_evidence,
+                grounding_text=missing_evidence_grounding,
+            ),
+            existing_evidence,
+        )
+        with self.assertRaisesRegex(ValueError, "include a OUTCOME line"):
+            audio_library.complete_missing_contextual_evidence(
+                missing_evidence_candidate.replace(
+                    "OUTCOME: 공감 받은 VOC를 보상해야 합니다.\n", ""
+                ),
+                grounding_text=missing_evidence_grounding,
+            )
+        with self.assertRaisesRegex(ValueError, "schema completion"):
+            audio_library.complete_missing_contextual_evidence(
+                missing_evidence_candidate,
+                grounding_text="",
+            )
         with self.assertRaisesRegex(ValueError, "omits an explicit purpose"):
             audio_library.parse_contextual_description(
                 "CENTRAL_IDEA: 바스 표준 화면 고도화 프로젝트를 추진합니다.\n"
@@ -1907,7 +1995,11 @@ class NamingTests(unittest.TestCase):
                     "DESCRIPTION: 경영보고지연-설비데이터-통합"
                 )
             ),
-            types.SimpleNamespace(text=grounded_context.removeprefix("CENTRAL_IDEA: ")),
+            types.SimpleNamespace(
+                text=grounded_context.replace(
+                    "EVIDENCE: S001,S002\n", ""
+                ).removeprefix("CENTRAL_IDEA: ")
+            ),
             types.SimpleNamespace(text="DESCRIPTION: 경영보고지연-설비데이터-통합"),
         ]
         with patch.dict(
@@ -6757,6 +6849,168 @@ class CliTests(unittest.TestCase):
             inspect_timeout_seconds=14_400,
         )
 
+    def test_review_description_binds_title_to_gpu_word_timestamp_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            state = root / ".codec-carver"
+            record = _record(
+                "meeting.wav",
+                HASH_A,
+                materialized=True,
+                tmk_path="meeting.tmk",
+                tmk_marker_count=4,
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [
+                        record,
+                        {
+                            "path": "meeting.tmk",
+                            "kind": "tmk",
+                            "extension": "tmk",
+                            "size_bytes": 20,
+                            "sha256": TMK_HASH,
+                        },
+                    ],
+                    "duplicate_groups": [],
+                },
+            )
+            segment_texts = [
+                "VOC 포상은 건수 최다 등록자가 받습니다.",
+                "정보 품질이 중요하고 활용은 투명하게 공유되어야 합니다.",
+                "등록 절차를 간소화해야 합니다.",
+                "공감 받은 정보에 혜택을 연결합니다.",
+            ]
+            segments = [
+                {
+                    "start": float(index * 10),
+                    "end": float(index * 10 + 4),
+                    "text": text,
+                    "words": [
+                        {
+                            "start": float(index * 10),
+                            "end": float(index * 10 + 1),
+                            "word": text.split()[0],
+                        }
+                    ],
+                }
+                for index, text in enumerate(segment_texts)
+            ]
+            transcript = {
+                "schema_version": 1,
+                "sha256": HASH_A,
+                "accelerator": "mlx",
+                "model": "mlx-community/whisper-large-v3-turbo-q4",
+                "model_revision": "pinned-review-revision",
+                "word_timestamps": True,
+                "duration_seconds": 40.0,
+                "text": " ".join(segment_texts),
+                "segments": segments,
+                "filename_description": "잘못된-자동제목",
+                "filename_description_model": "old-model",
+            }
+            transcript_path = audio_library.safe_transcript_path(
+                state / "transcripts", HASH_A
+            )
+            atomic_json_write(transcript_path, transcript)
+            title = (
+                "VOC건수보다-정보품질이중요하고-등록절차를간소화하며-"
+                "활용과공감에혜택연결"
+            )
+            central_idea = (
+                "VOC 포상은 건수 최다 등록자보다 정보 품질이 중요하고 활용은 "
+                "투명하게 공유되어야 합니다. 공감 받은 정보에 혜택을 연결하고 "
+                "등록 절차를 간소화해야 합니다."
+            )
+            outcome = (
+                "활용을 투명하게 공유하고 공감 받은 정보에 혜택을 연결하고 "
+                "등록 절차를 간소화해야 합니다."
+            )
+            library = AudioLibrary(root, Mock())
+            summary = library.review_description(
+                relative_path="meeting.wav",
+                title=title,
+                central_idea=central_idea,
+                outcome=outcome,
+                source_segment_ids=[4, 2, 1, 3, 2],
+                confidence="high",
+            )
+
+            self.assertEqual(summary["title"], title)
+            self.assertEqual(summary["source_segment_ids"], [1, 2, 3, 4])
+            self.assertEqual(summary["tmk_marker_count"], 4)
+            stored = json.loads(transcript_path.read_text(encoding="utf-8"))
+            self.assertEqual(stored["filename_description"], title)
+            self.assertEqual(
+                stored["filename_description_source"],
+                audio_library.MANUAL_DESCRIPTION_SOURCE,
+            )
+            self.assertNotIn("filename_description_model", stored)
+            self.assertEqual(
+                stored["filename_description_context"]["evidence_segment_ids"],
+                ["S001", "S002", "S003", "S004"],
+            )
+            self.assertEqual(
+                audio_library.validated_cached_filename_description(stored), title
+            )
+            self.assertEqual(
+                json.loads(
+                    (state / "manual-description-review.json").read_text(
+                        encoding="utf-8"
+                    )
+                )["sha256"],
+                HASH_A,
+            )
+
+            with self.assertRaisesRegex(ValueError, "absent from inventory"):
+                library.review_description(
+                    relative_path="missing.wav",
+                    title=title,
+                    central_idea=central_idea,
+                    outcome=outcome,
+                    source_segment_ids=[1, 2],
+                )
+            with self.assertRaisesRegex(ValueError, "two to 64"):
+                library.review_description(
+                    relative_path="meeting.wav",
+                    title=title,
+                    central_idea=central_idea,
+                    outcome=outcome,
+                    source_segment_ids=[1, 1],
+                )
+            with self.assertRaisesRegex(ValueError, "must be integers"):
+                library.review_description(
+                    relative_path="meeting.wav",
+                    title=title,
+                    central_idea=central_idea,
+                    outcome=outcome,
+                    source_segment_ids=[True, 2],
+                )
+            with self.assertRaisesRegex(ValueError, "out of range"):
+                library.review_description(
+                    relative_path="meeting.wav",
+                    title=title,
+                    central_idea=central_idea,
+                    outcome=outcome,
+                    source_segment_ids=[1, 99],
+                )
+
+            stored["segments"][0]["words"] = []
+            atomic_json_write(transcript_path, stored)
+            with self.assertRaisesRegex(ValueError, "lacks timestamped words"):
+                library.review_description(
+                    relative_path="meeting.wav",
+                    title=title,
+                    central_idea=central_idea,
+                    outcome=outcome,
+                    source_segment_ids=[1, 2],
+                )
+
     def test_describe_caches_pinned_gemma_topics_and_isolates_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -7172,6 +7426,7 @@ class CliTests(unittest.TestCase):
         library.hydrate_tmk_metadata.return_value = {"mode": "tmk"}
         library.stream_transcribe.return_value = {"mode": "stream"}
         library.describe.return_value = {"mode": "describe"}
+        library.review_description.return_value = {"mode": "review"}
         library.plan.return_value = {"mode": "plan"}
         library.apply.return_value = {"mode": "apply"}
         commands = [
@@ -7221,6 +7476,24 @@ class CliTests(unittest.TestCase):
                 "a.wav",
                 "--max-files",
                 "1",
+            ],
+            [
+                ".",
+                "review-description",
+                "--path",
+                "a.wav",
+                "--title",
+                "VOC건수보다-정보품질",
+                "--central-idea",
+                "VOC 건수보다 정보 품질이 중요합니다.",
+                "--outcome",
+                "정보 품질을 높여야 합니다.",
+                "--segment-id",
+                "3",
+                "--segment-id",
+                "7",
+                "--confidence",
+                "high",
             ],
             [
                 ".",
@@ -7276,6 +7549,14 @@ class CliTests(unittest.TestCase):
             relative_paths=["a.wav"],
             max_files=1,
             progress=audio_library.description_progress_line,
+        )
+        library.review_description.assert_called_once_with(
+            relative_path="a.wav",
+            title="VOC건수보다-정보품질",
+            central_idea="VOC 건수보다 정보 품질이 중요합니다.",
+            outcome="정보 품질을 높여야 합니다.",
+            source_segment_ids=[3, 7],
+            confidence="high",
         )
         library.plan.assert_called_once_with(
             allow_missing_transcripts=False,
