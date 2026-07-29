@@ -5680,7 +5680,10 @@ class AudioLibrary:
             ):
                 destination = record["path"]
             else:
-                if transcript.get("filename_description_status") == "deferred":
+                if (
+                    transcript.get("filename_description_status") == "deferred"
+                    and validated_cached_filename_description(transcript) is None
+                ):
                     defer_record(record)
                     continue
                 if not ready(record):
@@ -5740,9 +5743,9 @@ class AudioLibrary:
             transcript = read_optional_private_json(
                 safe_transcript_path(self.state_dir / "transcripts", sha256)
             )
-            if (
-                transcript is None
-                or transcript.get("filename_description_status") == "deferred"
+            if transcript is None or (
+                transcript.get("filename_description_status") == "deferred"
+                and validated_cached_filename_description(transcript) is None
             ):
                 continue
             try:

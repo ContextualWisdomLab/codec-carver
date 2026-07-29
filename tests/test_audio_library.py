@@ -4696,6 +4696,7 @@ class AudioLibraryTests(unittest.TestCase):
                         {"text": "설비 데이터 통합 추진"},
                     ],
                     "filename_description": "설비데이터통합-경영의사결정지연",
+                    "filename_description_status": "deferred",
                     "filename_description_validation": (
                         audio_library.SEMANTIC_DESCRIPTION_VALIDATION
                     ),
