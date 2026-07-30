@@ -253,10 +253,13 @@ quality, use, empathy, benefits, and field interviews, and uses greedy
 generation. It first requires a central idea,
 concrete outcome, confidence, and valid segment IDs, then runs a separate title
 pass so tools and frequent nouns do not displace the recording's actual
-purpose. Explicit means-to-purpose clauses such as `그래야` cannot be reduced to
-generic workflow status. If the small model repeats an invalid repair, a
-deterministic fallback may retain only concrete purpose words from its cited
-transcript lines and compose a transcript-grounded subject-purpose title. A
+purpose. Explicit conclusion cues reserve mandatory evidence, and their exact
+IDs plus neighboring context are carried through every model-repair pass.
+Explicit means-to-purpose clauses such as `그래야` cannot be reduced to generic
+workflow status. If the small model repeats an invalid repair, a deterministic
+fallback may retain only concrete purpose words from its cited transcript lines
+or join literal conclusion clauses, then rerun the same transcript-grounding
+checks. A
 deterministic scorer expands the evidence set until every claim term is
 covered, generic-only titles and low confidence are rejected, and the complete
 audit context is stored beside the title. Only anchored `[S###]` lines establish
@@ -270,7 +273,9 @@ current expected name and reports `description_drift_paths` independently of
 authorization. `plan --refresh-standardized-path` authorizes reviewed paths;
 `plan --refresh-description-drift` authorizes all detected drift. Dataless and
 SHA-unverified authorized paths are reported as deferred and never mutate. The
-only accepted
+portable filename budget is also semantic: an evidence-backed title is rejected
+when NFD UTF-8 fitting would truncate it, rather than silently changing the
+reviewed claim. The only accepted
 model identifier and immutable Hub revision are
 compiled in, tokenizer `trust_remote_code` is forced off, and old validation
 versions are regenerated rather than relabeled. No Ollama server is used and

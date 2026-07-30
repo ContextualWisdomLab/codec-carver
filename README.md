@@ -236,8 +236,13 @@ the exact contiguous sequence `S001`, `S002`, and so on. Title grounding
 preserves token boundaries, so a cross-token substring cannot impersonate a
 source term. Central idea and outcome terms must also occur in the cited
 transcript segments, so the model cannot legitimize an invented title through
-its own analysis fields. Old
-keyword-only caches are not silently upgraded. Planning consumes this
+its own analysis fields. When a speaker explicitly marks a conclusion with
+phrases such as `결론`, `종합하면`, or `하고 싶은 말`, at least one such segment
+must support the analysis. The same conclusion IDs and their neighboring
+context survive every repair prompt; if the small model still fails, a literal
+fallback may compose a title only from those exact conclusion clauses and then
+run the full grounding checks again. Old keyword-only caches are not silently
+upgraded. Planning consumes this
 evidence-backed description when present and retains the deterministic extractor
 as a no-model failure-safe.
 `review-description` provides the corresponding bounded correction path for a
@@ -258,6 +263,9 @@ keyword-only fallback. Planning reports an existing standard name when its
 entire basename differs from the timestamp, location, transcript-derived
 central-context title, and SHA suffix recomputed from current evidence, but a
 durable rename still requires explicit refresh authorization.
+An evidence-backed title that cannot fit the macOS NFD UTF-8 filename budget is
+rejected instead of being silently cut into a different or incomplete claim;
+the reviewer must approve a shorter title whose complete meaning fits.
 
 `materialize` is the nonblocking iCloud request mode. Rust validates each
 explicit audio/TMK path beneath the library root, rejects symlinks, calls

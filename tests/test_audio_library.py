@@ -916,6 +916,106 @@ class NamingTests(unittest.TestCase):
         self.assertIn("BAS 고도화가 필요하고 상품화를 추진", context_excerpt)
         self.assertIn("가격 정책을 결정", context_excerpt)
         self.assertIn("AI 크롤러 운영 이슈", context_excerpt)
+        explicit_conclusion_context = "\n".join(
+            [
+                "[S001] 수주풀의 제품 구조와 견적 과정을 설명합니다",
+                "[S002] 결론 GPT에 넣어야 될 데이터도 수주풀에 있습니다",
+                "[S003] 그래서 테이블 EDA 시간을 넉넉하게 잡아야 합니다",
+            ]
+        )
+        self.assertEqual(
+            audio_library.explicit_conclusion_evidence_ids(explicit_conclusion_context),
+            ("S002",),
+        )
+        self.assertEqual(
+            audio_library.focused_conclusion_excerpt(
+                "\n".join(
+                    [
+                        "[S001] 앞선 배경",
+                        "[S002] 세부 설명",
+                        "[S003] 결론 GPT 데이터는 수주풀에 있습니다",
+                        "[S004] 그래서 테이블 EDA 시간이 필요합니다",
+                        "[S005] 후속 인사",
+                        "[S006] 다른 대화",
+                    ]
+                ),
+                context_radius=1,
+            ),
+            "\n".join(
+                [
+                    "[S002] 세부 설명",
+                    "[S003] 결론 GPT 데이터는 수주풀에 있습니다",
+                    "[S004] 그래서 테이블 EDA 시간이 필요합니다",
+                ]
+            ),
+        )
+        literal_conclusion = (
+            audio_library.literal_conclusion_contextual_description(
+                grounding_text="\n".join(
+                    [
+                        "[S001] 결론 GPT에 넣어야 될 데이터도 수주풀에 있습니다",
+                        (
+                            "[S002] 그래서 시간을 넉넉하게 잡아야 된다는 게 "
+                            "제가 하고 싶은 말인 거예요"
+                        ),
+                        "[S003] 테이블 조잉을 계속 봐야 됩니다",
+                    ]
+                )
+            )
+        )
+        self.assertEqual(
+            literal_conclusion.title,
+            (
+                "GPT에넣어야될데이터도수주풀에있습니다-"
+                "시간을넉넉하게잡아야된다는게"
+            ),
+        )
+        self.assertEqual(
+            literal_conclusion.evidence_segment_ids,
+            ("S001", "S002", "S003"),
+        )
+        with self.assertRaisesRegex(ValueError, "no explicit conclusion"):
+            audio_library.literal_conclusion_contextual_description(
+                grounding_text="[S001] 수주풀 데이터를 확인합니다"
+            )
+        with self.assertRaisesRegex(ValueError, "subject-purpose pair"):
+            audio_library.literal_conclusion_contextual_description(
+                grounding_text="[S001] 결론 수주풀 데이터입니다"
+            )
+        with self.assertRaisesRegex(ValueError, "could not build a valid title"):
+            audio_library.literal_conclusion_contextual_description(
+                grounding_text="\n".join(
+                    [
+                        "[S001] 결론 GPT 데이터는 수주풀에 있습니다",
+                        "[S002] 그래서 시간을 넉넉하게 잡아야 된다는 게 "
+                        "제가 하고 싶은 말입니다",
+                    ]
+                ),
+                limit=1,
+            )
+        with self.assertRaisesRegex(ValueError, "explicit conclusion segment"):
+            audio_library.validate_contextual_description(
+                title="수주풀-제품구조",
+                central_idea="수주풀의 제품 구조와 견적 과정을 설명합니다.",
+                outcome="수주풀 제품 구조를 확인합니다.",
+                evidence_segment_ids=("S001", "S003"),
+                confidence="high",
+                grounding_text=explicit_conclusion_context,
+            )
+        with self.assertRaisesRegex(ValueError, "topic was discussed"):
+            audio_library.validate_contextual_description(
+                title="수주풀-영업",
+                central_idea="수주풀은 영업에서 중요한 데이터입니다.",
+                outcome="수주풀에 대한 이야기",
+                evidence_segment_ids=("S001", "S002", "S003"),
+                confidence="high",
+                grounding_text=explicit_conclusion_context,
+            )
+        with self.assertRaisesRegex(ValueError, "empty conversation label"):
+            audio_library.validate_contextual_title_specificity(
+                "수주풀-영업-이야기",
+                outcome="GPT 데이터는 수주풀에 있습니다.",
+            )
         self.assertIn(
             "날짜",
             audio_library.explicit_contextual_purpose_terms(
@@ -2088,6 +2188,59 @@ class NamingTests(unittest.TestCase):
             generate.call_args_list[3].kwargs["prompt"].endswith("CENTRAL_IDEA: ")
         )
         generate.reset_mock()
+        generate.side_effect = [
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(text=unsupported_paraphrase),
+            types.SimpleNamespace(
+                text=(
+                    "EVIDENCE: S001,S002\n"
+                    "CONFIDENCE: high\n"
+                    "DESCRIPTION: 수주풀-GPT데이터"
+                )
+            ),
+            types.SimpleNamespace(
+                text=unsupported_paraphrase.removeprefix("CENTRAL_IDEA: ")
+            ),
+        ]
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "mlx_vlm.models": fake_models,
+                "mlx_vlm.models.gemma4": fake_gemma4_package,
+                "mlx_vlm.models.gemma4.gemma4": fake_gemma4,
+                "mlx_vlm.prompt_utils": fake_prompt_utils,
+                "mlx_vlm.utils": fake_utils,
+                "transformers": fake_transformers,
+            },
+        ):
+            conclusion_literal_generator = GemmaDescriptionGenerator()
+            self.assertEqual(
+                conclusion_literal_generator.describe(
+                    {
+                        "segments": [
+                            {
+                                "text": (
+                                    "결론 GPT에 넣어야 될 데이터도 수주풀에 있습니다"
+                                )
+                            },
+                            {
+                                "text": (
+                                    "그래서 시간을 넉넉하게 잡아야 된다는 게 제가 "
+                                    "하고 싶은 말인 거예요"
+                                )
+                            },
+                            {"text": "테이블 조잉을 계속 봐야 됩니다"},
+                        ]
+                    }
+                ),
+                (
+                    "GPT에넣어야될데이터도수주풀에있습니다-"
+                    "시간을넉넉하게잡아야된다는게"
+                ),
+            )
+        self.assertEqual(generate.call_count, 4)
+        generate.reset_mock()
         valid_purpose_context = (
             "CENTRAL_IDEA: 바스 고도화 프로젝트를 추진합니다.\n"
             "OUTCOME: 상품화\n"
@@ -2371,6 +2524,21 @@ class NamingTests(unittest.TestCase):
         )
         self.assertTrue(long_name.endswith(f"__sha256-{HASH_A[:12]}.wav"))
         self.assertRegex(Path(long_name).stem, audio_library.STANDARD_NAME_RE)
+        evidence_title = "가" * 80 + "-나" * 20
+        with (
+            patch(
+                "audio_library.validated_cached_filename_description",
+                return_value=evidence_title,
+            ),
+            self.assertRaisesRegex(
+                ValueError, "evidence-backed description exceeds"
+            ),
+        ):
+            standard_filename(
+                _record("a.wav", HASH_A, location=None),
+                {"filename_description": evidence_title},
+                "2023-11-01T02:31:00+09:00",
+            )
         with self.assertRaisesRegex(ValueError, "cannot fit a fallback"):
             audio_library.fit_component_to_nfd_utf8_budget("가", budget=1)
         self.assertEqual(
