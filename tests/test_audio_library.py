@@ -2199,7 +2199,12 @@ class NamingTests(unittest.TestCase):
                 )
             ),
             types.SimpleNamespace(
-                text=unsupported_paraphrase.removeprefix("CENTRAL_IDEA: ")
+                text=(
+                    "GPT 데이터는 수주풀에 있습니다.\n"
+                    "EVIDENCE: S001,S002\n"
+                    "CONFIDENCE: high\n"
+                    "DESCRIPTION: 수주풀-GPT데이터"
+                )
             ),
         ]
         with patch.dict(

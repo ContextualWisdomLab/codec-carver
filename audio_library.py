@@ -3742,11 +3742,11 @@ class GemmaDescriptionGenerator:
                                 320,
                                 response_prefix="CENTRAL_IDEA: ",
                             )
-                            schema_repair = complete_missing_contextual_evidence(
-                                schema_repair,
-                                grounding_text=excerpt,
-                            )
                             try:
+                                schema_repair = complete_missing_contextual_evidence(
+                                    schema_repair,
+                                    grounding_text=excerpt,
+                                )
                                 analysis = parse_contextual_description(
                                     schema_repair,
                                     grounding_text=excerpt,
