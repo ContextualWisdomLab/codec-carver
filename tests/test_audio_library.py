@@ -2876,11 +2876,7 @@ class RustBackendTests(unittest.TestCase):
                 audio_library.trusted_executable(binary, expected_sha256="0" * 64)
             with self.assertRaisesRegex(ValueError, "requires expected_sha256"):
                 RustBackend(binary)
-            good_script = (
-                "#!/usr/bin/env python3\n"
-                "import json\n"
-                "print(json.dumps({'which': 'good'}))\n"
-            )
+            good_script = "#!/bin/sh\nprintf '%s\\n' '{\"which\":\"good\"}'\n"
             evil_script = good_script.replace("good", "evil")
             binary.write_text(good_script, encoding="utf-8")
             binary.chmod(0o700)
@@ -6965,6 +6961,58 @@ class CliTests(unittest.TestCase):
                     )
                 )["sha256"],
                 HASH_A,
+            )
+
+            inventory_path = state / "inventory.json"
+            inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+            inventory["files"][0]["sha256_verified"] = False
+            atomic_json_write(inventory_path, inventory)
+            with self.assertRaisesRegex(ValueError, "requires a verified SHA-256"):
+                library.review_description(
+                    relative_path="meeting.wav",
+                    title=title,
+                    central_idea=central_idea,
+                    outcome=outcome,
+                    source_segment_ids=[1, 2],
+                )
+            inventory["files"][0]["sha256_verified"] = True
+            atomic_json_write(inventory_path, inventory)
+
+            transcript_path.unlink()
+            with self.assertRaisesRegex(FileNotFoundError, "transcript is missing"):
+                library.review_description(
+                    relative_path="meeting.wav",
+                    title=title,
+                    central_idea=central_idea,
+                    outcome=outcome,
+                    source_segment_ids=[1, 2],
+                )
+            atomic_json_write(transcript_path, stored)
+
+            def assert_invalid_transcript(update, message):
+                atomic_json_write(transcript_path, {**stored, **update})
+                with self.assertRaisesRegex(ValueError, message):
+                    library.review_description(
+                        relative_path="meeting.wav",
+                        title=title,
+                        central_idea=central_idea,
+                        outcome=outcome,
+                        source_segment_ids=[1, 2],
+                    )
+                atomic_json_write(transcript_path, stored)
+
+            assert_invalid_transcript({"accelerator": "cpu"}, "MLX transcript")
+            assert_invalid_transcript(
+                {"word_timestamps": False}, "GPU word timestamps"
+            )
+            assert_invalid_transcript({"model": ""}, "transcript model")
+            assert_invalid_transcript(
+                {"model_revision": ""}, "pinned transcript revision"
+            )
+            assert_invalid_transcript({"segments": {}}, "transcript segments")
+            assert_invalid_transcript(
+                {"segments": [None, *stored["segments"][1:]]},
+                "segment is not an object",
             )
 
             with self.assertRaisesRegex(ValueError, "absent from inventory"):
