@@ -288,7 +288,7 @@ pub fn inspect_relative(root: &Path, relative_path: &Path) -> Result<FileRecord>
     let canonical_root = root
         .canonicalize()
         .with_context(|| format!("cannot resolve library root {}", root.display()))?;
-    validate_relative_path(&relative_path.to_string_lossy())?;
+    validate_existing_relative_path(&relative_path.to_string_lossy())?;
     let requested = canonical_root.join(relative_path);
     let canonical_path = requested
         .canonicalize()
@@ -351,7 +351,7 @@ pub fn stage_relative(
     let canonical_root = root
         .canonicalize()
         .with_context(|| format!("cannot resolve library root {}", root.display()))?;
-    validate_relative_path(&relative_path.to_string_lossy())?;
+    validate_existing_relative_path(&relative_path.to_string_lossy())?;
     let requested = canonical_root.join(relative_path);
     let canonical_path = requested
         .canonicalize()
@@ -513,7 +513,7 @@ where
     let canonical_root = root
         .canonicalize()
         .with_context(|| format!("cannot resolve library root {}", root.display()))?;
-    validate_relative_path(&relative_path.to_string_lossy())?;
+    validate_existing_relative_path(&relative_path.to_string_lossy())?;
     let requested_path = canonical_root.join(relative_path);
     let requested_metadata = fs::symlink_metadata(&requested_path).with_context(|| {
         format!(
@@ -574,7 +574,7 @@ where
     let canonical_root = root
         .canonicalize()
         .with_context(|| format!("cannot resolve library root {}", root.display()))?;
-    validate_relative_path(&relative_path.to_string_lossy())?;
+    validate_existing_relative_path(&relative_path.to_string_lossy())?;
     let requested = canonical_root.join(relative_path);
     let canonical_path = requested
         .canonicalize()
@@ -880,7 +880,7 @@ fn hash_open_file(input: File, capture: Option<&mut Vec<u8>>) -> Result<String> 
 
 #[cfg(unix)]
 fn open_regular_beneath(root: &Path, relative_path: &Path) -> Result<File> {
-    validate_relative_path(&relative_path.to_string_lossy())?;
+    validate_existing_relative_path(&relative_path.to_string_lossy())?;
     let root_context = format!("cannot securely open library root {}", root.display());
     let mut directory = OpenOptions::new()
         .read(true)
@@ -935,7 +935,7 @@ fn open_regular_beneath(root: &Path, relative_path: &Path) -> Result<File> {
 
 #[cfg(not(unix))]
 fn open_regular_beneath(root: &Path, relative_path: &Path) -> Result<File> {
-    validate_relative_path(&relative_path.to_string_lossy())?;
+    validate_existing_relative_path(&relative_path.to_string_lossy())?;
     let path = root.join(relative_path);
     let file = File::open(&path).with_context(|| format!("cannot open {}", path.display()))?;
     if !file.metadata()?.is_file() {
@@ -1358,6 +1358,20 @@ fn default_hash_threads() -> usize {
 
 /// Validate a relative path used by a mutation plan.
 pub fn validate_relative_path(path: &str) -> Result<()> {
+    validate_relative_path_with_policy(path, true)
+}
+
+/// Validate an existing relative path without imposing a destination portability rule.
+///
+/// Libraries can contain legacy names whose decomposed UTF-8 representation exceeds
+/// the cross-platform filename budget. Existing files must remain inspectable and
+/// movable so they can be migrated to a portable destination. Descriptor-relative
+/// traversal, symlink rejection, and SHA-256 binding still protect those reads.
+fn validate_existing_relative_path(path: &str) -> Result<()> {
+    validate_relative_path_with_policy(path, false)
+}
+
+fn validate_relative_path_with_policy(path: &str, require_portable: bool) -> Result<()> {
     let value = Path::new(path);
     if value.as_os_str().is_empty() || value.is_absolute() {
         bail!("mutation path must be non-empty and relative: {path:?}");
@@ -1367,7 +1381,7 @@ pub fn validate_relative_path(path: &str) -> Result<()> {
             bail!("mutation path contains unsafe components: {path:?}");
         };
         let normalized: String = name.to_string_lossy().nfd().collect();
-        if normalized.len() > PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES {
+        if require_portable && normalized.len() > PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES {
             bail!(
                 "mutation path component exceeds {} NFD UTF-8 bytes: {path:?}",
                 PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES
@@ -1501,8 +1515,9 @@ fn mutation_parent(
     root: &File,
     relative_path: &Path,
     create: bool,
+    require_portable: bool,
 ) -> Result<Option<(File, CString)>> {
-    validate_relative_path(&relative_path.to_string_lossy())?;
+    validate_relative_path_with_policy(&relative_path.to_string_lossy(), require_portable)?;
     let final_component = relative_path
         .file_name()
         .expect("validated mutation paths have a final component");
@@ -1560,7 +1575,7 @@ fn entry_exists(parent: &File, name: &CString) -> Result<bool> {
 
 #[cfg(unix)]
 fn open_mutation_source(root: &File, relative_path: &Path) -> Result<(File, File, CString)> {
-    let (parent, name) = mutation_parent(root, relative_path, false)?
+    let (parent, name) = mutation_parent(root, relative_path, false, false)?
         .ok_or_else(|| anyhow!("source parent is missing: {}", relative_path.display()))?;
     let descriptor = unsafe {
         libc::openat(
@@ -1711,7 +1726,8 @@ fn validate_mutation_operation(root: &File, operation: &MutationOperation) -> Re
             actual_sha256
         );
     }
-    if let Some((parent, name)) = mutation_parent(root, Path::new(&operation.destination), false)?
+    if let Some((parent, name)) =
+        mutation_parent(root, Path::new(&operation.destination), false, true)?
         && entry_exists(&parent, &name)?
     {
         bail!("destination already exists: {}", operation.destination);
@@ -1720,7 +1736,12 @@ fn validate_mutation_operation(root: &File, operation: &MutationOperation) -> Re
 }
 
 #[cfg(unix)]
-fn move_mutation_with<F>(root: &File, operation: &MutationOperation, before_rename: F) -> Result<()>
+fn move_mutation_with<F>(
+    root: &File,
+    operation: &MutationOperation,
+    require_portable_destination: bool,
+    before_rename: F,
+) -> Result<()>
 where
     F: FnOnce() -> Result<()>,
 {
@@ -1741,9 +1762,13 @@ where
             actual_sha256
         );
     }
-    let (destination_parent, destination_name) =
-        mutation_parent(root, Path::new(&operation.destination), true)?
-            .expect("creating a validated mutation parent always returns a descriptor");
+    let (destination_parent, destination_name) = mutation_parent(
+        root,
+        Path::new(&operation.destination),
+        true,
+        require_portable_destination,
+    )?
+    .expect("creating a validated mutation parent always returns a descriptor");
     before_rename()?;
     source_name_still_matches(&source_parent, &source, &source_name)?;
     rename_noreplace_at(
@@ -1756,7 +1781,7 @@ where
 
 #[cfg(unix)]
 fn move_mutation(root: &File, operation: &MutationOperation) -> Result<()> {
-    move_mutation_with(root, operation, || Ok(()))
+    move_mutation_with(root, operation, true, || Ok(()))
 }
 
 #[cfg(unix)]
@@ -1787,7 +1812,7 @@ fn apply_plan_unix(plan: &MutationPlan, execute: bool, root: &Path) -> Result<Ap
     let root_directory = open_locked_root(root)?;
     let mut destinations = HashSet::new();
     for operation in &plan.operations {
-        validate_relative_path(&operation.source)?;
+        validate_existing_relative_path(&operation.source)?;
         validate_relative_path(&operation.destination)?;
         if operation.source == operation.destination {
             bail!("source and destination are identical: {}", operation.source);
@@ -1803,7 +1828,7 @@ fn apply_plan_unix(plan: &MutationPlan, execute: bool, root: &Path) -> Result<Ap
         for operation in &plan.operations {
             if let Err(error) = move_mutation(&root_directory, operation) {
                 let rollback_errors = rollback_completed(&completed, |reverse| {
-                    move_mutation(&root_directory, reverse)
+                    move_mutation_with(&root_directory, reverse, false, || Ok(()))
                 });
                 let rollback_status = if rollback_errors.is_empty() {
                     "completed operations were rolled back".to_string()
@@ -2062,12 +2087,17 @@ mod tests {
         assert!(validate_relative_path("/absolute.wav").is_err());
         assert!(validate_relative_path("").is_err());
         assert!(validate_relative_path(&format!("{}.wav", "가".repeat(20))).is_ok());
+        let legacy_name = format!("{}.wav", "가".repeat(50));
         assert!(
-            validate_relative_path(&format!("{}.wav", "가".repeat(50)))
+            validate_relative_path(&legacy_name)
                 .unwrap_err()
                 .to_string()
                 .contains("255 NFD UTF-8 bytes")
         );
+        assert!(validate_existing_relative_path(&legacy_name).is_ok());
+        assert!(validate_existing_relative_path("../escape.wav").is_err());
+        assert!(validate_existing_relative_path("/absolute.wav").is_err());
+        assert!(validate_existing_relative_path("").is_err());
     }
 
     #[test]
@@ -2089,6 +2119,13 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .starts_with("2024-01-02T03:04")
+        );
+        let legacy_name = format!("{}.wav", "가".repeat(50));
+        fs::write(root.join(&legacy_name), b"legacy").unwrap();
+        let legacy = inspect_relative(&root, Path::new(&legacy_name)).unwrap();
+        assert_eq!(
+            legacy.sha256.as_deref(),
+            Some("c49fea7425fa7f8699897a97c159c6690267d9003bb78c53fafa8fc15c325d84")
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -2906,6 +2943,50 @@ mod tests {
         });
         assert_eq!(rollback_errors.len(), 1);
         assert!(rollback_errors[0].contains("synthetic rollback failure"));
+
+        let legacy_name = format!("{}.wav", "가".repeat(50));
+        fs::write(root.join(&legacy_name), b"legacy").unwrap();
+        let legacy_hash = format!("{:x}", Sha256::digest(b"legacy"));
+        let legacy_plan = MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![MutationOperation {
+                action: MutationAction::Rename,
+                source: legacy_name.clone(),
+                destination: "portable.wav".to_string(),
+                sha256: Some(legacy_hash),
+            }],
+        };
+        assert_eq!(apply_plan(&legacy_plan, false).unwrap().operation_count, 1);
+        assert_eq!(apply_plan(&legacy_plan, true).unwrap().completed.len(), 1);
+        assert!(!root.join(&legacy_name).exists());
+        assert_eq!(fs::read(root.join("portable.wav")).unwrap(), b"legacy");
+
+        let legacy_rollback_name = format!("{}-rollback.wav", "가".repeat(50));
+        fs::write(root.join(&legacy_rollback_name), b"legacy-rollback").unwrap();
+        let legacy_rollback_hash = format!("{:x}", Sha256::digest(b"legacy-rollback"));
+        let legacy_rollback = MutationPlan {
+            schema_version: 1,
+            root: root.to_string_lossy().to_string(),
+            operations: vec![
+                MutationOperation {
+                    action: MutationAction::Rename,
+                    source: legacy_rollback_name.clone(),
+                    destination: "portable-first.wav".to_string(),
+                    sha256: Some(legacy_rollback_hash.clone()),
+                },
+                MutationOperation {
+                    action: MutationAction::Rename,
+                    source: legacy_rollback_name.clone(),
+                    destination: "portable-second.wav".to_string(),
+                    sha256: Some(legacy_rollback_hash),
+                },
+            ],
+        };
+        let error = apply_plan(&legacy_rollback, true).unwrap_err().to_string();
+        assert!(error.contains("rolled back"));
+        assert!(root.join(&legacy_rollback_name).is_file());
+        assert!(!root.join("portable-first.wav").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3054,7 +3135,7 @@ mod tests {
             sha256: Some(source_hash),
         };
         let root_directory = open_locked_root(&root).unwrap();
-        move_mutation_with(&root_directory, &operation, || {
+        move_mutation_with(&root_directory, &operation, true, || {
             fs::rename(root.join("race-parent"), &detached)?;
             symlink(&outside, root.join("race-parent"))?;
             Ok(())
@@ -3153,7 +3234,10 @@ mod tests {
             sha256: Some(format!("{:x}", Sha256::digest(b"source"))),
         };
         assert!(
-            move_mutation_with(&root_directory, &interrupted, || bail!("synthetic race")).is_err()
+            move_mutation_with(&root_directory, &interrupted, true, || bail!(
+                "synthetic race"
+            ))
+            .is_err()
         );
         assert!(root.join("source.wav").is_file());
         assert!(!root.join("interrupted/result.wav").exists());
