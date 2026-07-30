@@ -17,7 +17,12 @@ try:
     from saas_web import app
 
     _HAS_FASTAPI = True
-except ImportError:
+except (ImportError, RuntimeError):
+    # FastAPI raises RuntimeError (not ImportError) from
+    # ensure_multipart_is_installed() when a Form/UploadFile route is imported
+    # without python-multipart, so a partial `web` extra (fastapi present,
+    # python-multipart absent) must still skip gracefully rather than error out
+    # collection — the suite is documented to pass without the optional extras.
     _HAS_FASTAPI = False
 
 from media_shrinker import ConversionResult
