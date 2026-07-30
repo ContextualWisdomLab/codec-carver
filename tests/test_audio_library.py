@@ -4425,6 +4425,14 @@ class AudioLibraryTests(unittest.TestCase):
                 "duplicate_groups": [],
             }
             atomic_json_write(library.state_dir / "inventory.json", manifest)
+            library._reconcile_manual_description_review(
+                manifest,
+                tmk_records_by_path={
+                    record["path"]: record
+                    for record in manifest["files"]
+                    if record["kind"] == "tmk"
+                },
+            )
             atomic_json_write(
                 library.state_dir / "transcripts" / f"{HASH_A}.json",
                 {
@@ -4453,6 +4461,20 @@ class AudioLibraryTests(unittest.TestCase):
                     "tmk_chunk_hint_markers_seconds": [300.0],
                     "text": "후속 진료",
                     "segments": [{"text": "후속 진료"}],
+                },
+            )
+            atomic_json_write(
+                library.state_dir / "manual-description-review.json",
+                {
+                    "schema_version": 1,
+                    "mode": audio_library.MANUAL_DESCRIPTION_SOURCE,
+                    "path": "old.wav",
+                    "sha256": HASH_A,
+                    "recorded_at": "stale",
+                    "location": "stale",
+                    "tmk_path": "old.tmk",
+                    "tmk_sha256": TMK_HASH,
+                    "tmk_marker_count": 1,
                 },
             )
             operations = [
@@ -4522,6 +4544,17 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(transcript["tmk_path"], "renamed.tmk")
             self.assertEqual(transcript["tmk_chunk_hint_path"], "renamed.tmk")
             self.assertEqual(transcript["tmk_chunk_hint_sha256"], TMK_HASH)
+            review = json.loads(
+                (
+                    library.state_dir / "manual-description-review.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(review["path"], "renamed.wav")
+            self.assertEqual(review["recorded_at"], audio["recorded_at"])
+            self.assertEqual(review["location"], audio["location"])
+            self.assertEqual(review["tmk_path"], "renamed.tmk")
+            self.assertEqual(review["tmk_sha256"], TMK_HASH)
+            self.assertEqual(review["tmk_marker_count"], 1)
             without_transcript = json.loads(
                 (library.state_dir / "transcripts" / f"{HASH_B}.json").read_text(
                     encoding="utf-8"
@@ -4532,6 +4565,16 @@ class AudioLibraryTests(unittest.TestCase):
             for field in audio_library.TMK_CHUNK_HINT_FIELDS:
                 self.assertNotIn(field, without_transcript)
 
+            atomic_json_write(
+                library.state_dir / "manual-description-review.json",
+                {
+                    "sha256": HASH_B,
+                    "path": "without.wav",
+                    "tmk_path": "drop.tmk",
+                    "tmk_sha256": TMK_HASH,
+                    "tmk_marker_count": 1,
+                },
+            )
             transcript["tmk_chunk_hint_path"] = "missing-copy.tmk"
             atomic_json_write(
                 library.state_dir / "transcripts" / f"{HASH_A}.json", transcript
@@ -4550,6 +4593,37 @@ class AudioLibraryTests(unittest.TestCase):
                 )
             )
             self.assertEqual(rebound["tmk_chunk_hint_path"], "renamed.tmk")
+            review_without_tmk = json.loads(
+                (
+                    library.state_dir / "manual-description-review.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(review_without_tmk["path"], "without.wav")
+            self.assertIsNone(review_without_tmk["tmk_path"])
+            self.assertIsNone(review_without_tmk["tmk_sha256"])
+            self.assertIsNone(review_without_tmk["tmk_marker_count"])
+
+            orphaned_review = {"sha256": "0" * 64, "path": "orphaned.wav"}
+            atomic_json_write(
+                library.state_dir / "manual-description-review.json",
+                orphaned_review,
+            )
+            library._reconcile_executed_mutation_state(
+                {"operations": []},
+                {
+                    "executed": True,
+                    "operation_count": 0,
+                    "completed": [],
+                },
+            )
+            self.assertEqual(
+                json.loads(
+                    (
+                        library.state_dir / "manual-description-review.json"
+                    ).read_text(encoding="utf-8")
+                ),
+                orphaned_review,
+            )
 
             with (
                 patch.object(library, "_validate_mutation_plan", return_value=plan),

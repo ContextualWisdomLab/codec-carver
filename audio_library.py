@@ -6373,7 +6373,54 @@ class AudioLibrary:
                 if hint_path is not None:
                     transcript["tmk_chunk_hint_path"] = hint_path
                 atomic_json_write(transcript_path, transcript)
+        self._reconcile_manual_description_review(
+            manifest,
+            tmk_records_by_path=tmk_records_by_path,
+        )
         atomic_json_write(self.state_dir / "inventory.json", manifest)
+
+    def _reconcile_manual_description_review(
+        self,
+        manifest: dict[str, Any],
+        *,
+        tmk_records_by_path: dict[str, dict[str, Any]],
+    ) -> None:
+        """Rebind the latest manual-review summary to reconciled corpus paths."""
+
+        review_path = self.state_dir / "manual-description-review.json"
+        review = read_optional_private_json(review_path)
+        if review is None:
+            return
+        review_sha256 = validate_sha256(
+            review.get("sha256"),
+            label="manual description review SHA-256",
+        )
+        record = next(
+            (
+                item
+                for item in unique_audio_records(manifest)
+                if item["sha256"] == review_sha256
+            ),
+            None,
+        )
+        if record is None:
+            return
+        tmk_record = tmk_records_by_path.get(record.get("tmk_path"), {})
+        review.update(
+            {
+                "path": record["path"],
+                "recorded_at": record.get("recorded_at"),
+                "location": record.get("location"),
+                "tmk_path": record.get("tmk_path"),
+                "tmk_sha256": (
+                    tmk_record.get("sha256")
+                    if record_sha_is_verified(tmk_record)
+                    else None
+                ),
+                "tmk_marker_count": record.get("tmk_marker_count"),
+            }
+        )
+        atomic_json_write(review_path, review)
 
     def apply(self, *, execute: bool = False) -> dict[str, Any]:
         """Validate by default, or execute and reconcile durable state."""
