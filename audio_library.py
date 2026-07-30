@@ -5576,6 +5576,15 @@ class AudioLibrary:
         if not record_sha_is_verified(record):
             raise ValueError("manual description review requires a verified SHA-256")
         sha256 = validate_sha256(record.get("sha256"))
+        records_by_path = {
+            item["path"]: item
+            for item in manifest["files"]
+            if isinstance(item.get("path"), str)
+        }
+        tmk_record = records_by_path.get(record.get("tmk_path"), {})
+        tmk_sha256 = (
+            tmk_record.get("sha256") if record_sha_is_verified(tmk_record) else None
+        )
         transcript_path = safe_transcript_path(
             self.state_dir / "transcripts", sha256
         )
@@ -5681,6 +5690,7 @@ class AudioLibrary:
         reviewed_at = datetime.now().astimezone().isoformat()
         transcript.update(
             {
+                "tmk_sha256": tmk_sha256,
                 "filename_description": reviewed_title,
                 "filename_description_context": {
                     "central_idea": semantic.central_idea,
@@ -5705,6 +5715,7 @@ class AudioLibrary:
             "recorded_at": record.get("recorded_at"),
             "location": record.get("location"),
             "tmk_path": record.get("tmk_path"),
+            "tmk_sha256": tmk_sha256,
             "tmk_marker_count": record.get("tmk_marker_count"),
             "transcript_model": model,
             "transcript_model_revision": revision,

@@ -6878,6 +6878,8 @@ class CliTests(unittest.TestCase):
                             "extension": "tmk",
                             "size_bytes": 20,
                             "sha256": TMK_HASH,
+                            "sha256_verified": True,
+                            "sha256_source": "content",
                         },
                     ],
                     "duplicate_groups": [],
@@ -6946,9 +6948,11 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(summary["title"], title)
             self.assertEqual(summary["source_segment_ids"], [1, 2, 3, 4])
+            self.assertEqual(summary["tmk_sha256"], TMK_HASH)
             self.assertEqual(summary["tmk_marker_count"], 4)
             stored = json.loads(transcript_path.read_text(encoding="utf-8"))
             self.assertEqual(stored["filename_description"], title)
+            self.assertEqual(stored["tmk_sha256"], TMK_HASH)
             self.assertEqual(
                 stored["filename_description_source"],
                 audio_library.MANUAL_DESCRIPTION_SOURCE,
@@ -6972,6 +6976,22 @@ class CliTests(unittest.TestCase):
 
             inventory_path = state / "inventory.json"
             inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+            inventory["files"][1]["sha256_verified"] = False
+            inventory["files"][1]["sha256_source"] = "previous_inventory"
+            atomic_json_write(inventory_path, inventory)
+            unverified_tmk = library.review_description(
+                relative_path="meeting.wav",
+                title=title,
+                central_idea=central_idea,
+                outcome=outcome,
+                source_segment_ids=[1, 2, 3, 4],
+                confidence="high",
+            )
+            self.assertIsNone(unverified_tmk["tmk_sha256"])
+            self.assertIsNone(
+                json.loads(transcript_path.read_text(encoding="utf-8"))["tmk_sha256"]
+            )
+
             inventory["files"][0]["sha256_verified"] = False
             atomic_json_write(inventory_path, inventory)
             with self.assertRaisesRegex(ValueError, "requires a verified SHA-256"):
