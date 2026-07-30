@@ -26,10 +26,12 @@ except RuntimeError as exc:
     # ensure_multipart_is_installed() when a Form/UploadFile route is imported
     # without python-multipart, so a partial `web` extra (fastapi present,
     # python-multipart absent) must still skip gracefully rather than error out
-    # collection. Treat ONLY that dependency-missing case as an absent extra;
-    # re-raise any other RuntimeError so a genuine saas_web initialization
-    # failure stays visible instead of being silently skipped.
-    if "multipart" not in str(exc).lower():
+    # collection. Match the "python-multipart" package name (the FastAPI
+    # dependency-missing message names it verbatim) so ONLY that case is treated
+    # as an absent extra; re-raise any other RuntimeError — including unrelated
+    # ones that merely mention "multipart" — so a genuine saas_web
+    # initialization failure stays visible instead of being silently skipped.
+    if "python-multipart" not in str(exc).lower():
         raise
     _HAS_FASTAPI = False
 
