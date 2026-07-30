@@ -3971,8 +3971,17 @@ class GpuTranscriberTests(unittest.TestCase):
             )
         command = run.call_args.args[0]
         self.assertEqual(
-            command[command.index("-ss") : command.index("-ss") + 4],
-            ["-ss", "299.000000", "-t", "302.000000"],
+            command[:8],
+            [
+                "/usr/bin/ffmpeg",
+                "-nostdin",
+                "-ss",
+                "299.000000",
+                "-i",
+                "recording.wav",
+                "-t",
+                "302.000000",
+            ],
         )
 
         handle = tempfile.TemporaryFile("w+b")
