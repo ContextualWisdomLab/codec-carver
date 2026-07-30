@@ -1,3 +1,6 @@
+## 2026-07-30 - Dynamic size limits and batch total size validation
+**Learning:** Hardcoded human-readable size limits in error messages (like '5 GiB') become misleading if underlying limit constants change. Furthermore, batch uploads must validate total size to prevent users waiting for large uploads only to face server-side rejection.
+**Action:** Use `formatBinaryBytes(MAX_UPLOAD_BYTES)` dynamically for error messages, and ensure batch total sizes are validated client-side with immediate `setCustomValidity` and `aria-invalid` feedback.
 ## 2024-07-12 - Intercepting batch form submissions for testing visual loading states
 **Learning:** Extending the learning from 2024-06-13, intercepting form submissions using `e.preventDefault()` via `page.evaluate()` is essential for capturing screenshot and video evidence of loading states (e.g., button disabling, spinner appearing) on forms like batch upload where the submission would normally reload the page or download an archive.
 **Action:** When testing visual loading states with Playwright, always inject an event listener using `page.evaluate()` to call `e.preventDefault()` on the form's `submit` event to freeze the UI in its loading state for verification.
