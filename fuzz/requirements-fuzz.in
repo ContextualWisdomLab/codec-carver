@@ -1,1 +1,6 @@
-atheris
+# atheris 3.0.0 ships no CPython 3.13 wheel and 3.1.0 dropped its CPython 3.11
+# wheel. This repo's fuzz job runs on CPython 3.12 and the central
+# coverage-evidence image on a newer interpreter; only 3.1.0 has wheels for both
+# (cp312 + cp313), so pin 3.1.0.
+# Compile: uv pip compile fuzz/requirements-fuzz.in --generate-hashes --python-version 3.12 --universal -o fuzz/requirements-fuzz.txt
+atheris==3.1.0
