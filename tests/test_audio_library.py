@@ -5050,6 +5050,10 @@ class AudioLibraryTests(unittest.TestCase):
                 fake.transcribe.call_args_list[0].kwargs["tmk_markers_seconds"],
                 [5.0],
             )
+            transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(transcript["tmk_sha256"], TMK_HASH)
             self.assertEqual(fake.transcribe.call_args_list[1].kwargs, {})
 
     def test_transcribe_honors_cache_and_max_files(self) -> None:
@@ -5360,6 +5364,7 @@ class AudioLibraryTests(unittest.TestCase):
             backend.stage.assert_not_called()
             transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
             self.assertEqual(transcript["tmk_path"], "cached.tmk")
+            self.assertEqual(transcript["tmk_sha256"], TMK_HASH)
             self.assertEqual(transcript["tmk_marker_count"], 21)
             self.assertEqual(transcript["tmk_last_marker_seconds"], 6300.0)
             inventory = json.loads(
@@ -5444,6 +5449,7 @@ class AudioLibraryTests(unittest.TestCase):
             transcript = json.loads(
                 (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
             )
+            self.assertEqual(transcript["tmk_sha256"], TMK_HASH)
             self.assertEqual(transcript["tmk_marker_count"], 3)
             self.assertEqual(transcript["tmk_last_marker_seconds"], 90.0)
             self.assertEqual(transcript["tmk_markers_seconds"], [30.0, 60.0, 90.0])
@@ -6228,6 +6234,7 @@ class AudioLibraryTests(unittest.TestCase):
                 (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
             )
             self.assertEqual(transcript["tmk_error"], "dataless")
+            self.assertIsNone(transcript["tmk_sha256"])
             self.assertIsNone(transcript["tmk_markers_seconds"])
             self.assertEqual(fake.transcribe.call_args.kwargs, {})
 

@@ -4842,6 +4842,9 @@ class AudioLibrary:
                             "recorded_at": record.get("recorded_at"),
                             "location": record.get("location"),
                             "tmk_path": record.get("tmk_path"),
+                            "tmk_sha256": (
+                                tmk_record.get("sha256") if verified_tmk else None
+                            ),
                             "tmk_marker_count": (
                                 tmk_record.get("tmk_marker_count")
                                 if verified_tmk
@@ -4935,6 +4938,7 @@ class AudioLibrary:
             marker_count = record.get("tmk_marker_count")
             if not record_sha_is_verified(record) or marker_count is None:
                 return 0
+            tmk_sha256 = record["sha256"]
             last_marker_seconds = record.get("tmk_last_marker_seconds")
             markers_seconds = record.get("tmk_markers_seconds")
             changed_transcripts = 0
@@ -4959,6 +4963,7 @@ class AudioLibrary:
                 validate_transcript_record_identity(audio_record, transcript)
                 desired_metadata = {
                     "tmk_path": record["path"],
+                    "tmk_sha256": tmk_sha256,
                     "tmk_marker_count": marker_count,
                     "tmk_last_marker_seconds": last_marker_seconds,
                     "tmk_markers_seconds": markers_seconds,
@@ -5469,6 +5474,11 @@ class AudioLibrary:
                             "recorded_at": record.get("recorded_at"),
                             "location": record.get("location"),
                             "tmk_path": record.get("tmk_path"),
+                            "tmk_sha256": (
+                                tmk_record.get("sha256")
+                                if not tmk_needs_metadata
+                                else None
+                            ),
                             "tmk_marker_count": record.get("tmk_marker_count"),
                             "tmk_last_marker_seconds": record.get(
                                 "tmk_last_marker_seconds"

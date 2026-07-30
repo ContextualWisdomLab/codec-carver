@@ -37,6 +37,10 @@ preferred interface for recording curation.
   idempotent synchronization pass propagates already verified markers into
   linked transcript sidecars without rehashing them, and rejects transcript
   SHA-256 mismatches instead of overwriting foreign evidence.
+- A transcript binds its primary TMK provenance with `tmk_path`, the
+  content-verified `tmk_sha256`, and its ordered marker vector. Unverified
+  sidecar identities never enter this field, and hydration repairs older
+  transcript sidecars idempotently.
 - `stream-transcribe` consumes only checkpointed TMK metadata. An unresolved
   sidecar is retained as `tmk_error` evidence and cannot block GPU audio work.
 - On MLX, verified internal TMK offsets divide a long recording into bounded
