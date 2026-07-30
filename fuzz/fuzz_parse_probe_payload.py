@@ -36,10 +36,18 @@ def _pick(fdp, options):
     return options[fdp.ConsumeIntInRange(0, len(options) - 1)]
 
 
-def _build_payload(fdp) -> dict:
-    """Assemble a JSON-shaped ffprobe payload from fuzzer-controlled bytes."""
+def _build_payload(fdp) -> object:
+    """Assemble a JSON-shaped ffprobe payload from fuzzer-controlled bytes.
+
+    Members are only *usually* objects: a stream entry, the ``streams`` value,
+    the ``format`` section, or the whole payload may each be a non-object scalar
+    so the parser's type guards are actually fuzzed rather than pre-shaped away.
+    """
     streams = []
     for _ in range(fdp.ConsumeIntInRange(0, 4)):
+        if fdp.ConsumeIntInRange(0, 4) == 0:
+            streams.append(_pick(fdp, _SCALARS))
+            continue
         streams.append(
             {
                 "codec_type": _pick(fdp, _CODEC_TYPES),
@@ -48,15 +56,18 @@ def _build_payload(fdp) -> dict:
                 "bit_rate": _pick(fdp, _SCALARS),
             }
         )
-    payload = {
-        "streams": streams,
-        "format": {
-            "duration": _pick(fdp, _SCALARS),
-            "size": _pick(fdp, _SCALARS),
-            "bit_rate": _pick(fdp, _SCALARS),
-            "format_name": _pick(fdp, (None, "wav", "mov,mp4,m4a", "flac", "")),
-        },
+    format_section = {
+        "duration": _pick(fdp, _SCALARS),
+        "size": _pick(fdp, _SCALARS),
+        "bit_rate": _pick(fdp, _SCALARS),
+        "format_name": _pick(fdp, (None, "wav", "mov,mp4,m4a", "flac", "")),
     }
+    payload = {
+        "streams": _pick(fdp, _SCALARS) if fdp.ConsumeIntInRange(0, 6) == 0 else streams,
+        "format": _pick(fdp, _SCALARS) if fdp.ConsumeIntInRange(0, 6) == 0 else format_section,
+    }
+    if fdp.ConsumeIntInRange(0, 8) == 0:
+        return _pick(fdp, _SCALARS)
     return payload
 
 

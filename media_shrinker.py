@@ -2043,13 +2043,21 @@ def _parse_probe_payload(
     source_size: int | None = None,
 ) -> MediaProbe:
     """Parse raw ffprobe JSON payload into a MediaProbe object."""
+    if not isinstance(payload, dict):
+        raise MediaShrinkerError(f"{source_path} ffprobe payload was not an object")
     streams = payload.get("streams", [])
+    if not isinstance(streams, list):
+        raise MediaShrinkerError(f"{source_path} ffprobe payload has invalid streams")
 
     # Fast path: O(N) loop to find audio stream and check for video in one pass
     # Avoids multiple generator expressions and any/next calls for measurable CPU savings on large files
     audio_stream = None
     has_video = False
     for stream in streams:
+        # ffprobe output is untrusted; a non-object stream entry cannot be the
+        # audio stream, so skip it rather than let stream.get() raise AttributeError.
+        if not isinstance(stream, dict):
+            continue
         codec_type = stream.get("codec_type")
         if codec_type == "audio" and audio_stream is None:
             audio_stream = stream
@@ -2060,6 +2068,8 @@ def _parse_probe_payload(
         raise MediaShrinkerError(f"{source_path} has no audio stream")
 
     format_section = payload.get("format", {})
+    if not isinstance(format_section, dict):
+        raise MediaShrinkerError(f"{source_path} ffprobe payload has invalid format")
     # Prefer the stream duration, but a stream-level "0"/"0.000000" (reported by
     # some containers) is unusable and must fall back to the format duration.
     duration = _first_float(audio_stream.get("duration"))
