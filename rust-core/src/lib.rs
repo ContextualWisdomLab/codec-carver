@@ -392,7 +392,9 @@ pub fn stage_relative(
         }
     };
     ensure_complete_stage(&canonical_path, &partial, pending.size_bytes)?;
-    let staged_path = canonical_staging.join(format!("{sha256}.{extension}"));
+    let normalized_relative: String = relative_path.to_string_lossy().nfc().collect();
+    let source_key = format!("{:x}", Sha256::digest(normalized_relative.as_bytes()));
+    let staged_path = canonical_staging.join(format!("{sha256}-{source_key}.{extension}"));
     match fs::symlink_metadata(&staged_path) {
         Ok(metadata) => {
             if !metadata.file_type().is_file() {
@@ -2226,6 +2228,12 @@ mod tests {
         assert_eq!(fs::read(&result.staged_path).unwrap(), b"audio");
         let repeated = stage_relative(&root, Path::new("240102_0304.wav"), &staging).unwrap();
         assert_eq!(repeated.staged_path, result.staged_path);
+        fs::write(root.join("240102_0304(1).wav"), b"audio").unwrap();
+        let copy = stage_relative(&root, Path::new("240102_0304(1).wav"), &staging).unwrap();
+        assert_eq!(copy.record.sha256, result.record.sha256);
+        assert_ne!(copy.staged_path, result.staged_path);
+        assert_eq!(fs::read(&copy.staged_path).unwrap(), b"audio");
+        assert_eq!(fs::read(&result.staged_path).unwrap(), b"audio");
 
         fs::write(&result.staged_path, b"corrupt").unwrap();
         let corrupt_error = stage_relative(&root, Path::new("240102_0304.wav"), &staging)
