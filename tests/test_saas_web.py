@@ -682,6 +682,26 @@ class TestApiKeyAuth(unittest.TestCase):
 
         self.assertEqual(rejected.status_code, 401)
 
+    def test_non_ascii_api_key_does_not_crash(self):
+        from saas_web import require_api_key
+
+        class MockURL:
+            path = "/jobs"
+
+        class MockRequest:
+            method = "GET"
+            url = MockURL()
+            headers = {"x-api-key": "안녕"}
+
+        async def mock_call_next(request):
+            pass
+
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secretkey1,secretkey2"}):
+            import asyncio
+            response = asyncio.run(require_api_key(MockRequest(), mock_call_next))
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.body, b'{"error":"Invalid or missing API key"}')
+
     def test_empty_entries_are_ignored(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "key-one,,  ,"}):
             response = self._post_shrink(headers={"X-API-Key": "key-one"})
