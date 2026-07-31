@@ -691,16 +691,29 @@ class TestApiKeyAuth(unittest.TestCase):
         class MockRequest:
             method = "GET"
             url = MockURL()
-            headers = {"x-api-key": "안녕"}
+
+            def __init__(self, api_key):
+                self.headers = {"x-api-key": api_key}
+
+        calls = []
+        downstream_response = object()
 
         async def mock_call_next(request):
-            pass
+            calls.append(request)
+            return downstream_response
 
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secretkey1,secretkey2"}):
-            import asyncio
-            response = asyncio.run(require_api_key(MockRequest(), mock_call_next))
+            response = asyncio.run(require_api_key(MockRequest("안녕"), mock_call_next))
             self.assertEqual(response.status_code, 401)
             self.assertEqual(response.body, b'{"error":"Invalid or missing API key"}')
+            self.assertEqual(calls, [])
+
+        accepted_request = MockRequest("안녕")
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "안녕"}):
+            response = asyncio.run(require_api_key(accepted_request, mock_call_next))
+
+        self.assertIs(response, downstream_response)
+        self.assertEqual(calls, [accepted_request])
 
     def test_empty_entries_are_ignored(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "key-one,,  ,"}):
