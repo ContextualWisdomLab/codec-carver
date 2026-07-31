@@ -230,9 +230,19 @@ HTML_TEMPLATE = """
                 }
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
-                    input.setCustomValidity('File exceeds 5 GiB limit.');
+                    const limitStr = formatBinaryBytes(MAX_UPLOAD_BYTES);
+                    input.setCustomValidity('File exceeds ' + limitStr + ' limit.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected file size: ' + text + ' (exceeds 5 GiB limit)';
+                    preview.innerText = 'Selected file size: ' + text + ' (exceeds ' + limitStr + ' limit)';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+
+                if (totalSize > MAX_UPLOAD_BYTES) {
+                    const limitStr = formatBinaryBytes(MAX_UPLOAD_BYTES);
+                    input.setCustomValidity('Total combined file size exceeds ' + limitStr + ' limit.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' files (' + formatBinaryBytes(totalSize) + ', exceeds ' + limitStr + ' limit)';
                     preview.style.color = '#dc3545';
                     return;
                 }
@@ -322,6 +332,15 @@ HTML_TEMPLATE = """
                     input.setCustomValidity('Maximum is 20 files per batch.');
                     input.setAttribute('aria-invalid', 'true');
                     preview.innerText = 'Selected ' + files.length + ' files (' + formatBinaryBytes(totalSize) + ', exceeds 20 files limit)';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+
+                if (totalSize > MAX_UPLOAD_BYTES) {
+                    const limitStr = formatBinaryBytes(MAX_UPLOAD_BYTES);
+                    input.setCustomValidity('Total combined file size exceeds ' + limitStr + ' limit.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' files (' + formatBinaryBytes(totalSize) + ', exceeds ' + limitStr + ' limit)';
                     preview.style.color = '#dc3545';
                     return;
                 }

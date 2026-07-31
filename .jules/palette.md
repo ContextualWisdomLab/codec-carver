@@ -1,3 +1,7 @@
+## 2024-07-14 - 동적 파일 크기 제한 검증 및 일괄 폼 유효성 검사
+**Learning:** 정적으로 코딩된 업로드 제한 크기(예: 5 GiB)는 백엔드 제한이 변경될 때 클라이언트 측 검증과 불일치하게 되며, 일괄 업로드 폼에서 전체 파일 크기 검증이 없으면 사용자가 업로드 실패를 서버 측에서만 확인하게 되어 나쁜 UX를 초래합니다.
+**Action:** 클라이언트 측 파일 크기 검증에서 백엔드의 최대 제한(`MAX_UPLOAD_BYTES`) 상수를 사용해 동적으로 포맷팅된 인간 친화적인 단위(예: `formatBinaryBytes(MAX_UPLOAD_BYTES)`)를 사용하고, 다중 파일 업로드 폼에도 각 파일 크기의 합을 검증하여 제출 전 즉각적인 피드백을 제공하도록 합니다.
+
 ## 2024-07-12 - Intercepting batch form submissions for testing visual loading states
 **Learning:** Extending the learning from 2024-06-13, intercepting form submissions using `e.preventDefault()` via `page.evaluate()` is essential for capturing screenshot and video evidence of loading states (e.g., button disabling, spinner appearing) on forms like batch upload where the submission would normally reload the page or download an archive.
 **Action:** When testing visual loading states with Playwright, always inject an event listener using `page.evaluate()` to call `e.preventDefault()` on the form's `submit` event to freeze the UI in its loading state for verification.
