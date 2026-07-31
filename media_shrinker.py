@@ -2067,6 +2067,15 @@ def _parse_probe_payload(
     if audio_stream is None:
         raise MediaShrinkerError(f"{source_path} has no audio stream")
 
+    # codec_name is untrusted; MediaProbe.audio_codec is typed str | None and
+    # _is_lossless_probe() calls .lower() on it, so a non-string value (e.g. a
+    # JSON list) would raise AttributeError downstream. Reject it here instead.
+    audio_codec = audio_stream.get("codec_name")
+    if audio_codec is not None and not isinstance(audio_codec, str):
+        raise MediaShrinkerError(
+            f"{source_path} ffprobe audio stream has invalid codec_name"
+        )
+
     format_section = payload.get("format", {})
     if not isinstance(format_section, dict):
         raise MediaShrinkerError(f"{source_path} ffprobe payload has invalid format")
@@ -2090,7 +2099,7 @@ def _parse_probe_payload(
     return MediaProbe(
         duration_seconds=duration,
         size_bytes=parsed_size,
-        audio_codec=audio_stream.get("codec_name"),
+        audio_codec=audio_codec,
         audio_bit_rate=audio_bit_rate,
         has_video=has_video,
         format_name=str(format_section.get("format_name", "")),

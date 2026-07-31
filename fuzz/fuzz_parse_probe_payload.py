@@ -26,7 +26,10 @@ _SOURCE = Path("fuzz_probe_source.bin")
 # Values ffprobe realistically emits for numeric-ish fields.
 _SCALARS = (None, "N/A", "", "0", "1234.5", "-1", "1e9", "nan", "inf", 0, 1500, 3.14)
 _CODEC_TYPES = (None, "audio", "video", "subtitle", "data", "")
-_CODEC_NAMES = (None, "flac", "opus", "aac", "pcm_s16le", "mp3", "")
+# codec_name is usually a string, but a malicious/garbled payload can make it a
+# non-string JSON value; the parser must reject those, not leak them into
+# MediaProbe.audio_codec where _is_lossless_probe().lower() would crash.
+_CODEC_NAMES = (None, "flac", "opus", "aac", "pcm_s16le", "mp3", "", ["bad"], 7, {"x": 1})
 
 
 def _pick(fdp, options):
@@ -88,6 +91,7 @@ def check_invariants(payload: dict, source_size) -> None:
     assert probe.audio_bit_rate is None or isinstance(probe.audio_bit_rate, int)
     assert isinstance(probe.has_video, bool)
     assert isinstance(probe.format_name, str)
+    assert probe.audio_codec is None or isinstance(probe.audio_codec, str)
 
 
 def test_one_input(data: bytes) -> None:

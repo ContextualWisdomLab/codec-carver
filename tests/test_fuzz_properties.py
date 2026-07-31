@@ -132,6 +132,23 @@ class ProbePayloadTypeGuardRegressionTests(unittest.TestCase):
                 source_size=1000,
             )
 
+    def test_non_string_codec_name_rejected(self) -> None:
+        # A non-string codec_name would otherwise reach MediaProbe.audio_codec
+        # and crash _is_lossless_probe().lower() with AttributeError.
+        with self.assertRaisesRegex(
+            media_shrinker.MediaShrinkerError, "invalid codec_name"
+        ):
+            media_shrinker._parse_probe_payload(
+                {
+                    "streams": [
+                        {"codec_type": "audio", "duration": "10", "codec_name": ["bad"]},
+                    ],
+                    "format": {"size": "1000"},
+                },
+                self._PATH,
+                source_size=1000,
+            )
+
 
 @unittest.skipUnless(_HAS_HYPOTHESIS, "hypothesis not installed")
 class SilenceParserPropertyTests(unittest.TestCase):
@@ -186,7 +203,13 @@ class ProbePayloadPropertyTests(unittest.TestCase):
         stream = st.fixed_dictionaries(
             {
                 "codec_type": st.sampled_from([None, "audio", "video", "data", ""]),
-                "codec_name": st.sampled_from([None, "flac", "opus", "aac", ""]),
+                # Un-masked: codec_name may be a non-string JSON value, which the
+                # parser must reject rather than leak into MediaProbe.audio_codec.
+                "codec_name": st.one_of(
+                    st.sampled_from([None, "flac", "opus", "aac", ""]),
+                    st.lists(st.text(max_size=4), max_size=2),
+                    st.integers(min_value=-8, max_value=8),
+                ),
                 "duration": self._scalar,
                 "bit_rate": self._scalar,
             }
@@ -222,6 +245,9 @@ class ProbePayloadPropertyTests(unittest.TestCase):
         self.assertGreater(probe.duration_seconds, 0)
         self.assertTrue(math.isfinite(probe.duration_seconds))
         self.assertIsInstance(probe.size_bytes, int)
+        self.assertTrue(
+            probe.audio_codec is None or isinstance(probe.audio_codec, str)
+        )
 
 
 @unittest.skipUnless(_HAS_HYPOTHESIS, "hypothesis not installed")
