@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Python API for GPU transcription and Rust-backed audio library curation.
 
-The API keeps model orchestration in Python, where Apple MLX and CUDA Whisper
-implementations are mature, while delegating byte-heavy hashing and filesystem
-mutations to ``codec-carver-core``. It never invokes Ollama and refuses a CPU
-fallback when GPU transcription is requested.
+The API keeps model orchestration in Python, using Apple MLX for joint speech
+transcription and speaker diarization or Whisper on MLX/CUDA, while delegating
+byte-heavy hashing and filesystem mutations to ``codec-carver-core``. It never
+invokes Ollama and refuses a CPU fallback when GPU transcription is requested.
 """
 
 from __future__ import annotations
@@ -43,6 +43,8 @@ except ImportError:  # pragma: no cover - Windows has no descriptor path API
 
 DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo-q4"
 DEFAULT_MLX_MODEL_REVISION = "660c343bbf4e52ac257f0b7d952e5388e6f93bef"
+DEFAULT_MLX_SPEAKER_MODEL = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
+DEFAULT_MLX_SPEAKER_MODEL_REVISION = "e8681d68e7042738ffca8ac8212bc8fcb1131ab8"
 DEFAULT_CUDA_MODEL = "large-v3-turbo"
 DEFAULT_CUDA_MODEL_REPOSITORY = "dropbox-dash/faster-whisper-large-v3-turbo"
 DEFAULT_CUDA_MODEL_REVISION = "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
@@ -78,10 +80,13 @@ MACOS_SF_DATALESS = 0x40000000
 MACOS_F_GETPATH = 50
 MACOS_PATH_MAX = 1024
 MIN_TRANSCRIBABLE_SECONDS = 0.5
+MIN_MLX_SPEAKER_TRANSCRIBABLE_SECONDS = 1.0
 TMK_CHUNK_OVERLAP_SECONDS = 1.0
 MAX_TMK_CHUNK_MARKERS = 4096
 AUTOMATIC_MLX_CHUNK_SECONDS = 300.0
 AUTOMATIC_MLX_CHUNK_MIN_DURATION_SECONDS = 600.0
+MAX_MLX_SPEAKER_CHUNK_SECONDS = 90 * 60.0
+SPEAKER_TRANSCRIPTION_POLICY_VERSION = 1
 TRANSCRIPTION_CHECKPOINT_SCHEMA_VERSION = 1
 PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES = 255
 PORTABLE_LOCATION_NFD_UTF8_MAX_BYTES = 72
@@ -372,6 +377,16 @@ CONTEXT_EXPLICIT_PURPOSE_RE = re.compile(
     r"그래야|(?:을|를|기|에)\s*위해|위한|목적|목표|해야|되어야|돼야|"
     r"합시다|하자|확정하|결정하"
 )
+CONTEXT_EXPLICIT_DIRECTIVE_RE = re.compile(
+    r"(?:해\s*)?주시기\s*바랍니다|바랍니다|하십시오|하세요|해\s*주세요|"
+    r"신고해|신고하|대피하|연락하"
+)
+CONTEXT_PRIORITY_SUBJECT_RE = re.compile(
+    r"긴급상황|비상상황|고장|장애|위험|문제|목표|결정|필요"
+)
+CONTEXT_DIRECTIVE_ACTION_RE = re.compile(
+    r"신고|대피|연락|요청|제출|등록|선택|확인|주의|이용"
+)
 CONTEXT_PURPOSE_RELATION_PREFIXES = (
     "그래야",
     "그러기",
@@ -468,6 +483,7 @@ class TranscriptionConfig:
     model: str | None = None
     language: str | None = "ko"
     word_timestamps: bool = False
+    speaker_diarization: bool = False
 
 
 @dataclass
@@ -1173,8 +1189,44 @@ def resolve_pinned_whisper_model(
     return display_model, revision, snapshot
 
 
+def resolve_pinned_mlx_speaker_model(
+    requested_model: str | None,
+) -> tuple[str, str, Path]:
+    """Resolve the approved joint transcription/diarization model by commit."""
+
+    if requested_model not in {None, DEFAULT_MLX_SPEAKER_MODEL}:
+        raise ValueError("speaker diarization requires the approved pinned MLX model")
+    try:
+        from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise GpuTranscriptionUnavailableError(
+            "pinned speaker-model loading requires huggingface-hub"
+        ) from exc
+    try:
+        snapshot = Path(
+            snapshot_download(
+                repo_id=DEFAULT_MLX_SPEAKER_MODEL,
+                revision=DEFAULT_MLX_SPEAKER_MODEL_REVISION,
+            )
+        ).resolve(strict=True)
+    except Exception as exc:
+        raise GpuTranscriptionUnavailableError(
+            "approved joint transcription/diarization snapshot is unavailable: "
+            f"{DEFAULT_MLX_SPEAKER_MODEL}@{DEFAULT_MLX_SPEAKER_MODEL_REVISION}"
+        ) from exc
+    if not snapshot.is_dir() or snapshot.name != DEFAULT_MLX_SPEAKER_MODEL_REVISION:
+        raise GpuTranscriptionUnavailableError(
+            "Hugging Face did not return the immutable speaker-model snapshot"
+        )
+    return (
+        DEFAULT_MLX_SPEAKER_MODEL,
+        DEFAULT_MLX_SPEAKER_MODEL_REVISION,
+        snapshot,
+    )
+
+
 class GpuTranscriber:
-    """Persistent-model Whisper adapter for Metal/MLX and NVIDIA CUDA."""
+    """Persistent GPU adapter for joint MLX speech or MLX/CUDA Whisper."""
 
     def __init__(self, config: TranscriptionConfig = TranscriptionConfig()) -> None:
         """Select a real GPU backend; no CPU or Ollama fallback is permitted."""
@@ -1188,13 +1240,26 @@ class GpuTranscriber:
             )
         if accelerator not in {"mlx", "cuda"}:
             raise ValueError("accelerator must be one of: auto, mlx, cuda")
+        if config.speaker_diarization and accelerator != "mlx":
+            raise ValueError("speaker diarization currently requires Apple MLX")
+        if config.speaker_diarization and config.word_timestamps:
+            raise ValueError(
+                "joint speaker transcription provides segment timestamps, not word timestamps"
+            )
         self.config = config
         self.accelerator = accelerator
         self.model = config.model or (
-            DEFAULT_MLX_MODEL if accelerator == "mlx" else DEFAULT_CUDA_MODEL
+            DEFAULT_MLX_SPEAKER_MODEL
+            if accelerator == "mlx" and config.speaker_diarization
+            else DEFAULT_MLX_MODEL if accelerator == "mlx" else DEFAULT_CUDA_MODEL
         )
+        if config.speaker_diarization and self.model != DEFAULT_MLX_SPEAKER_MODEL:
+            raise ValueError(
+                "speaker diarization requires the approved pinned MLX model"
+            )
         self.model_revision = ""
         self.model_path = Path()
+        self._mlx_speaker_model: Any | None = None
         self._cuda_model: Any | None = None
         self._initialize_runtime()
 
@@ -1204,12 +1269,38 @@ class GpuTranscriber:
         if self.accelerator == "mlx":
             try:
                 import mlx.core as mx  # type: ignore[import-not-found]
-                import mlx_whisper  # type: ignore[import-not-found]  # noqa: F401
             except ImportError as exc:
                 raise GpuTranscriptionUnavailableError(
                     "MLX GPU transcription is unavailable; install the `transcribe-mlx` extra"
                 ) from exc
             mx.set_default_device(mx.gpu)
+            if self.config.speaker_diarization:
+                try:
+                    from mlx_audio.stt.utils import (  # type: ignore[import-not-found]
+                        load_model,
+                    )
+                except ImportError as exc:
+                    raise GpuTranscriptionUnavailableError(
+                        "joint speaker transcription requires mlx-audio"
+                    ) from exc
+                (
+                    self.model,
+                    self.model_revision,
+                    self.model_path,
+                ) = resolve_pinned_mlx_speaker_model(self.config.model)
+                try:
+                    self._mlx_speaker_model = load_model(self.model_path)
+                except Exception as exc:
+                    raise GpuTranscriptionUnavailableError(
+                        "mlx-audio could not initialize the joint speaker model"
+                    ) from exc
+                return
+            try:
+                import mlx_whisper  # type: ignore[import-not-found]  # noqa: F401
+            except ImportError as exc:
+                raise GpuTranscriptionUnavailableError(
+                    "MLX GPU transcription is unavailable; install the `transcribe-mlx` extra"
+                ) from exc
             (
                 self.model,
                 self.model_revision,
@@ -1248,13 +1339,15 @@ class GpuTranscriber:
 
         started = time.perf_counter()
         duration_seconds = audio_duration_seconds(audio_source)
-        if (
-            duration_seconds is not None
-            and duration_seconds < MIN_TRANSCRIBABLE_SECONDS
-        ):
+        minimum_duration = (
+            MIN_MLX_SPEAKER_TRANSCRIBABLE_SECONDS
+            if self._mlx_speaker_model is not None
+            else MIN_TRANSCRIBABLE_SECONDS
+        )
+        if duration_seconds is not None and duration_seconds < minimum_duration:
             if isinstance(audio_source, VerifiedStagedArtifact):
                 audio_source.verify_unchanged()
-            return {
+            result = {
                 "text": "",
                 "segments": [],
                 "language": self.config.language,
@@ -1269,8 +1362,189 @@ class GpuTranscriber:
                 "quality_flags": ["too_short_for_reliable_speech"],
                 "elapsed_seconds": round(time.perf_counter() - started, 3),
             }
+            if self._mlx_speaker_model is not None:
+                result.update(
+                    {
+                        "speaker_diarization": True,
+                        "speaker_diarization_status": "not_applicable",
+                        "speaker_transcription_policy_version": (
+                            SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                        ),
+                        "speaker_count": 0,
+                        "speaker_model": self.model,
+                        "speaker_model_revision": self.model_revision,
+                    }
+                )
+            return result
         resumed_chunks: list[dict[str, Any]] = []
-        if self.accelerator == "mlx":
+        if self._mlx_speaker_model is not None:
+            marker_values = canonical_tmk_markers(tmk_markers_seconds)
+            chunk_ranges = mlx_speaker_chunk_ranges(marker_values, duration_seconds)
+            tmk_ranges = chunk_ranges if marker_values else []
+            automatic_ranges = [] if marker_values else chunk_ranges
+
+            def normalize_joint_segments(
+                raw_segments: Any,
+                *,
+                offset: float,
+                chunk_index: int | None,
+                decoded_seconds: float | None,
+                fallback_text: str = "",
+            ) -> list[dict[str, Any]]:
+                """Normalize MOSS output and keep chunk-local identities honest."""
+
+                normalized_segments = []
+                for raw_segment in raw_segments or []:
+                    if not isinstance(raw_segment, dict):
+                        continue
+                    try:
+                        start = float(raw_segment.get("start", 0.0))
+                        end = float(raw_segment.get("end", 0.0))
+                    except (TypeError, ValueError):
+                        continue
+                    if (
+                        not math.isfinite(start)
+                        or not math.isfinite(end)
+                        or start < 0.0
+                        or end < start
+                        or (
+                            decoded_seconds is not None
+                            and end > decoded_seconds + 1.0
+                        )
+                    ):
+                        continue
+                    speaker = str(raw_segment.get("speaker_id") or "S00")
+                    if not re.fullmatch(r"S\d+", speaker):
+                        speaker = "S00"
+                    if chunk_index is not None:
+                        speaker = f"C{chunk_index + 1:03d}_{speaker}"
+                    segment_text = str(raw_segment.get("text", "")).strip()
+                    segment_text = re.sub(r"^\[S\d+\]\s*", "", segment_text).strip()
+                    normalized = normalize_segment(
+                        {
+                            "start": start + offset,
+                            "end": end + offset,
+                            "text": segment_text,
+                            "speaker_id": speaker,
+                        }
+                    )
+                    if normalized["text"]:
+                        normalized_segments.append(normalized)
+                fallback_text = fallback_text.strip()
+                if not normalized_segments and fallback_text:
+                    speaker = "S00"
+                    if chunk_index is not None:
+                        speaker = f"C{chunk_index + 1:03d}_{speaker}"
+                    normalized_segments.append(
+                        normalize_segment(
+                            {
+                                "start": offset,
+                                "end": offset + (decoded_seconds or 0.0),
+                                "text": fallback_text,
+                                "speaker_id": speaker,
+                            }
+                        )
+                    )
+                return normalized_segments
+
+            def infer(decoded_audio: Any, decoded_seconds: float | None) -> Any:
+                """Run deterministic one-pass transcription and diarization."""
+
+                max_tokens = (
+                    32768
+                    if decoded_seconds is None
+                    else min(32768, max(2048, math.ceil(decoded_seconds * 4)))
+                )
+                return self._mlx_speaker_model.generate(
+                    decoded_audio,
+                    max_tokens=max_tokens,
+                    temperature=0.0,
+                    verbose=False,
+                )
+
+            if chunk_ranges:
+                assert duration_seconds is not None
+                resumed_chunks = validated_completed_transcription_chunks(
+                    completed_chunks, chunk_ranges, duration_seconds
+                )
+                segments = [
+                    segment for chunk in resumed_chunks for segment in chunk["segments"]
+                ]
+                chunk_texts = [
+                    chunk["text"] for chunk in resumed_chunks if chunk["text"]
+                ]
+                language = self.config.language
+                for chunk_index in range(len(resumed_chunks), len(chunk_ranges)):
+                    logical_start, logical_end = chunk_ranges[chunk_index]
+                    decode_start = max(0.0, logical_start - TMK_CHUNK_OVERLAP_SECONDS)
+                    decode_end = min(
+                        duration_seconds,
+                        logical_end + TMK_CHUNK_OVERLAP_SECONDS,
+                    )
+                    raw = infer(
+                        decode_audio_for_mlx(
+                            audio_source,
+                            start_seconds=decode_start,
+                            duration_seconds=decode_end - decode_start,
+                        ),
+                        decode_end - decode_start,
+                    )
+                    normalized_chunk = normalize_joint_segments(
+                        getattr(raw, "segments", []),
+                        offset=decode_start,
+                        chunk_index=chunk_index,
+                        decoded_seconds=decode_end - decode_start,
+                        fallback_text=str(getattr(raw, "text", "")),
+                    )
+                    accepted_chunk = []
+                    is_last = chunk_index == len(chunk_ranges) - 1
+                    for segment in normalized_chunk:
+                        midpoint = (segment["start"] + segment["end"]) / 2.0
+                        if midpoint < logical_start:
+                            continue
+                        if midpoint >= logical_end and not (
+                            is_last and midpoint <= duration_seconds
+                        ):
+                            continue
+                        segments.append(segment)
+                        accepted_chunk.append(segment)
+                    chunk_text = trusted_transcript_text(accepted_chunk)
+                    if chunk_text:
+                        chunk_texts.append(chunk_text)
+                    if chunk_progress:
+                        chunk_progress(
+                            {
+                                "chunk_index": chunk_index,
+                                "chunk_total": len(chunk_ranges),
+                                "logical_start_seconds": logical_start,
+                                "logical_end_seconds": logical_end,
+                                "language": language,
+                                "segments": accepted_chunk,
+                                "text": chunk_text,
+                            }
+                        )
+                segments.sort(key=lambda segment: (segment["start"], segment["end"]))
+                text = " ".join(chunk_texts)
+            else:
+                if completed_chunks:
+                    raise ValueError(
+                        "completed transcription chunks require bounded MLX audio"
+                    )
+                resumed_chunks = []
+                raw = infer(
+                    decode_audio_for_mlx(audio_source),
+                    duration_seconds,
+                )
+                segments = normalize_joint_segments(
+                    getattr(raw, "segments", []),
+                    offset=0.0,
+                    chunk_index=None,
+                    decoded_seconds=duration_seconds,
+                    fallback_text=str(getattr(raw, "text", "")),
+                )
+                text = trusted_transcript_text(segments)
+                language = self.config.language
+        elif self.accelerator == "mlx":
             import mlx_whisper  # type: ignore[import-not-found]
 
             tmk_ranges = tmk_chunk_ranges(tmk_markers_seconds, duration_seconds)
@@ -1436,7 +1710,7 @@ class GpuTranscriber:
         word_timestamp_count = sum(
             len(segment.get("words", [])) for segment in segments
         )
-        return {
+        result = {
             "text": text,
             "segments": segments,
             "language": language,
@@ -1460,6 +1734,36 @@ class GpuTranscriber:
             "quality_flags": quality_flags,
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         }
+        if self._mlx_speaker_model is not None:
+            speakers = {
+                segment["speaker_id"]
+                for segment in segments
+                if isinstance(segment.get("speaker_id"), str)
+            }
+            result.update(
+                {
+                    "speaker_diarization": True,
+                    "speaker_diarization_status": (
+                        "not_applicable"
+                        if not segments
+                        else (
+                            "unresolved"
+                            if any(
+                                speaker == "S00" or speaker.endswith("_S00")
+                                for speaker in speakers
+                            )
+                            else "completed"
+                        )
+                    ),
+                    "speaker_transcription_policy_version": (
+                        SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                    ),
+                    "speaker_count": len(speakers),
+                    "speaker_model": self.model,
+                    "speaker_model_revision": self.model_revision,
+                }
+            )
+        return result
 
 
 def trusted_media_binary(approved_paths: tuple[Path, ...]) -> Path | None:
@@ -1609,6 +1913,31 @@ def automatic_mlx_chunk_ranges(
         ranges.append((start, end))
         start = end
     return ranges if len(ranges) > 1 else []
+
+
+def mlx_speaker_chunk_ranges(
+    markers: Any, duration_seconds: float | None
+) -> list[tuple[float, float]]:
+    """Keep joint speaker transcription within its documented 90-minute limit."""
+
+    if (
+        duration_seconds is None
+        or not math.isfinite(duration_seconds)
+        or duration_seconds <= MAX_MLX_SPEAKER_CHUNK_SECONDS
+    ):
+        return []
+    duration = float(duration_seconds)
+    boundaries = [value for value in canonical_tmk_markers(markers) if value < duration]
+    ranges = []
+    start = 0.0
+    while duration - start > MAX_MLX_SPEAKER_CHUNK_SECONDS:
+        limit = start + MAX_MLX_SPEAKER_CHUNK_SECONDS
+        candidates = [value for value in boundaries if start < value <= limit]
+        end = max(candidates) if candidates else limit
+        ranges.append((start, end))
+        start = end
+    ranges.append((start, duration))
+    return ranges
 
 
 def canonical_tmk_markers(markers: Any) -> list[float]:
@@ -1827,6 +2156,8 @@ def transcript_cache_matches_record(
     model_revision: str | None,
     requested_language: str | None,
     require_word_timestamps: bool,
+    require_speaker_diarization: bool = False,
+    speaker_policy_version: int | None = None,
 ) -> bool:
     """Accept cached speech only when content and pinned runtime identity match."""
 
@@ -1844,6 +2175,50 @@ def transcript_cache_matches_record(
         return False
     if transcript.get("requested_language") != requested_language:
         return False
+    if require_speaker_diarization:
+        if transcript.get("speaker_diarization") is not True:
+            return False
+        if transcript.get("speaker_transcription_policy_version") != (
+            speaker_policy_version
+        ):
+            return False
+        status = transcript.get("speaker_diarization_status")
+        if status not in {"completed", "unresolved", "not_applicable"}:
+            return False
+        speaker_count = transcript.get("speaker_count")
+        if (
+            isinstance(speaker_count, bool)
+            or not isinstance(speaker_count, int)
+            or speaker_count < 0
+        ):
+            return False
+        segments = transcript.get("segments")
+        if not isinstance(segments, list):
+            return False
+        speakers = {
+            segment.get("speaker_id")
+            for segment in segments
+            if isinstance(segment, dict)
+            and isinstance(segment.get("speaker_id"), str)
+        }
+        if len(speakers) != speaker_count:
+            return False
+        if status == "completed" and (
+            not speakers
+            or any(
+                isinstance(segment, dict)
+                and str(segment.get("text", "")).strip()
+                and not isinstance(segment.get("speaker_id"), str)
+                for segment in segments
+            )
+        ):
+            return False
+        if status == "unresolved" and not any(
+            speaker == "S00" or speaker.endswith("_S00") for speaker in speakers
+        ):
+            return False
+        if status == "not_applicable" and (segments or speaker_count != 0):
+            return False
     if require_word_timestamps:
         if transcript.get("word_timestamps") is not True:
             return False
@@ -1889,6 +2264,11 @@ def normalize_segment(segment: dict[str, Any]) -> dict[str, Any]:
         "end": float(segment.get("end", 0.0)),
         "text": str(segment.get("text", "")).strip(),
     }
+    speaker = segment.get("speaker_id", segment.get("speaker"))
+    if isinstance(speaker, str) and re.fullmatch(
+        r"[A-Za-z][A-Za-z0-9_-]{0,31}", speaker
+    ):
+        normalized["speaker_id"] = speaker
     raw_words = segment.get("words", [])
     raw_words = raw_words if isinstance(raw_words, list) else []
     probabilities = []
@@ -1944,6 +2324,27 @@ def normalize_segment(segment: dict[str, Any]) -> dict[str, Any]:
             normalized["end"] - normalized["start"] < 0.5 and word_probability < 0.25
         )
     return normalized
+
+
+def speaker_transcript_text(transcript: dict[str, Any]) -> str:
+    """Render one readable file with consecutive turns grouped by speaker."""
+
+    turns: list[tuple[str, str]] = []
+    for segment in transcript.get("segments", []):
+        if not isinstance(segment, dict):
+            continue
+        speaker = segment.get("speaker_id")
+        text = str(segment.get("text", "")).strip()
+        if not isinstance(speaker, str) or not text:
+            continue
+        if turns and turns[-1][0] == speaker:
+            turns[-1] = (speaker, f"{turns[-1][1]} {text}")
+        else:
+            turns.append((speaker, text))
+    if turns:
+        return "\n".join(f"[{speaker}] {text}" for speaker, text in turns) + "\n"
+    text = str(transcript.get("text", "")).strip()
+    return text + ("\n" if text else "")
 
 
 def trusted_transcript_text(
@@ -2387,6 +2788,34 @@ def minimum_context_evidence_count(segment_count: int) -> int:
     return 1
 
 
+def sufficient_context_evidence(
+    selected_ids: Iterable[str], segments: dict[str, str]
+) -> bool:
+    """Accept a dense two-line directive without padding it with unrelated speech."""
+
+    selected = tuple(dict.fromkeys(selected_ids))
+    if any(evidence_id not in segments for evidence_id in selected):
+        return False
+    if len(selected) >= minimum_context_evidence_count(len(segments)):
+        return True
+    if len(segments) < 8 or len(selected) < 2:
+        return False
+    selected_evidence = [segments[evidence_id] for evidence_id in selected]
+    selected_terms = {
+        key
+        for value in selected_evidence
+        for _display, key in description_terms(value)
+    }
+    return (
+        sum(len(value) for value in selected_evidence) >= 60
+        and len(selected_terms) >= 8
+        and any(
+            CONTEXT_EXPLICIT_DIRECTIVE_RE.search(value)
+            for value in selected_evidence
+        )
+    )
+
+
 def validate_context_claim(
     claim: str,
     *,
@@ -2530,9 +2959,6 @@ def validate_contextual_description(
             evidence_id.strip().upper() for evidence_id in evidence_segment_ids
         )
     )
-    minimum_evidence = minimum_context_evidence_count(len(available_ids))
-    if len(selected_ids) < minimum_evidence:
-        raise ValueError("insufficient transcript evidence for the central idea")
     invalid_ids = [
         evidence_id for evidence_id in selected_ids if evidence_id not in available_ids
     ]
@@ -2541,6 +2967,8 @@ def validate_contextual_description(
             "context evidence references absent transcript segments: "
             + ", ".join(invalid_ids)
         )
+    if not sufficient_context_evidence(selected_ids, segments):
+        raise ValueError("insufficient transcript evidence for the central idea")
     conclusion_ids = explicit_conclusion_evidence_ids(grounding_text)
     if conclusion_ids and not any(
         evidence_id in conclusion_ids for evidence_id in selected_ids
@@ -2865,9 +3293,38 @@ def contextual_fallback_title(
     if not hinted:
         central_keys = {key for _display, key in description_terms(central_idea)}
         hinted = [term for term in source_terms if term[1] in central_keys]
+    overbroad_hint = len(DESCRIPTION_TOKEN_RE.findall(title_hint)) > 6 or len(
+        hinted
+    ) > 6
+    if overbroad_hint:
+        priority_terms = [
+            term
+            for term in hinted
+            if CONTEXT_PRIORITY_SUBJECT_RE.search(term[1])
+        ]
+        if priority_terms:
+            hinted = priority_terms
+    directive_purposes = []
+    if overbroad_hint:
+        action = next(
+            (
+                term
+                for term in reversed(outcome_terms)
+                if CONTEXT_DIRECTIVE_ACTION_RE.search(term) is not None
+            ),
+            "",
+        )
+        object_terms = [
+            term
+            for term in outcome_terms
+            if CONTEXT_DIRECTIVE_ACTION_RE.search(term) is None
+        ][:2]
+        if action and object_terms:
+            directive_purposes.append(f"{''.join(object_terms)}-{action}")
     purpose_candidates = tuple(
         dict.fromkeys(
             [
+                *directive_purposes,
                 "".join(outcome_terms[:3]),
                 "".join(outcome_terms[:2]),
                 *outcome_terms,
@@ -2896,11 +3353,10 @@ def rescue_contextual_description(
     evidence_ids = tuple(
         dict.fromkeys(SEMANTIC_EVIDENCE_ID_RE.findall(fields["EVIDENCE"].upper()))
     )
-    minimum_evidence = minimum_context_evidence_count(len(segments))
-    if len(evidence_ids) < minimum_evidence:
-        raise ValueError("insufficient transcript evidence for contextual rescue")
     if any(evidence_id not in segments for evidence_id in evidence_ids):
         raise ValueError("contextual rescue references absent transcript evidence")
+    if not sufficient_context_evidence(evidence_ids, segments):
+        raise ValueError("insufficient transcript evidence for contextual rescue")
     purpose_terms = explicit_contextual_purpose_terms(
         selected_ids=evidence_ids,
         segments=segments,
@@ -2941,11 +3397,10 @@ def literal_evidence_contextual_description(
     evidence_ids = tuple(
         dict.fromkeys(SEMANTIC_EVIDENCE_ID_RE.findall(fields["EVIDENCE"].upper()))
     )
-    minimum_evidence = minimum_context_evidence_count(len(segments))
-    if len(evidence_ids) < minimum_evidence:
-        raise ValueError("insufficient transcript evidence for literal rescue")
     if any(evidence_id not in segments for evidence_id in evidence_ids):
         raise ValueError("literal rescue references absent transcript evidence")
+    if not sufficient_context_evidence(evidence_ids, segments):
+        raise ValueError("insufficient transcript evidence for literal rescue")
 
     claim_keys = {
         key
@@ -3121,9 +3576,6 @@ def parse_contextual_description(
     evidence_ids = SEMANTIC_EVIDENCE_ID_RE.findall(fields["EVIDENCE"].upper())
     segments = contextual_evidence_segments(grounding_text)
     original_evidence_ids = tuple(dict.fromkeys(evidence_ids))
-    minimum_evidence = minimum_context_evidence_count(len(segments))
-    if len(original_evidence_ids) < minimum_evidence and not supplement_evidence:
-        raise ValueError("insufficient transcript evidence for the central idea")
     invalid_ids = [
         evidence_id
         for evidence_id in original_evidence_ids
@@ -3134,6 +3586,11 @@ def parse_contextual_description(
             "context evidence references absent transcript segments: "
             + ", ".join(invalid_ids)
         )
+    if (
+        not sufficient_context_evidence(original_evidence_ids, segments)
+        and not supplement_evidence
+    ):
+        raise ValueError("insufficient transcript evidence for the central idea")
     validate_explicit_contextual_purpose(
         fields["OUTCOME"],
         selected_ids=original_evidence_ids,
@@ -3145,7 +3602,7 @@ def parse_contextual_description(
         grounding_text=grounding_text,
         model_evidence_segment_ids=evidence_ids,
     )
-    if len(evidence_ids) < minimum_evidence:
+    if not sufficient_context_evidence(evidence_ids, segments):
         raise ValueError("insufficient transcript evidence for the central idea")
     result = validate_contextual_description(
         title=fields["DESCRIPTION"],
@@ -3880,13 +4337,14 @@ def validated_cached_filename_description(
         if not isinstance(context, dict):
             return None
         try:
-            grounding_text = semantic_transcript_excerpt(transcript)
             if (
                 transcript.get("filename_description_source")
                 == MANUAL_DESCRIPTION_SOURCE
                 and MANUAL_REVIEW_EVIDENCE_FIELD in transcript
             ):
                 grounding_text = validated_manual_review_grounding(transcript)
+            else:
+                grounding_text = semantic_transcript_excerpt(transcript)
             result = validate_contextual_description(
                 title=semantic,
                 central_idea=str(context.get("central_idea", "")),
@@ -3929,24 +4387,57 @@ def validated_manual_review_grounding(transcript: dict[str, Any]) -> str:
     """Validate time-bound MLX review evidence without replacing the raw transcript."""
 
     evidence = transcript.get(MANUAL_REVIEW_EVIDENCE_FIELD)
-    if not isinstance(evidence, dict) or evidence.get("schema_version") != 1:
-        raise ValueError("manual review evidence must use schema version 1")
+    if not isinstance(evidence, dict) or evidence.get("schema_version") not in {1, 2}:
+        raise ValueError("manual review evidence must use schema version 1 or 2")
     if evidence.get("method") != MANUAL_REVIEW_EVIDENCE_METHOD:
         raise ValueError("manual review evidence method is unsupported")
-    for field in ("model", "model_revision"):
-        value = evidence.get(field)
-        if not isinstance(value, str) or not value or value != transcript.get(field):
-            raise ValueError(
-                f"manual review evidence {field} does not match transcript"
-            )
+    evidence_model = evidence.get("model")
+    evidence_revision = evidence.get("model_revision")
+    if not isinstance(evidence_model, str) or not evidence_model:
+        raise ValueError("manual review evidence model is invalid")
+    if not isinstance(evidence_revision, str) or not evidence_revision:
+        raise ValueError("manual review evidence model_revision is invalid")
 
-    raw_segments = transcript.get("segments")
+    if evidence["schema_version"] == 1:
+        if (
+            evidence_model != transcript.get("model")
+            or evidence_revision != transcript.get("model_revision")
+        ):
+            raise ValueError("manual review evidence model does not match transcript")
+        raw_segments = transcript.get("segments")
+        duration = transcript.get("duration_seconds")
+        source_segments = {
+            index: segment
+            for index, segment in enumerate(raw_segments or [], start=1)
+            if isinstance(segment, dict)
+        }
+    else:
+        source_sha256 = validate_sha256(evidence.get("source_sha256"))
+        if source_sha256 != validate_sha256(transcript.get("sha256")):
+            raise ValueError("preserved manual review evidence SHA-256 does not match")
+        duration = evidence.get("source_duration_seconds")
+        raw_source_segments = evidence.get("source_segments")
+        if not isinstance(raw_source_segments, list):
+            raise ValueError("preserved manual review source segments are missing")
+        source_segments = {}
+        for source in raw_source_segments:
+            if not isinstance(source, dict):
+                raise ValueError("preserved manual review source segment is invalid")
+            source_id = source.get("source_segment_id")
+            if (
+                isinstance(source_id, bool)
+                or not isinstance(source_id, int)
+                or source_id < 1
+                or source_id in source_segments
+            ):
+                raise ValueError("preserved manual review source segment id is invalid")
+            source_segments[source_id] = source
+
     items = evidence.get("items")
-    if not isinstance(raw_segments, list) or not isinstance(items, list):
+    if not source_segments or not isinstance(items, list):
         raise ValueError("manual review evidence requires transcript-backed items")
     if not 2 <= len(items) <= 64:
         raise ValueError("manual review evidence must contain two to 64 items")
-    duration = transcript.get("duration_seconds")
     if (
         isinstance(duration, bool)
         or not isinstance(duration, (int, float))
@@ -3996,16 +4487,14 @@ def validated_manual_review_grounding(transcript: dict[str, Any]) -> str:
             or any(
                 isinstance(source_id, bool)
                 or not isinstance(source_id, int)
-                or not 1 <= source_id <= len(raw_segments)
+                or source_id not in source_segments
                 for source_id in source_ids
             )
         ):
             raise ValueError("manual review evidence source segment ids are invalid")
         source_ranges = []
         for source_id in dict.fromkeys(source_ids):
-            source = raw_segments[source_id - 1]
-            if not isinstance(source, dict):
-                raise ValueError("manual review evidence source segment is invalid")
+            source = source_segments[source_id]
             source_start = source.get("start")
             source_end = source.get("end")
             if (
@@ -4015,13 +4504,136 @@ def validated_manual_review_grounding(transcript: dict[str, Any]) -> str:
                 or not isinstance(source_end, (int, float))
             ):
                 raise ValueError("manual review evidence source timestamps are invalid")
-            source_ranges.append((float(source_start), float(source_end)))
+            source_start_value = float(source_start)
+            source_end_value = float(source_end)
+            if (
+                not math.isfinite(source_start_value)
+                or not math.isfinite(source_end_value)
+                or source_start_value < 0.0
+                or source_end_value <= source_start_value
+                or source_end_value > float(duration) + 0.01
+            ):
+                raise ValueError("manual review evidence source timestamps are invalid")
+            source_ranges.append((source_start_value, source_end_value))
         source_start = min(value[0] for value in source_ranges)
         source_end = max(value[1] for value in source_ranges)
         if start_value < source_start - 2.0 or end_value > source_end + 2.0:
             raise ValueError("manual review evidence is outside its source segments")
         lines.append(f"[S{index:03d}] {normalized_text}")
     return "\n".join(lines)
+
+
+def preserved_filename_description_fields(
+    cached_transcript: Any,
+    replacement_transcript: dict[str, Any],
+) -> dict[str, Any]:
+    """Carry a verified SHA-bound title across a model-only retranscription."""
+
+    if not isinstance(cached_transcript, dict):
+        return {}
+    upgraded_from_validation: str | None = None
+    try:
+        cached_title = validated_cached_filename_description(cached_transcript)
+    except (TypeError, ValueError):
+        cached_title = None
+    if (
+        cached_title is None
+        and cached_transcript.get("filename_description_source")
+        == MANUAL_DESCRIPTION_SOURCE
+    ):
+        try:
+            context = cached_transcript.get("filename_description_context")
+            if not isinstance(context, dict):
+                return {}
+            grounding = validated_manual_review_grounding(cached_transcript)
+            revalidated = validate_contextual_description(
+                title=str(cached_transcript.get("filename_description", "")),
+                central_idea=str(context.get("central_idea", "")),
+                outcome=str(context.get("outcome", "")),
+                evidence_segment_ids=context.get("evidence_segment_ids", ()),
+                confidence=str(context.get("confidence", "")),
+                grounding_text=grounding,
+            )
+            cached_title = validate_contextual_title_specificity(
+                revalidated.title, outcome=revalidated.outcome
+            )
+            if cached_title != cached_transcript.get("filename_description"):
+                return {}
+            previous_validation = cached_transcript.get(
+                "filename_description_validation"
+            )
+            if isinstance(previous_validation, str) and previous_validation:
+                upgraded_from_validation = previous_validation
+        except (TypeError, ValueError):
+            return {}
+    if cached_title is None:
+        return {}
+    preserved = {
+        key: value
+        for key, value in cached_transcript.items()
+        if key.startswith("filename_description")
+    }
+    if upgraded_from_validation is not None:
+        preserved["filename_description_validation"] = (
+            SEMANTIC_DESCRIPTION_VALIDATION
+        )
+        preserved["filename_description_migrated_from_validation"] = (
+            upgraded_from_validation
+        )
+    if cached_transcript.get("filename_description_source") == MANUAL_DESCRIPTION_SOURCE:
+        evidence = preserved.get(MANUAL_REVIEW_EVIDENCE_FIELD)
+        if not isinstance(evidence, dict):
+            return {}
+        evidence = dict(evidence)
+        if evidence.get("schema_version") == 1:
+            try:
+                source_ids = sorted(
+                    {
+                        source_id
+                        for item in evidence.get("items", [])
+                        if isinstance(item, dict)
+                        for source_id in item.get("source_segment_ids", [])
+                        if isinstance(source_id, int)
+                        and not isinstance(source_id, bool)
+                    }
+                )
+                raw_segments = cached_transcript.get("segments")
+                if not isinstance(raw_segments, list) or any(
+                    not 1 <= source_id <= len(raw_segments)
+                    for source_id in source_ids
+                ):
+                    return {}
+                evidence.update(
+                    {
+                        "schema_version": 2,
+                        "source_sha256": validate_sha256(
+                            cached_transcript.get("sha256")
+                        ),
+                        "source_duration_seconds": cached_transcript.get(
+                            "duration_seconds"
+                        ),
+                        "source_segments": [
+                            {
+                                "source_segment_id": source_id,
+                                "start": raw_segments[source_id - 1].get("start"),
+                                "end": raw_segments[source_id - 1].get("end"),
+                            }
+                            for source_id in source_ids
+                            if isinstance(raw_segments[source_id - 1], dict)
+                        ],
+                    }
+                )
+            except (AttributeError, TypeError, ValueError):
+                return {}
+        preserved[MANUAL_REVIEW_EVIDENCE_FIELD] = evidence
+    candidate = {**replacement_transcript, **preserved}
+    try:
+        valid_candidate = validated_cached_filename_description(candidate)
+    except (TypeError, ValueError):
+        return {}
+    if valid_candidate is None:
+        return {}
+    return preserved
 
 
 def transcript_description(transcript: dict[str, Any], *, limit: int = 48) -> str:
@@ -4976,7 +5588,7 @@ class AudioLibrary:
 
     def transcribe(
         self,
-        config: TranscriptionConfig = TranscriptionConfig(),
+        config: TranscriptionConfig = TranscriptionConfig(speaker_diarization=True),
         *,
         max_files: int | None = None,
         progress: Callable[[int, int, str, str], None] | None = None,
@@ -5009,6 +5621,12 @@ class AudioLibrary:
                     model_revision=vars(transcriber).get("model_revision"),
                     requested_language=config.language,
                     require_word_timestamps=config.word_timestamps,
+                    require_speaker_diarization=config.speaker_diarization,
+                    speaker_policy_version=(
+                        SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                        if config.speaker_diarization
+                        else None
+                    ),
                 ):
                     skipped += 1
                     status = "cached"
@@ -5056,8 +5674,13 @@ class AudioLibrary:
                             "tmk_markers_seconds": markers_seconds,
                         }
                     )
+                    result.update(
+                        preserved_filename_description_fields(
+                            cached_transcript, result
+                        )
+                    )
                     atomic_json_write(output, result)
-                    atomic_text_write(text_output, result["text"].strip() + "\n")
+                    atomic_text_write(text_output, speaker_transcript_text(result))
                     completed += 1
                     status = "completed"
             except Exception as exc:  # one corrupt recording must not discard the batch
@@ -5270,7 +5893,7 @@ class AudioLibrary:
 
     def stream_transcribe(
         self,
-        config: TranscriptionConfig = TranscriptionConfig(),
+        config: TranscriptionConfig = TranscriptionConfig(speaker_diarization=True),
         *,
         max_files: int | None = None,
         relative_paths: Iterable[str] | None = None,
@@ -5541,6 +6164,12 @@ class AudioLibrary:
                     model_revision=vars(transcriber).get("model_revision"),
                     requested_language=config.language,
                     require_word_timestamps=config.word_timestamps,
+                    require_speaker_diarization=config.speaker_diarization,
+                    speaker_policy_version=(
+                        SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                        if config.speaker_diarization
+                        else None
+                    ),
                 ):
                     cached += 1
                     status = "cached"
@@ -5577,6 +6206,12 @@ class AudioLibrary:
                             "model_revision": vars(transcriber).get("model_revision"),
                             "language": config.language,
                             "word_timestamps": config.word_timestamps,
+                            "speaker_diarization": config.speaker_diarization,
+                            "speaker_transcription_policy_version": (
+                                SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                                if config.speaker_diarization
+                                else None
+                            ),
                         }
                         if checkpoint_mode == "tmk_markers":
                             checkpoint_identity["tmk_markers_seconds"] = (
@@ -5686,8 +6321,13 @@ class AudioLibrary:
                             **tmk_chunk_hint,
                         }
                     )
+                    result.update(
+                        preserved_filename_description_fields(
+                            cached_transcript, result
+                        )
+                    )
                     atomic_json_write(transcript_path, result)
-                    atomic_text_write(text_path, result["text"].strip() + "\n")
+                    atomic_text_write(text_path, speaker_transcript_text(result))
                     if checkpoint_path is not None:
                         remove_private_regular_file(checkpoint_path)
                     completed += 1
@@ -7557,6 +8197,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         choices=[
             DEFAULT_MLX_MODEL,
+            DEFAULT_MLX_SPEAKER_MODEL,
             DEFAULT_CUDA_MODEL,
             DEFAULT_CUDA_MODEL_REPOSITORY,
         ],
@@ -7564,6 +8205,12 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument("--language", default="ko")
     transcribe_parser.add_argument("--max-files", type=int)
     transcribe_parser.add_argument("--word-timestamps", action="store_true")
+    transcribe_parser.add_argument(
+        "--speaker-diarization",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="write one transcript file with MOSS speaker-labelled turns",
+    )
     stream_parser = subparsers.add_parser("stream-transcribe")
     stream_parser.add_argument(
         "--accelerator", choices=["auto", "mlx", "cuda"], default="auto"
@@ -7572,6 +8219,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         choices=[
             DEFAULT_MLX_MODEL,
+            DEFAULT_MLX_SPEAKER_MODEL,
             DEFAULT_CUDA_MODEL,
             DEFAULT_CUDA_MODEL_REPOSITORY,
         ],
@@ -7592,6 +8240,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stream_parser.add_argument("--keep-local", action="store_true")
     stream_parser.add_argument("--word-timestamps", action="store_true")
+    stream_parser.add_argument(
+        "--speaker-diarization",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="write one transcript file with MOSS speaker-labelled turns",
+    )
     describe_parser = subparsers.add_parser("describe")
     describe_parser.add_argument(
         "--model",
@@ -7682,6 +8336,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 model=args.model,
                 language=args.language or None,
                 word_timestamps=args.word_timestamps,
+                speaker_diarization=args.speaker_diarization,
             ),
             max_files=args.max_files,
             progress=progress_line,
@@ -7693,6 +8348,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 model=args.model,
                 language=args.language or None,
                 word_timestamps=args.word_timestamps,
+                speaker_diarization=args.speaker_diarization,
             ),
             max_files=args.max_files,
             relative_paths=args.path,

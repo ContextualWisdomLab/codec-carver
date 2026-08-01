@@ -43,6 +43,7 @@ class MacosGpuBootstrapTests(unittest.TestCase):
         self.assertIn('[[ "$("$UNAME_BIN" -m)" == "arm64" ]]', script)
         self.assertIn('cd -- "$RUNTIME_DIR"', script)
         self.assertIn('--python "./bin/python"', script)
+        self.assertIn("venv . --allow-existing", script)
         self.assertIn('secure_directory_identity . "runtime directory"', script)
         self.assertIn('PATH="/usr/bin:/bin:/usr/sbin:/sbin"', script)
         self.assertIn('DIRNAME_BIN="/usr/bin/dirname"', script)
@@ -77,6 +78,7 @@ class MacosGpuBootstrapTests(unittest.TestCase):
 
         for requirement in (
             "huggingface-hub==1.23.0",
+            "mlx-audio==0.4.5",
             "mlx-vlm==0.6.4",
             "mlx-whisper==0.4.3",
         ):

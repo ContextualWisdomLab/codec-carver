@@ -83,11 +83,18 @@ def _cached_transcript(text: str, *, sha256: str | None = None) -> dict[str, obj
 
     transcript: dict[str, object] = {
         "text": text,
+        "segments": [{"text": text, "speaker_id": "S01"}],
         "accelerator": "mlx",
         "model": "model",
         "model_revision": None,
         "requested_language": "ko",
         "word_timestamps": False,
+        "speaker_diarization": True,
+        "speaker_diarization_status": "completed",
+        "speaker_transcription_policy_version": (
+            audio_library.SPEAKER_TRANSCRIPTION_POLICY_VERSION
+        ),
+        "speaker_count": 1,
     }
     if sha256 is not None:
         transcript["sha256"] = sha256
@@ -886,6 +893,49 @@ class NamingTests(unittest.TestCase):
                 **identity,
             )
         )
+        speaker_identity = {
+            "accelerator": "mlx",
+            "model": audio_library.DEFAULT_MLX_SPEAKER_MODEL,
+            "model_revision": audio_library.DEFAULT_MLX_SPEAKER_MODEL_REVISION,
+            "requested_language": "ko",
+            "require_word_timestamps": False,
+            "require_speaker_diarization": True,
+            "speaker_policy_version": (
+                audio_library.SPEAKER_TRANSCRIPTION_POLICY_VERSION
+            ),
+        }
+        speaker_cached = {
+            **cached,
+            "model": audio_library.DEFAULT_MLX_SPEAKER_MODEL,
+            "model_revision": audio_library.DEFAULT_MLX_SPEAKER_MODEL_REVISION,
+            "word_timestamps": False,
+            "segments": [{"text": "화자 발화", "speaker_id": "S01"}],
+            "speaker_diarization": True,
+            "speaker_diarization_status": "completed",
+            "speaker_transcription_policy_version": (
+                audio_library.SPEAKER_TRANSCRIPTION_POLICY_VERSION
+            ),
+            "speaker_count": 1,
+        }
+        self.assertTrue(
+            audio_library.transcript_cache_matches_record(
+                record, speaker_cached, **speaker_identity
+            )
+        )
+        for invalid_speaker_cache in (
+            {**speaker_cached, "speaker_transcription_policy_version": 0},
+            {**speaker_cached, "speaker_count": 2},
+            {
+                **speaker_cached,
+                "segments": [{"text": "화자 누락"}],
+                "speaker_count": 0,
+            },
+        ):
+            self.assertFalse(
+                audio_library.transcript_cache_matches_record(
+                    record, invalid_speaker_cache, **speaker_identity
+                )
+            )
 
     def test_semantic_description_sampling_validation_and_mlx_generation(self) -> None:
         transcript = {
@@ -973,6 +1023,62 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(
             literal_conclusion.evidence_segment_ids,
             ("S001", "S002", "S003"),
+        )
+        directive_grounding = "\n".join(
+            [
+                (
+                    "[S001] 고객 여러분 전동열차 화재 긴급상황이 "
+                    "생겼을 때에는"
+                ),
+                (
+                    "[S002] 벽면에 설치된 비상통화 장치를 이용하여 "
+                    "승보원에게 신고해 주시기 바랍니다"
+                ),
+                "[S003] 이번에는 서정리역입니다",
+                "[S004] 내리실 분은 왼쪽입니다",
+                "[S005] The station is Sijangri",
+                "[S006] The station number is K160",
+                "[S007] The doors are on the left",
+                "[S008] 서정리역 1번 출구에 있습니다",
+            ]
+        )
+        directive_segments = audio_library.contextual_evidence_segments(
+            directive_grounding
+        )
+        self.assertTrue(
+            audio_library.sufficient_context_evidence(
+                ("S001", "S002"), directive_segments
+            )
+        )
+        directive_rescue = audio_library.literal_evidence_contextual_description(
+            "\n".join(
+                [
+                    (
+                        "CENTRAL_IDEA: 고객 여러분 전동열차 화재 긴급상황이 "
+                        "생겼을 때에는"
+                    ),
+                    (
+                        "OUTCOME: 비상통화 장치를 이용하여 승보원에게 "
+                        "신고해 주시기 바랍니다"
+                    ),
+                    "EVIDENCE: S001,S002",
+                    "CONFIDENCE: high",
+                    (
+                        "DESCRIPTION: 고객,여러분,전동열차,화재,긴급상황,"
+                        "비상통화,장치,승보원,신고해,바랍니다"
+                    ),
+                ]
+            ),
+            grounding_text=directive_grounding,
+        )
+        self.assertEqual(
+            directive_rescue.title,
+            "긴급상황-비상통화장치-신고해",
+        )
+        self.assertFalse(
+            audio_library.sufficient_context_evidence(
+                ("S003", "S004"), directive_segments
+            )
         )
         with self.assertRaisesRegex(ValueError, "no explicit conclusion"):
             audio_library.literal_conclusion_contextual_description(
@@ -1659,6 +1765,7 @@ class NamingTests(unittest.TestCase):
         )
         manual_reviewed_title = "버스도착부터-차량승차-안방불켜줘부터-꺼줘까지"
         manually_reviewed_transcript = {
+            "sha256": HASH_A,
             "model": "mlx-community/whisper-large-v3-turbo-q4",
             "model_revision": "reviewed-revision",
             "duration_seconds": 12_173.23,
@@ -1717,6 +1824,46 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(
             transcript_description(manually_reviewed_transcript),
             manual_reviewed_title,
+        )
+        replacement_transcript = {
+            "sha256": HASH_A,
+            "model": audio_library.DEFAULT_MLX_SPEAKER_MODEL,
+            "model_revision": audio_library.DEFAULT_MLX_SPEAKER_MODEL_REVISION,
+            "duration_seconds": 12_173.23,
+            "segments": [
+                {"start": 0.0, "end": 12_173.23, "text": "새 화자 전사"}
+            ],
+        }
+        stale_reviewed_transcript = json.loads(
+            json.dumps(manually_reviewed_transcript)
+        )
+        stale_reviewed_transcript["filename_description_validation"] = (
+            "context_evidence_title_v7"
+        )
+        preserved = audio_library.preserved_filename_description_fields(
+            stale_reviewed_transcript, replacement_transcript
+        )
+        migrated_transcript = {**replacement_transcript, **preserved}
+        self.assertEqual(
+            audio_library.validated_cached_filename_description(migrated_transcript),
+            manual_reviewed_title,
+        )
+        migrated_evidence = migrated_transcript[
+            "filename_description_reviewed_evidence"
+        ]
+        self.assertEqual(migrated_evidence["schema_version"], 2)
+        self.assertEqual(migrated_evidence["source_sha256"], HASH_A)
+        self.assertEqual(
+            migrated_transcript["filename_description_migrated_from_validation"],
+            "context_evidence_title_v7",
+        )
+        self.assertEqual(
+            [item["source_segment_id"] for item in migrated_evidence["source_segments"]],
+            [1, 2, 3, 4],
+        )
+        migrated_evidence["source_sha256"] = HASH_B
+        self.assertIsNone(
+            audio_library.validated_cached_filename_description(migrated_transcript)
         )
         tampered_review = json.loads(json.dumps(manually_reviewed_transcript))
         tampered_review["filename_description_reviewed_evidence"]["model_revision"] = (
@@ -3290,6 +3437,113 @@ class GpuTranscriberTests(unittest.TestCase):
             str(Path("/models") / audio_library.DEFAULT_MLX_MODEL_REVISION),
         )
 
+    def test_mlx_joint_model_transcribes_and_labels_speakers_in_one_pass(self) -> None:
+        package, core, _ = self._mlx_modules()
+        joint_model = Mock()
+        joint_model.generate.return_value = types.SimpleNamespace(
+            text="[0.0][S01]안녕하세요[1.0] [1.0][S02]반갑습니다[2.0]",
+            segments=[
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "[S01] 안녕하세요",
+                    "speaker_id": "S01",
+                },
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "[S02] 반갑습니다",
+                    "speaker_id": "S02",
+                },
+                {
+                    "start": 2.0,
+                    "end": 99.0,
+                    "text": "[S03] 범위를 벗어난 출력",
+                    "speaker_id": "S03",
+                },
+            ],
+        )
+        mlx_audio = types.ModuleType("mlx_audio")
+        mlx_audio_stt = types.ModuleType("mlx_audio.stt")
+        mlx_audio_utils = types.ModuleType("mlx_audio.stt.utils")
+        mlx_audio_utils.load_model = Mock(return_value=joint_model)
+        mlx_audio.stt = mlx_audio_stt
+        mlx_audio_stt.utils = mlx_audio_utils
+        pinned = (
+            audio_library.DEFAULT_MLX_SPEAKER_MODEL,
+            audio_library.DEFAULT_MLX_SPEAKER_MODEL_REVISION,
+            Path("/models") / audio_library.DEFAULT_MLX_SPEAKER_MODEL_REVISION,
+        )
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "mlx": package,
+                    "mlx.core": core,
+                    "mlx_audio": mlx_audio,
+                    "mlx_audio.stt": mlx_audio_stt,
+                    "mlx_audio.stt.utils": mlx_audio_utils,
+                },
+            ),
+            patch(
+                "audio_library.resolve_pinned_mlx_speaker_model", return_value=pinned
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=2.0),
+            patch("audio_library.decode_audio_for_mlx", return_value=object()),
+        ):
+            transcriber = GpuTranscriber(
+                TranscriptionConfig(accelerator="mlx", speaker_diarization=True)
+            )
+            result = transcriber.transcribe(Path("meeting.wav"))
+            joint_model.generate.return_value = types.SimpleNamespace(
+                text="구조화되지 않은 발화", segments=[]
+            )
+            unresolved = transcriber.transcribe(Path("meeting.wav"))
+
+        self.assertEqual(result["text"], "안녕하세요 반갑습니다")
+        self.assertEqual(
+            [segment["speaker_id"] for segment in result["segments"]],
+            ["S01", "S02"],
+        )
+        self.assertEqual(result["speaker_count"], 2)
+        self.assertTrue(result["speaker_diarization"])
+        self.assertEqual(result["speaker_diarization_status"], "completed")
+        self.assertEqual(
+            result["speaker_transcription_policy_version"],
+            audio_library.SPEAKER_TRANSCRIPTION_POLICY_VERSION,
+        )
+        self.assertEqual(unresolved["speaker_diarization_status"], "unresolved")
+        self.assertEqual(unresolved["segments"][0]["speaker_id"], "S00")
+        self.assertEqual(
+            audio_library.speaker_transcript_text(unresolved),
+            "[S00] 구조화되지 않은 발화\n",
+        )
+        mlx_audio_utils.load_model.assert_called_once_with(pinned[2])
+        self.assertEqual(joint_model.generate.call_count, 2)
+
+    def test_joint_speaker_chunking_prefers_latest_tmk_boundary(self) -> None:
+        self.assertEqual(
+            audio_library.mlx_speaker_chunk_ranges(
+                [1800.0, 3600.0, 5300.0, 7200.0], 8000.0
+            ),
+            [(0.0, 5300.0), (5300.0, 8000.0)],
+        )
+        self.assertEqual(audio_library.mlx_speaker_chunk_ranges([300.0], 5400.0), [])
+
+    def test_speaker_transcript_groups_consecutive_turns_in_one_file(self) -> None:
+        self.assertEqual(
+            audio_library.speaker_transcript_text(
+                {
+                    "segments": [
+                        {"speaker_id": "S01", "text": "첫 문장"},
+                        {"speaker_id": "S01", "text": "둘째 문장"},
+                        {"speaker_id": "S02", "text": "답변"},
+                    ]
+                }
+            ),
+            "[S01] 첫 문장 둘째 문장\n[S02] 답변\n",
+        )
+
     def test_mlx_word_timestamps_keep_timestamp_token_decoding(self) -> None:
         package, _, whisper = self._mlx_modules()
         with (
@@ -3763,6 +4017,27 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertFalse(result["word_timestamps"])
         decode.assert_not_called()
         whisper.transcribe.assert_not_called()
+
+    def test_too_short_joint_audio_records_speaker_status_without_inference(
+        self,
+    ) -> None:
+        transcriber = object.__new__(GpuTranscriber)
+        transcriber.config = TranscriptionConfig(
+            accelerator="mlx", speaker_diarization=True
+        )
+        transcriber.accelerator = "mlx"
+        transcriber.model = audio_library.DEFAULT_MLX_SPEAKER_MODEL
+        transcriber.model_revision = audio_library.DEFAULT_MLX_SPEAKER_MODEL_REVISION
+        transcriber._mlx_speaker_model = Mock()
+        with patch("audio_library.audio_duration_seconds", return_value=0.75):
+            result = transcriber.transcribe(Path("short.wav"))
+        self.assertEqual(result["speaker_diarization_status"], "not_applicable")
+        self.assertEqual(result["speaker_count"], 0)
+        self.assertEqual(
+            result["speaker_transcription_policy_version"],
+            audio_library.SPEAKER_TRANSCRIPTION_POLICY_VERSION,
+        )
+        transcriber._mlx_speaker_model.generate.assert_not_called()
 
     def test_mlx_marks_an_empty_inference_as_explained_no_speech(self) -> None:
         package, _, whisper = self._mlx_modules()
@@ -5267,7 +5542,14 @@ class AudioLibraryTests(unittest.TestCase):
             fake.accelerator = "mlx"
             fake.model = "model"
             fake.transcribe.side_effect = [
-                {"text": "성공", "segments": [], "language": "ko"},
+                {
+                    "text": "성공 응답",
+                    "segments": [
+                        {"start": 0.0, "end": 0.5, "text": "성공", "speaker_id": "S01"},
+                        {"start": 0.5, "end": 1.0, "text": "응답", "speaker_id": "S02"},
+                    ],
+                    "language": "ko",
+                },
                 RuntimeError("corrupt"),
             ]
             backend = Mock()
@@ -5287,6 +5569,10 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(
                 (state / "transcripts" / f"{HASH_A}.txt").stat().st_mode & 0o777,
                 0o600,
+            )
+            self.assertEqual(
+                (state / "transcripts" / f"{HASH_A}.txt").read_text(encoding="utf-8"),
+                "[S01] 성공\n[S02] 응답\n",
             )
             self.assertEqual((state / "transcripts").stat().st_mode & 0o777, 0o700)
             self.assertEqual(progress.call_count, 2)
@@ -5340,8 +5626,16 @@ class AudioLibraryTests(unittest.TestCase):
             )
             fake.transcribe.return_value = {
                 "text": "verified replacement",
-                "segments": [],
+                "segments": [
+                    {"text": "verified replacement", "speaker_id": "S01"}
+                ],
                 "language": "ko",
+                "speaker_diarization": True,
+                "speaker_diarization_status": "completed",
+                "speaker_transcription_policy_version": (
+                    audio_library.SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                ),
+                "speaker_count": 1,
             }
             with patch("audio_library.GpuTranscriber", return_value=fake):
                 summary = library.transcribe(max_files=1)
@@ -5832,8 +6126,16 @@ class AudioLibraryTests(unittest.TestCase):
             fake = Mock(accelerator="mlx", model="model")
             fake.transcribe.return_value = {
                 "text": "직렬 폴백 회복",
-                "segments": [],
+                "segments": [
+                    {"text": "직렬 폴백 회복", "speaker_id": "S01"}
+                ],
                 "language": "ko",
+                "speaker_diarization": True,
+                "speaker_diarization_status": "completed",
+                "speaker_transcription_policy_version": (
+                    audio_library.SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                ),
+                "speaker_count": 1,
             }
             with (
                 patch("audio_library.GpuTranscriber", return_value=fake),

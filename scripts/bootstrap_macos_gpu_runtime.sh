@@ -202,7 +202,7 @@ done
     [[ "$(sha256_file "$UV_SNAPSHOT")" == "$UV_SHA256" ]] || \
         fail "uv executable does not match the reviewed SHA-256"
     if [[ ! -x "./bin/python" ]]; then
-        "$UV_SNAPSHOT" venv . --python "$PYTHON_VERSION"
+        "$UV_SNAPSHOT" venv . --allow-existing --python "$PYTHON_VERSION"
     fi
     [[ "$(secure_directory_identity . "runtime directory")" == "$RUNTIME_ID" ]] || \
         fail "runtime directory identity changed during environment creation"

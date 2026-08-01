@@ -122,8 +122,10 @@ Choose a model with `--transcribe-model` (default `base`).
 The audio-library workflow standardizes recording names from recording time,
 known location, transcript content, and SHA-256; parses Sony `.tmk` markers; and
 quarantines exact duplicates. Byte-heavy scanning and mutations run in Rust,
-while Python keeps one GPU Whisper model loaded for the batch. Ollama is never
-used and GPU mode does not fall back to CPU.
+while Python keeps one GPU transcription model loaded for the batch. The
+default MLX path jointly transcribes and separates anonymous speakers with
+MOSS; legacy Whisper remains available explicitly. Ollama is never used and GPU
+mode does not fall back to CPU.
 
 The editable install below is for local checkout development only. The hardened
 persistent macOS GPU bootstrap installs hash-locked dependencies and runs the
@@ -155,11 +157,18 @@ codec-carver-library /path/to/recordings hydrate-tmk --workers 4
 codec-carver-library /path/to/recordings hydrate-tmk \
   --workers 1 --path 'FOLDER01/231101_0917.tmk'
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
+# Speaker-aware MLX transcription is the default. Each SHA-keyed .txt contains
+# one dialogue file with consecutive turns rendered as `[S01] ...`, `[S02] ...`.
+# The pinned 0.9B MOSS model transcribes Korean and assigns timestamps and
+# anonymous speakers in one Metal pass; Ollama and CPU transcription are unused.
 # For a deliberately bounded small batch, pipeline iCloud reads in Rust with
 # ordered, single-model GPU transcription.
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
   --prefetch-workers 4 --prefetch-max-bytes 536870912
-# Add --word-timestamps only when word-level audit evidence is required.
+# Use legacy Whisper explicitly when word-level audit evidence is required.
+codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx \
+  --no-speaker-diarization --model mlx-community/whisper-large-v3-turbo-q4 \
+  --word-timestamps
 # Summarize verified transcripts into filename topics with pinned Gemma 4 on
 # Metal. This calls MLX-VLM directly; no Ollama server or transcript upload is
 # involved. Repeat --path to keep the description batch bounded.
@@ -203,24 +212,26 @@ execution inode, seals its directory, and forces every Rust command to that
 SHA-256-pinned snapshot. Replacing the configured source path after validation
 therefore cannot change the bytes that execute. Duration probing uses only the
 approved fixed system `ffprobe` locations; ambient environment variables cannot
-change the selected executable. MLX audio is
-decoded first by an equivalently approved absolute `ffmpeg` and passed to
-Whisper as an in-memory waveform, so `mlx-whisper` never resolves a bare
-`ffmpeg` from caller-controlled `PATH`. Rust, ffprobe, and ffmpeg children all
+change the selected executable. Rust, ffprobe, and ffmpeg children all
 receive a minimal allowlisted environment that excludes `LD_*` and `DYLD_*`
 loader injection controls. MLX-VLM preflight additionally uses Python isolated
 mode, a trusted runtime working directory, and verifies the package origin is
 beneath that interpreter's prefix before importing native model code.
-Whisper repositories are also immutable inputs: MLX accepts only
+The approved absolute `ffmpeg` decodes MLX audio before it is passed to MOSS or
+Whisper as an in-memory waveform, so the model libraries never resolve a bare
+`ffmpeg` from caller-controlled `PATH`. Transcription repositories are also
+immutable inputs: MLX Whisper accepts only
 `mlx-community/whisper-large-v3-turbo-q4` at revision
 `660c343bbf4e52ac257f0b7d952e5388e6f93bef`, while CUDA resolves
 `dropbox-dash/faster-whisper-large-v3-turbo` at revision
 `0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf`. Mutable model names or arbitrary
-Hub repositories are rejected before inference.
+Hub repositories are rejected before inference. Speaker-aware MLX accepts only
+`OpenMOSS-Team/MOSS-Transcribe-Diarize` at revision
+`e8681d68e7042738ffca8ac8212bc8fcb1131ab8`.
 
 `describe` loads the pinned 4-bit
 `mlx-community/gemma-4-e2b-it-4bit` revision once per batch, samples up to 48
-Whisper segments across the full recording, and first extracts one central idea,
+GPU transcript segments across the full recording, and first extracts one central idea,
 outcome, confidence level, and cited segment IDs. A separate title pass must
 express that context instead of listing frequent keywords; low-confidence or
 generic-only titles are deferred. The final title and its audit context are
@@ -241,8 +252,10 @@ phrases such as `결론`, `종합하면`, or `하고 싶은 말`, at least one s
 must support the analysis. The same conclusion IDs and their neighboring
 context survive every repair prompt; if the small model still fails, a literal
 fallback may compose a title only from those exact conclusion clauses and then
-run the full grounding checks again. Old keyword-only caches are not silently
-upgraded. Planning consumes this
+run the full grounding checks again. A dense explicit directive may use two
+directly related evidence segments without padding a long recording with an
+unrelated third segment; it still runs the same literal grounding checks. Old
+keyword-only caches are not silently upgraded. Planning consumes this
 evidence-backed description when present and retains the deterministic extractor
 as a no-model failure-safe.
 `review-description` provides the corresponding bounded correction path for a
