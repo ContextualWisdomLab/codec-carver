@@ -1,3 +1,7 @@
+## 2024-08-01 - Add Client-Side Total File Size Validation for Batch Uploads
+**Learning:** For batch file upload forms, client-side validation must check the total combined size against backend limits (e.g., MAX_UPLOAD_BYTES) in addition to max file counts, and format the limit constant dynamically. Otherwise, users experience a poor UX by waiting for large uploads only to face server-side rejections.
+**Action:** Always enforce and dynamically format client-side maximum total size validation for multiple file uploads, providing immediate inline feedback with setCustomValidity and aria-invalid.
+
 ## 2024-07-12 - Intercepting batch form submissions for testing visual loading states
 **Learning:** Extending the learning from 2024-06-13, intercepting form submissions using `e.preventDefault()` via `page.evaluate()` is essential for capturing screenshot and video evidence of loading states (e.g., button disabling, spinner appearing) on forms like batch upload where the submission would normally reload the page or download an archive.
 **Action:** When testing visual loading states with Playwright, always inject an event listener using `page.evaluate()` to call `e.preventDefault()` on the form's `submit` event to freeze the UI in its loading state for verification.

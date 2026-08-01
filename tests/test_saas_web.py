@@ -594,6 +594,8 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertIn('onchange="updateBatchFilePreview(this)"', html)
         self.assertIn('id="batch_files_preview"', html)
         self.assertIn('function updateBatchFilePreview(input)', html)
+        self.assertIn('if (totalSize > MAX_UPLOAD_BYTES) {', html)
+        self.assertIn("input.setCustomValidity('Total size exceeds ' + limitText + ' limit.');", html)
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
