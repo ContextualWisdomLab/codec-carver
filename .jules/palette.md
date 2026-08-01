@@ -1,3 +1,7 @@
+## 2026-08-01 - [Strix CI Fix]
+**Learning:** CI failing with exit code 127 because STRIX_EXECUTABLE_PATH must not be group/world writable. It is an infrastructure issue.
+**Action:** Non-security personas (like Palette) must not attempt to fix it or modify the CI workflow, and should proceed to complete their task.
+
 ## 2024-08-01 - Add Client-Side Total File Size Validation for Batch Uploads
 **Learning:** For batch file upload forms, client-side validation must check the total combined size against backend limits (e.g., MAX_UPLOAD_BYTES) in addition to max file counts, and format the limit constant dynamically. Otherwise, users experience a poor UX by waiting for large uploads only to face server-side rejections.
 **Action:** Always enforce and dynamically format client-side maximum total size validation for multiple file uploads, providing immediate inline feedback with setCustomValidity and aria-invalid.
