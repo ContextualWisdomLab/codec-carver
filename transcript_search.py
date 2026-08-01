@@ -67,7 +67,13 @@ def tokenize(text: str) -> list[str]:
     Returns:
         List of lowercase tokens (possibly empty).
     """
-    return _WORD_RE.findall(text.lower())
+    lowered = text.lower()
+    # Fast path optimization: if the string consists entirely of alphanumeric
+    # characters, it represents a single valid token. Bypassing the regex
+    # engine here significantly reduces overhead during inverted index creation.
+    if lowered.isalnum():
+        return [lowered]
+    return _WORD_RE.findall(lowered)
 
 
 @dataclass(frozen=True)
