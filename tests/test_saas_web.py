@@ -52,7 +52,9 @@ class TestSaasWeb(unittest.TestCase):
 
         self.assertIn("const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;", html)
         self.assertIn("['B', 'KiB', 'MiB', 'GiB']", html)
-        self.assertIn("File exceeds 5 GiB limit.", html)
+        self.assertIn("const limitStr = formatBinaryBytes(MAX_UPLOAD_BYTES);", html)
+        self.assertIn("File exceeds ' + limitStr + ' limit.", html)
+        self.assertIn("Total size exceeds ' + limitStr + ' limit.", html)
         self.assertIn("preview.style.color = '#0f6674';", html)
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
 
