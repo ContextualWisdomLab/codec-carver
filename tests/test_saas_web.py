@@ -1121,6 +1121,24 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
+    def test_api_key_handles_non_ascii_gracefully(self):
+        from starlette.requests import Request
+        import asyncio
+        async def mock_call_next(request: Request):
+            from starlette.responses import PlainTextResponse
+            return PlainTextResponse("OK")
+
+        with patch("saas_web.get_configured_api_keys", return_value=["secret1"]):
+            scope = {
+                "type": "http",
+                "method": "GET",
+                "path": "/jobs/123",
+                "headers": [(b"x-api-key", "malicious\xff".encode("latin-1"))],
+            }
+            request = Request(scope)
+            response = asyncio.run(saas_web.require_api_key(request, mock_call_next))
+            self.assertEqual(response.status_code, 401)
+
 
 if __name__ == '__main__':
     unittest.main()
