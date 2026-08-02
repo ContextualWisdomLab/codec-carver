@@ -1,3 +1,6 @@
+## 2026-08-02 - Optimize SQLite WAL initialization
+**Learning:** SQLite's PRAGMA journal_mode=WAL is persistent per database file. In applications with many short-lived connections, executing it once during initialization rather than on every connection reduces overhead.
+**Action:** Execute WAL initialization via conn.executescript() once during schema creation.
 ## 2024-05-28 - Avoid O(N^2) Path.resolve() in Batch Processing
 **Learning:** Python's `pathlib.Path.resolve()` is relatively slow because it touches the filesystem to follow symlinks and resolve relative paths. When dealing with a batch operation (e.g., scanning large directories of media files), calculating protected files via `any(target == src.resolve() for src in sources)` on every check leads to massive O(N^2) CPU overhead.
 **Action:** Pre-resolve the entire list of candidate paths once into a `frozenset` at the beginning of the batch process. Pass this resolved set down the call stack so that collision/protection checks become O(1) hash map lookups instead of triggering millions of unnecessary disk access operations.
