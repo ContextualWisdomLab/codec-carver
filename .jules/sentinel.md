@@ -60,3 +60,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2025-02-12 - `hmac.compare_digest`의 non-ASCII 문자 처리 취약점 수정
+**취약점:** `hmac.compare_digest`에 non-ASCII 문자가 포함된 문자열을 전달할 경우 `TypeError`가 발생하여 500 서버 에러(DoS)를 유발할 수 있습니다.
+**학습:** API 키와 같이 사용자 입력에서 비롯된 헤더 값은 악의적으로 non-ASCII 문자를 포함할 수 있으므로, 바이트로 인코딩한 후 안전하게 비교해야 합니다.
+**예방:** `hmac.compare_digest`를 사용할 때는 항상 비교할 두 문자열을 `.encode('utf-8')`을 통해 바이트로 명시적으로 인코딩하여 예외 발생을 방지해야 합니다.
