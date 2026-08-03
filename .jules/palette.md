@@ -1,3 +1,7 @@
+## 2024-07-14 - Dynamic limits in inline client-side form validation
+**Learning:** Hardcoding limit sizes (like "5 GiB") in client-side error and preview messages creates a maintenance risk when underlying constants (`MAX_UPLOAD_BYTES`) change. It also breaks a11y feedback if the text fails to accurately reflect the true limit.
+**Action:** Always format backend-enforced size constants (e.g., `formatBinaryBytes(MAX_UPLOAD_BYTES)`) dynamically within client-side validation logic instead of hardcoding human-readable values.
+
 ## 2024-07-12 - Intercepting batch form submissions for testing visual loading states
 **Learning:** Extending the learning from 2024-06-13, intercepting form submissions using `e.preventDefault()` via `page.evaluate()` is essential for capturing screenshot and video evidence of loading states (e.g., button disabling, spinner appearing) on forms like batch upload where the submission would normally reload the page or download an archive.
 **Action:** When testing visual loading states with Playwright, always inject an event listener using `page.evaluate()` to call `e.preventDefault()` on the form's `submit` event to freeze the UI in its loading state for verification.
