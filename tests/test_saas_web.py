@@ -25,11 +25,9 @@ from job_store import JobStore
 
 if _HAS_FASTAPI:
     client = TestClient(app)
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
 
-
-import asyncio
-from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class TestSaasWeb(unittest.TestCase):
