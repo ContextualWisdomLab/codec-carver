@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2024-05-28 - [정규식(Regex) 오버헤드를 우회하기 위한 isalnum() 빠른 경로(Fast Path) 추가]
+**학습:** 텍스트에서 단어 토큰을 추출할 때 문장 부호를 제거하기 위해 정규식을 사용하면 오버헤드가 큽니다. `str.isalnum()` (또는 `str.isalpha()`)를 먼저 체크하여 영숫자만 있는 경우 정규식을 통과하지 않게 하면 성능이 크게 향상됩니다.
+**실행:** 단어 정규화를 수행할 때 순수 영숫자 문자열에 대해서는 정규식을 건너뛰도록 `if raw.isalnum():` 조건을 추가하여 성능을 최적화합니다.
