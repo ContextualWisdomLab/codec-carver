@@ -27,8 +27,37 @@ if _HAS_FASTAPI:
     client = TestClient(app)
 
 
+import asyncio
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class TestSaasWeb(unittest.TestCase):
+
+    def test_require_api_key_non_ascii(self):
+        import os
+        from saas_web import require_api_key
+
+        # Test directly with mock Request
+        async def mock_receive():
+            return {"type": "http.request"}
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "url": "http://testserver/shrink",
+                "headers": [(b"x-api-key", "malicious-😊".encode("utf-8"))],
+            },
+            receive=mock_receive,
+        )
+
+        async def call_next(req):
+            return JSONResponse(status_code=200, content={"message": "ok"})
+
+        with unittest.mock.patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = asyncio.run(require_api_key(request, call_next))
+            self.assertEqual(response.status_code, 401)
 
     def test_get_ui(self):
         response = client.get("/")
