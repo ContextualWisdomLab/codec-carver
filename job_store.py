@@ -30,6 +30,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
+from datetime import timedelta
 
 #: Allowed job lifecycle states.
 VALID_STATUSES = frozenset({"queued", "processing", "done", "failed"})
@@ -269,3 +270,12 @@ class JobStore:
         """
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    def get_old_jobs(self, *, now: datetime, max_age: timedelta) -> list[dict]:
+        """Find jobs that were created before a certain time."""
+        cutoff = (now - max_age).isoformat()
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM jobs WHERE created_at < ?", (cutoff,)
+            ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
