@@ -60,3 +60,8 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+
+## 2026-08-04 - [Sentinel: Unhandled Exception DoS via Non-ASCII Headers in HMAC]
+**취약점:** `hmac.compare_digest`에 비-ASCII 문자가 포함된 문자열을 전달할 경우 발생하는 `TypeError` 예외 미처리로 인한 서비스 거부(DoS) 취약점 (CWE-400).
+**학습:** HTTP 클라이언트는 일반적으로 헤더에 비-ASCII 문자를 허용하지 않지만, 악의적인 요청이 직접 전송될 경우 `hmac.compare_digest`에서 500 서버 오류(내부 서버 오류)를 발생시킵니다. 파이썬의 `hmac.compare_digest`는 비-ASCII 문자열 비교를 네이티브로 지원하지 않아 `TypeError`를 던지게 되며, 이는 예외 처리가 되지 않을 경우 애플리케이션 충돌 또는 리소스 고갈로 이어질 수 있습니다.
+**예방:** `hmac.compare_digest()`에 인자를 전달하기 전에 반드시 두 인자 모두 바이트 형식(예: `.encode('utf-8')`)으로 명시적 인코딩을 수행하여 예외 발생을 방지하고 상시 안전한 비교를 보장해야 합니다.

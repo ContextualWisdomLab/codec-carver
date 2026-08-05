@@ -1,10 +1,6 @@
-**Severity**: High
-
-**Vulnerability**: Argument Injection via relative paths starting with a hyphen in command-line utilities.
-
-**Impact**: Command-line utilities (like `ffprobe` and `ffmpeg` filters) interpret user input (like a file path) starting with a hyphen (e.g., `-version.wav`) as options when passed as a relative path. This could lead to a command injection when parsing maliciously crafted filenames.
-Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
-
-**Fix**: The file paths passed to `subprocess.run` inside `media_shrinker.py` are resolved into absolute paths using `.resolve()`. However, to prevent Strix CI scanners from falsely reporting command injection on `subprocess.run`, `str()` path wrapping is being replaced with python's `f-string`. Replaced `str(path.resolve())` with `f"{path.resolve()}"`.
-
-**Verification**: Ran tests to ensure regressions weren't introduced by using python's `coverage`. 100% test coverage reported.
+🚨 **Severity:** CRITICAL
+💡 **Vulnerability:** 비-ASCII 문자가 포함된 헤더를 전송할 때 `hmac.compare_digest()`가 `TypeError`를 발생시키는 예외 처리 누락으로 인한 서비스 거부(DoS) 취약점.
+🎯 **Impact:** 악의적인 공격자가 조작된 헤더를 통해 서비스의 응답을 차단하거나 500 내부 서버 에러를 유발하여 애플리케이션의 가용성을 침해할 수 있습니다.
+🔧 **Fix:** `hmac.compare_digest()` 호출 전에 비교 대상 문자열들을 `.encode("utf-8")`을 사용하여 명시적으로 바이트 형식으로 변환함으로써 안전한 비교를 보장하도록 수정하였습니다.
+✅ **Verification:**
+비-ASCII 문자열(예: `ñ`)이 포함된 X-API-Key 헤더 요청에 대해 애플리케이션이 401 Unauthorized 상태 코드로 정상적으로 거부하는지를 검증하는 자동화된 유닛 테스트(`test_non_ascii_header_does_not_crash`)를 추가하여 확인하였습니다.

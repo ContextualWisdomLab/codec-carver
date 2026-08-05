@@ -707,6 +707,24 @@ class TestApiKeyAuth(unittest.TestCase):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
             self.assertEqual(saas_web.get_configured_api_keys(), [])
 
+    def test_non_ascii_header_does_not_crash(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            import asyncio
+            from fastapi import Request
+            from unittest.mock import AsyncMock
+
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": "/shrink",
+                "headers": [(b"x-api-key", "ñ".encode("utf-8"))]
+            }
+            request = Request(scope)
+            call_next = AsyncMock()
+            response = asyncio.run(saas_web.require_api_key(request, call_next))
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.body, b'{"error":"Invalid or missing API key"}')
+
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class MultiSegmentZipTests(unittest.TestCase):
