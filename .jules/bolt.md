@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2024-06-25 - [정규 표현식 실행 전 isalnum()을 이용한 빠른 경로 최적화]
+**학습:** 문자열에서 단어를 추출하거나 토큰화할 때 정규표현식을 사용하면 오버헤드가 발생합니다. 특히 대부분의 입력이 순수 영숫자(alphanumeric)일 때, 정규 표현식 실행 전 `str.isalnum()`을 사용한 빠른 경로(fast-path) 확인을 추가하면 큰 성능 향상을 얻을 수 있습니다.
+**실행:** 단일 단어 및 토큰 검사와 같은 문자열 처리 시, `str.isalnum()` 또는 `str.isalpha()`와 같은 파이썬의 빠른 내장 문자열 메서드를 우선적으로 확인하여 불필요한 정규 표현식 사용을 우회하도록 구현합니다.

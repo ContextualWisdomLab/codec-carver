@@ -67,7 +67,12 @@ def tokenize(text: str) -> list[str]:
     Returns:
         List of lowercase tokens (possibly empty).
     """
-    return _WORD_RE.findall(text.lower())
+    lower = text.lower()
+    # Fast path: skip the regex engine completely for purely alphanumeric words
+    # to significantly reduce CPU overhead during tokenization.
+    if lower and lower.isalnum():
+        return [lower]
+    return _WORD_RE.findall(lower)
 
 
 @dataclass(frozen=True)
