@@ -1,3 +1,8 @@
+## 2024-05-15 - Windows Backslash Path Traversal
+**Vulnerability:** Zip Slip / Path Traversal via backslash-separated paths from Windows clients.
+**Learning:** `Path(filename).name` on POSIX systems does not recognize `\` as a directory separator, allowing malicious paths to bypass validation.
+**Prevention:** Explicitly `replace("\\", "/")` on untrusted path strings before relying on `Path(...)` for sanitization.
+
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
 **Learning:** Python's `Path.with_name` plus a suffix string to make a temp file opens a race condition because it's predictable and the permissions default to system `umask` which might expose secret `0600` data. Additionally, interpolating variables directly into FFmpeg filtergraph strings allows arbitrary filter injection.

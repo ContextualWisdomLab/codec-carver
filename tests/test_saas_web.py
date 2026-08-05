@@ -899,6 +899,14 @@ class JobModelTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_persist_upload_strips_backslash_path_traversal(self):
+        file = SimpleNamespace(filename="evil\\..\\..\\etc\\passwd.wav", file=io.BytesIO(b"wav data"))
+        temp_dir, input_dir, output_dir, source_path = saas_web._persist_upload(file)
+        try:
+            self.assertEqual(source_path.name, "passwd.wav")
+        finally:
+            saas_web.cleanup_temp_dir(temp_dir)
+
     @patch("saas_web._persist_upload", side_effect=OSError("disk full"))
     def test_submit_handles_persist_failure(self, _mock_persist):
         response = saas_web.submit_job(
