@@ -60,3 +60,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2024-05-24 - hmac.compare_digest의 유니코드 예외 취약점 수정
+**취약점:** `saas_web.py`의 `require_api_key` 미들웨어에서 API 키를 검증할 때 사용하는 `hmac.compare_digest`가 non-ASCII 문자가 포함된 문자열을 비교할 때 `TypeError`를 발생시키는 취약점이 있었습니다. 이는 공격자가 악의적인 헤더를 전송하여 500 서버 에러(DoS)를 유발할 수 있습니다.
+**학습:** 파이썬의 `hmac.compare_digest()`는 non-ASCII 문자를 포함한 문자열 비교를 지원하지 않아 예외가 발생합니다. HTTP 헤더와 같이 사용자 입력을 직접 처리하는 미들웨어에서는 이러한 예외를 방지하기 위해 항상 문자열을 바이트로 변환한 후 비교해야 함을 배웠습니다.
+**예방:** `hmac.compare_digest()`에 전달되는 모든 문자열 인자는 비교 전에 명시적으로 바이트로 인코딩(`.encode("utf-8")`)하여 안전하게 처리해야 합니다.
