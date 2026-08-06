@@ -36,7 +36,7 @@ jobs:
       - name: Verify expected test-first parent
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "469adf98e78459d2feaa75575cfdbefc9af727cf"
+          test "$(git rev-parse HEAD^)" = "3b340c25f9bcc8d22bdb1abeaabcadf1a7190766"
 
       - name: Apply bounded production fix
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -109,7 +109,7 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           git rm .github/workflows/pr246-apply-review-fixes.yml
-          changed="$(git diff --name-only)"
+          changed="$(git diff --name-only HEAD)"
           expected="$(printf '%s\n%s\n' \
             '.github/workflows/pr246-apply-review-fixes.yml' \
             'saas_web.py')"
