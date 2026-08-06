@@ -6,9 +6,10 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -33,6 +34,12 @@ MAX_BATCH_FILES = 20
 # A shrink target larger than the biggest accepted upload is meaningless; cap it
 # to keep numeric input bounded.
 MAX_TARGET_BYTES = MAX_UPLOAD_BYTES
+# Completed async results are retired on subsequent job work even when a client
+# never downloads them.  This bounds attacker-driven accumulation without a
+# per-request background scheduler or a second persistence dependency.
+RESULT_RETENTION_SECONDS = 24 * 60 * 60
+_RESULTS_ROOT: Path | None = None
+_RESULTS_ROOT_LOCK = threading.Lock()
 # This service only processes audio/video. Uploaded files are never executed or
 # served as web content — they are handed to ffmpeg, which rejects non-media —
 # but validating the declared content type rejects obviously-wrong uploads early.
@@ -427,6 +434,69 @@ def cleanup_temp_dir(temp_dir_path: Path):
         shutil.rmtree(temp_dir_path, ignore_errors=True)
 
 
+def _get_results_root() -> Path:
+    """Return the process-owned unpredictable root used for persisted results.
+
+    ``tempfile.mkdtemp`` atomically creates the directory with an unpredictable
+    name and user-restricted permissions. The first successful call owns the
+    root for the life of this process; later calls reuse the exact same path so
+    batch persistence, async job lookup, retention, and cleanup share one trust
+    boundary.
+    """
+
+    global _RESULTS_ROOT
+    with _RESULTS_ROOT_LOCK:
+        if _RESULTS_ROOT is None:
+            _RESULTS_ROOT = Path(
+                tempfile.mkdtemp(prefix="codec_carver_results_")
+            ).resolve()
+        return _RESULTS_ROOT
+
+
+def _cleanup_expired_results(store: JobStore, *, now: datetime) -> int:
+    """Retire expired completed jobs and their owned result files.
+
+    Cleanup is opportunistic but download-independent: callers invoke it before
+    accepting new async work and after completing a job. Consequently repeated
+    submissions cannot accumulate completed results indefinitely merely by
+    avoiding the download endpoint. Files referenced outside the process-owned
+    result root are never unlinked even if durable metadata is compromised; the
+    expired metadata record is still retired.
+
+    Args:
+        store: Durable job store whose completed records are eligible.
+        now: Aware timestamp used to compute the deterministic retention cutoff.
+
+    Returns:
+        Number of expired job records removed.
+    """
+
+    cutoff = now - timedelta(seconds=RESULT_RETENTION_SECONDS)
+    results_root = _get_results_root()
+    removed = 0
+    for job in store.list_jobs(status="done"):
+        try:
+            updated_at = datetime.fromisoformat(job["updated_at"])
+        except (TypeError, ValueError):
+            logger.warning("Skipping malformed completed-job timestamp for %s", job["id"])
+            continue
+        try:
+            is_expired = updated_at <= cutoff
+        except TypeError:
+            logger.warning("Skipping timezone-incompatible completed-job timestamp for %s", job["id"])
+            continue
+        if not is_expired:
+            continue
+        output_path_text = job.get("output_path")
+        if output_path_text:
+            output_path = Path(output_path_text).resolve()
+            if output_path.is_relative_to(results_root):
+                output_path.unlink(missing_ok=True)
+        store.delete(job["id"])
+        removed += 1
+    return removed
+
+
 def _zip_outputs(outputs: list[Path], dest_dir: Path, archive_name: str) -> Path:
     """Bundle multiple generated outputs into a single (uncompressed) zip archive."""
     archive_path = dest_dir / archive_name
@@ -678,21 +748,20 @@ def shrink_media_batch(
                 "results.json",
                 json.dumps({"target_bytes": target_bytes, "results": manifest}, indent=2),
             )
+
+        results_root = _get_results_root()
+        persistent_path = results_root / f"batch_{uuid.uuid4().hex}.zip"
+        shutil.move(str(zip_path), str(persistent_path))
     except Exception:
         cleanup_temp_dir(temp_dir_path)
-        logger.exception("Failed to build batch archive")
+        logger.exception("Failed to build or persist batch archive")
         return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
 
-    import shutil
-    import uuid
-    import starlette.background
-    results_dir = Path(tempfile.gettempdir()) / "codec_carver_results"
-    results_dir.mkdir(parents=True, exist_ok=True)
-    persistent_path = results_dir / f"batch_{uuid.uuid4().hex}.zip"
-    shutil.move(str(zip_path), str(persistent_path))
     cleanup_temp_dir(temp_dir_path)
 
     def cleanup_batch_result():
+        """Delete the persisted batch archive after its response completes."""
+
         if persistent_path.exists():
             persistent_path.unlink(missing_ok=True)
 
@@ -700,7 +769,7 @@ def shrink_media_batch(
         path=persistent_path,
         filename="codec_carver_batch.zip",
         media_type="application/zip",
-        background=starlette.background.BackgroundTask(cleanup_batch_result)
+        background=__import__("starlette.background").background.BackgroundTask(cleanup_batch_result)
     )
 
 # --- Async job model --------------------------------------------------------
@@ -774,21 +843,32 @@ def _run_job(
             outputs, temp_dir_path, source_path.stem + "_shrunk.zip"
         )
         try:
-            import shutil
-            results_dir = Path(tempfile.gettempdir()) / "codec_carver_results"
-            results_dir.mkdir(parents=True, exist_ok=True)
-            persistent_path = results_dir / f"{job_id}_{output_path.name}"
+            results_root = _get_results_root()
+            persistent_path = results_root / f"{job_id}_{output_path.name}"
             shutil.move(str(output_path), str(persistent_path))
 
+            completed_at = _now()
             store.set_status(
                 job_id,
                 "done",
-                now=_now(),
+                now=completed_at,
                 output_path=str(persistent_path),
                 output_name=output_path.name,
             )
+            _cleanup_expired_results(store, now=completed_at)
         except KeyError:
             logger.error("Job %s disappeared while recording result", job_id)
+        except Exception:
+            logger.exception("Failed to persist or retain job result for %s", job_id)
+            try:
+                store.set_status(
+                    job_id,
+                    "failed",
+                    now=_now(),
+                    error="Result storage failed",
+                )
+            except KeyError:
+                logger.error("Job %s disappeared while recording result-storage failure", job_id)
         finally:
             cleanup_temp_dir(temp_dir_path)
     else:
@@ -816,6 +896,16 @@ def submit_job(
     if error is not None:
         return JSONResponse(status_code=400, content={"error": error})
 
+    store = _get_job_store()
+    try:
+        _cleanup_expired_results(store, now=_now())
+    except Exception:
+        logger.exception("Result retention cleanup failed before accepting new work")
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Result storage unavailable"},
+        )
+
     try:
         temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file)
     except Exception:
@@ -826,7 +916,7 @@ def submit_job(
 
     job_id = uuid.uuid4().hex
     try:
-        _get_job_store().create(job_id, temp_dir=str(temp_dir_path), now=_now())
+        store.create(job_id, temp_dir=str(temp_dir_path), now=_now())
     except ValueError:
         cleanup_temp_dir(temp_dir_path)
         logger.exception("Failed to create async job record")
@@ -850,7 +940,7 @@ def job_status(job_id: str):
 
 
 def _cleanup_job(job_id: str) -> None:
-    """Forget a job and remove its temporary workspace."""
+    """Forget a job and remove its temporary workspace and owned output."""
     store = _get_job_store()
     job = store.get(job_id)
     store.delete(job_id)
@@ -859,15 +949,23 @@ def _cleanup_job(job_id: str) -> None:
             cleanup_temp_dir(Path(job["temp_dir"]))
         output_path_text = job.get("output_path")
         if output_path_text:
-            output_path = Path(output_path_text)
-            if output_path.exists():
+            output_path = Path(output_path_text).resolve()
+            results_root = _get_results_root()
+            if output_path.is_relative_to(results_root):
                 output_path.unlink(missing_ok=True)
 
 
 @app.get("/jobs/{job_id}/result")
 def job_result(job_id: str, background_tasks: BackgroundTasks):
     """Download a finished job's output, then clean up its workspace."""
-    job = _get_job_store().get(job_id)
+    store = _get_job_store()
+    try:
+        _cleanup_expired_results(store, now=_now())
+    except Exception:
+        logger.exception("Result retention cleanup failed before result lookup")
+        return JSONResponse(status_code=503, content={"error": "Result storage unavailable"})
+
+    job = store.get(job_id)
     if job is None:
         return JSONResponse(status_code=404, content={"error": "Unknown job"})
     if job["status"] != "done":
@@ -875,7 +973,7 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
             status_code=409, content={"error": f"Job is {job['status']}"}
         )
     # Defense in depth: only ever serve a regular file that lives inside this
-    # job's own temp workspace. `job_id` is an opaque store key and is never
+    # process's owned result root. `job_id` is an opaque store key and is never
     # used to build a path, but confining the served path makes traversal
     # impossible even if the store were ever populated from untrusted data.
     output_path_text = job.get("output_path")
@@ -884,9 +982,9 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
             status_code=410, content={"error": "Result no longer available"}
         )
     output_path = Path(output_path_text).resolve()
-    results_dir = (Path(tempfile.gettempdir()) / "codec_carver_results").resolve()
+    results_root = _get_results_root()
 
-    if not output_path.is_relative_to(results_dir) or not output_path.is_file():
+    if not output_path.is_relative_to(results_root) or not output_path.is_file():
         return JSONResponse(
             status_code=410, content={"error": "Result no longer available"}
         )
