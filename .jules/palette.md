@@ -1,3 +1,7 @@
+## 2026-08-06 - Dynamic File Size Validation Messages
+**Learning:** Hardcoding human-readable file size limits (like '5 GiB') in client-side error messages can lead to confusing and misleading UI if the underlying backend limit constant changes.
+**Action:** Always format the limit dynamically (e.g., `formatBinaryBytes(MAX_UPLOAD_BYTES)`) within the validation logic so the error message perfectly matches the active constraint.
+
 ## 2024-07-12 - Intercepting batch form submissions for testing visual loading states
 **Learning:** Extending the learning from 2024-06-13, intercepting form submissions using `e.preventDefault()` via `page.evaluate()` is essential for capturing screenshot and video evidence of loading states (e.g., button disabling, spinner appearing) on forms like batch upload where the submission would normally reload the page or download an archive.
 **Action:** When testing visual loading states with Playwright, always inject an event listener using `page.evaluate()` to call `e.preventDefault()` on the form's `submit` event to freeze the UI in its loading state for verification.

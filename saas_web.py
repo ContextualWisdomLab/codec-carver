@@ -230,9 +230,10 @@ HTML_TEMPLATE = """
                 }
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
-                    input.setCustomValidity('File exceeds 5 GiB limit.');
+                    const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
+                    input.setCustomValidity('File exceeds ' + limitText + ' limit.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected file size: ' + text + ' (exceeds 5 GiB limit)';
+                    preview.innerText = 'Selected file size: ' + text + ' (exceeds ' + limitText + ' limit)';
                     preview.style.color = '#dc3545';
                     return;
                 }
