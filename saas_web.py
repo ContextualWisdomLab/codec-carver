@@ -114,7 +114,7 @@ async def require_api_key(request: Request, call_next):
     if configured_keys and not (request.method == "GET" and request.url.path == "/"):
         provided_key = request.headers.get("x-api-key", "")
         if not any(
-            hmac.compare_digest(provided_key, key) for key in configured_keys
+            hmac.compare_digest(provided_key.encode("utf-8"), key.encode("utf-8")) for key in configured_keys
         ):
             return JSONResponse(
                 status_code=401,
@@ -511,7 +511,6 @@ def shrink_media(
     """
 
     error = _validate_request(file, target_bytes)
-    background_tasks.add_task(_cleanup_old_jobs)
     if error is not None:
         return {"error": error}
 
@@ -774,28 +773,6 @@ def _run_job(
         cleanup_temp_dir(temp_dir_path)
 
 
-
-def _cleanup_old_jobs() -> None:
-    """Delete old jobs to prevent resource exhaustion."""
-    store = _get_job_store()
-    try:
-        from datetime import timedelta
-        # Cleanup jobs older than 24 hours
-        old_jobs = store.get_old_jobs(now=_now(), max_age=timedelta(hours=24))
-        for job in old_jobs:
-            job_id = job["id"]
-            store.delete(job_id)
-            if job.get("temp_dir"):
-                cleanup_temp_dir(Path(job["temp_dir"]))
-
-            if job.get("output_path"):
-                output_path = Path(job["output_path"])
-                if output_path.exists():
-                    output_path.unlink()
-    except Exception:
-        logger.exception("Failed to clean up old jobs")
-
-
 @app.post("/jobs")
 def submit_job(
     background_tasks: BackgroundTasks,
@@ -804,7 +781,6 @@ def submit_job(
 ):
     """Enqueue a shrink job and return its id for asynchronous status polling."""
     error = _validate_request(file, target_bytes)
-    background_tasks.add_task(_cleanup_old_jobs)
     if error is not None:
         return JSONResponse(status_code=400, content={"error": error})
 

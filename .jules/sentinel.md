@@ -61,7 +61,7 @@
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
 
-## 2026-08-05 - [Sentinel: FastAPI Uncontrolled Resource Consumption in Async Jobs]
-**취약점:** 비동기 작업 관리 API(`/jobs`)에서 리소스를 반환하지 않는 서비스 거부(DoS) 취약점 (CWE-400).
-**학습:** API 클라이언트가 작업을 등록만 하고 결과 조회를 수행하지 않으면 임시 파일과 데이터베이스 엔트리가 무기한 쌓여서 디스크 및 DB 리소스를 고갈시킵니다. 공격자는 대량의 소형 작업 등록만 반복하여 서버 스토리지 및 메모리를 마비시킬 수 있습니다.
-**예방:** 오래된 리소스를 회수하는 메커니즘을 주기적으로 실행하거나 백그라운드 태스크에 포함시켜, 결과 조회가 이루어지지 않은 상태로 방치된 리소스(임시 폴더, 출력 파일, DB 항목 등)를 자동 만료 및 정리하도록 해야 합니다.
+## 2026-08-04 - [Sentinel: Unhandled Exception DoS via Non-ASCII Headers in HMAC]
+**취약점:** `hmac.compare_digest`에 비-ASCII 문자가 포함된 문자열을 전달할 경우 발생하는 `TypeError` 예외 미처리로 인한 서비스 거부(DoS) 취약점 (CWE-400).
+**학습:** HTTP 클라이언트는 일반적으로 헤더에 비-ASCII 문자를 허용하지 않지만, 악의적인 요청이 직접 전송될 경우 `hmac.compare_digest`에서 500 서버 오류(내부 서버 오류)를 발생시킵니다. 파이썬의 `hmac.compare_digest`는 비-ASCII 문자열 비교를 네이티브로 지원하지 않아 `TypeError`를 던지게 되며, 이는 예외 처리가 되지 않을 경우 애플리케이션 충돌 또는 리소스 고갈로 이어질 수 있습니다.
+**예방:** `hmac.compare_digest()`에 인자를 전달하기 전에 반드시 두 인자 모두 바이트 형식(예: `.encode('utf-8')`)으로 명시적 인코딩을 수행하여 예외 발생을 방지하고 상시 안전한 비교를 보장해야 합니다.
