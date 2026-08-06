@@ -671,11 +671,24 @@ def shrink_media_batch(
         logger.exception("Failed to build batch archive")
         return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
 
-    background_tasks.add_task(cleanup_temp_dir, temp_dir_path)
+    import shutil
+    import uuid
+    import starlette.background
+    results_dir = Path(tempfile.gettempdir()) / "codec_carver_results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    persistent_path = results_dir / f"batch_{uuid.uuid4().hex}.zip"
+    shutil.move(str(zip_path), str(persistent_path))
+    cleanup_temp_dir(temp_dir_path)
+
+    def cleanup_batch_result():
+        if persistent_path.exists():
+            persistent_path.unlink(missing_ok=True)
+
     return FileResponse(
-        path=zip_path,
+        path=persistent_path,
         filename="codec_carver_batch.zip",
         media_type="application/zip",
+        background=starlette.background.BackgroundTask(cleanup_batch_result)
     )
 
 # --- Async job model --------------------------------------------------------
@@ -749,15 +762,22 @@ def _run_job(
             outputs, temp_dir_path, source_path.stem + "_shrunk.zip"
         )
         try:
+            import shutil
+            results_dir = Path(tempfile.gettempdir()) / "codec_carver_results"
+            results_dir.mkdir(parents=True, exist_ok=True)
+            persistent_path = results_dir / f"{job_id}_{output_path.name}"
+            shutil.move(str(output_path), str(persistent_path))
+
             store.set_status(
                 job_id,
                 "done",
                 now=_now(),
-                output_path=str(output_path),
+                output_path=str(persistent_path),
                 output_name=output_path.name,
             )
         except KeyError:
             logger.error("Job %s disappeared while recording result", job_id)
+        finally:
             cleanup_temp_dir(temp_dir_path)
     else:
         logger.error("Job produced no output: %r", results)
@@ -822,8 +842,14 @@ def _cleanup_job(job_id: str) -> None:
     store = _get_job_store()
     job = store.get(job_id)
     store.delete(job_id)
-    if job is not None and job.get("temp_dir"):
-        cleanup_temp_dir(Path(job["temp_dir"]))
+    if job is not None:
+        if job.get("temp_dir"):
+            cleanup_temp_dir(Path(job["temp_dir"]))
+        output_path_text = job.get("output_path")
+        if output_path_text:
+            output_path = Path(output_path_text)
+            if output_path.exists():
+                output_path.unlink(missing_ok=True)
 
 
 @app.get("/jobs/{job_id}/result")
@@ -841,25 +867,26 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
     # used to build a path, but confining the served path makes traversal
     # impossible even if the store were ever populated from untrusted data.
     output_path_text = job.get("output_path")
-    temp_dir_text = job.get("temp_dir")
-    if not output_path_text or not temp_dir_text:
+    if not output_path_text:
         return JSONResponse(
             status_code=410, content={"error": "Result no longer available"}
         )
     output_path = Path(output_path_text).resolve()
-    workspace = Path(temp_dir_text).resolve()
-    if not output_path.is_relative_to(workspace) or not output_path.is_file():
+    results_dir = (Path(tempfile.gettempdir()) / "codec_carver_results").resolve()
+
+    if not output_path.is_relative_to(results_dir) or not output_path.is_file():
         return JSONResponse(
             status_code=410, content={"error": "Result no longer available"}
         )
-    background_tasks.add_task(_cleanup_job, job_id)
     media_type = (
         "application/zip" if output_path.suffix == ".zip" else "application/octet-stream"
     )
+    import starlette.background
     return FileResponse(
         path=output_path,
         filename=job["output_name"],
         media_type=media_type,
+        background=starlette.background.BackgroundTask(_cleanup_job, job_id)
     )
 
 

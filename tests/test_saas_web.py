@@ -886,7 +886,7 @@ class JobModelTests(unittest.TestCase):
         # A "done" job whose output escaped its workspace must not be served.
         import tempfile
 
-        workspace = Path(tempfile.mkdtemp(prefix="codec_carver_"))
+        workspace = Path(tempfile.gettempdir()) / "codec_carver_results"
         outside_dir = Path(tempfile.mkdtemp())
         escaped = outside_dir / "escaped.flac"
         escaped.write_bytes(b"secret")
@@ -901,7 +901,6 @@ class JobModelTests(unittest.TestCase):
             response = client.get("/jobs/escape/result")
             self.assertEqual(response.status_code, 410)
         finally:
-            saas_web.cleanup_temp_dir(workspace)
             saas_web.cleanup_temp_dir(outside_dir)
 
     def test_submit_rejects_nonpositive_target(self):
