@@ -12,8 +12,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from credential_registry import (
+    CODEC_CARVER_API_KEYS_NAME,
+    CREDENTIAL_REGISTRY,
+    bootstrap_codec_carver_api_keys,
+)
 from job_store import JobStore
 import media_shrinker
+
+# Environment variables are a deployment/bootstrap transport only. Copy the API
+# key bundle once while the service module is initialized; request handlers read
+# the runtime credential registry and never consult the mutable process
+# environment for credential material.
+bootstrap_codec_carver_api_keys(os.environ)
 
 app = FastAPI(title="Codec Carver SaaS")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
@@ -83,18 +94,19 @@ async def limit_request_size(request: Request, call_next):
     except RequestTooLarge:
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
-def get_configured_api_keys():
-    """Return the API keys configured via the CODEC_CARVER_API_KEYS env var.
 
-    The variable holds a comma-separated list of keys. Whitespace around each
-    key is stripped and empty entries are ignored. Keys are read from the
-    environment at request time (not import time) so tests can patch the
-    environment easily and key rotation needs no server restart. Returns an
-    empty list when the variable is unset or contains no usable keys, which
-    leaves the service open (today's default behaviour).
+def get_configured_api_keys():
+    """Return API keys from the process runtime credential registry.
+
+    The registry stores one comma-separated key bundle under the stable
+    ``codec_carver_api_keys`` name. Whitespace around each key is stripped and
+    empty entries are ignored. Environment variables are consulted only by the
+    explicit service bootstrap, never by this request-path function. Returns an
+    empty list when no usable key is registered, preserving the service's
+    existing opt-in authentication behavior.
     """
 
-    raw = os.environ.get("CODEC_CARVER_API_KEYS", "")
+    raw = CREDENTIAL_REGISTRY.get_credential(CODEC_CARVER_API_KEYS_NAME) or ""
     return [key.strip() for key in raw.split(",") if key.strip()]
 
 
@@ -102,12 +114,12 @@ def get_configured_api_keys():
 async def require_api_key(request: Request, call_next):
     """Enforce opt-in API-key authentication on all endpoints except GET /.
 
-    When one or more keys are configured via CODEC_CARVER_API_KEYS, every
+    When one or more keys exist in the runtime credential registry, every
     request other than GET / (the upload UI page) must carry an X-API-Key
     header matching a configured key; comparison uses hmac.compare_digest to
     stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    without echoing any key material. When no keys are registered, all requests
+    pass through unchanged.
     """
 
     configured_keys = get_configured_api_keys()
