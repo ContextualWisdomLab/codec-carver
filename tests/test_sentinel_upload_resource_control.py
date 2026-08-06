@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
 import unittest
 import zipfile
 from pathlib import Path
@@ -91,6 +92,33 @@ class TestSentinelUploadResourceControl(unittest.TestCase):
             json.loads(response.body),
             {"error": "Upload processing failed"},
         )
+
+    def test_all_invalid_batch_cleans_workspace_after_manifest_write_failure(self) -> None:
+        """Delete the allocated batch workspace when manifest archive writing fails."""
+
+        with tempfile.TemporaryDirectory() as parent_directory:
+            workspace = Path(parent_directory) / "codec_carver_batch_failure"
+            workspace.mkdir()
+            with (
+                patch("saas_web.tempfile.mkdtemp", return_value=str(workspace)),
+                patch.object(
+                    zipfile.ZipFile,
+                    "writestr",
+                    side_effect=OSError("manifest write failed"),
+                ),
+            ):
+                response = saas_web.shrink_media_batch(
+                    BackgroundTasks(),
+                    files=[self._invalid_upload()],
+                    target_bytes=10_000,
+                )
+
+            self.assertEqual(response.status_code, 500)
+            self.assertEqual(
+                json.loads(response.body),
+                {"error": "Upload processing failed"},
+            )
+            self.assertFalse(workspace.exists())
 
     @patch("saas_web.uuid.uuid4")
     @patch("saas_web._get_job_store")
