@@ -1,9 +1,11 @@
 name: Apply PR 246 reviewed cleanup fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - sentinel-dos-fix-tempdir-3116578629236057975
+      - main
+    types:
+      - synchronize
     paths:
       - .github/workflows/pr246-apply-review-fixes.yml
 
@@ -18,21 +20,23 @@ jobs:
   apply:
     if: >-
       github.repository == 'ContextualWisdomLab/codec-carver' &&
-      github.ref == 'refs/heads/sentinel-dos-fix-tempdir-3116578629236057975'
+      github.event.pull_request.number == 246 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'sentinel-dos-fix-tempdir-3116578629236057975'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Checkout exact workflow commit without persisted credentials
+      - name: Checkout exact PR head without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 2
           persist-credentials: false
 
       - name: Verify expected test-first parent
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "b4da84a989203cd5d26430688c79765f697d728b"
+          test "$(git rev-parse HEAD^)" = "d1b95fd5a81e22a4274ee0e7fe6c8aa6252c9a69"
 
       - name: Apply bounded production fix
         shell: bash --noprofile --norc -e -o pipefail {0}
