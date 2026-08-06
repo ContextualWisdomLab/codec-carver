@@ -842,6 +842,8 @@ def _run_job(
         output_path = _download_path_for_outputs(
             outputs, temp_dir_path, source_path.stem + "_shrunk.zip"
         )
+        persistent_path: Path | None = None
+        completed_at = _now()
         try:
             results_root = _get_results_root()
             persistent_path = results_root / f"{job_id}_{output_path.name}"
@@ -855,11 +857,14 @@ def _run_job(
                 output_path=str(persistent_path),
                 output_name=output_path.name,
             )
-            _cleanup_expired_results(store, now=completed_at)
         except KeyError:
             logger.error("Job %s disappeared while recording result", job_id)
+            if persistent_path is not None:
+                persistent_path.unlink(missing_ok=True)
         except Exception:
-            logger.exception("Failed to persist or retain job result for %s", job_id)
+            logger.exception("Failed to persist job result for %s", job_id)
+            if persistent_path is not None:
+                persistent_path.unlink(missing_ok=True)
             try:
                 store.set_status(
                     job_id,
@@ -869,6 +874,14 @@ def _run_job(
                 )
             except KeyError:
                 logger.error("Job %s disappeared while recording result-storage failure", job_id)
+        else:
+            try:
+                _cleanup_expired_results(store, now=completed_at)
+            except Exception:
+                logger.exception(
+                    "Result retention cleanup failed after completing job %s",
+                    job_id,
+                )
         finally:
             cleanup_temp_dir(temp_dir_path)
     else:
