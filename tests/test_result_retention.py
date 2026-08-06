@@ -11,14 +11,13 @@ from unittest.mock import MagicMock, patch
 
 try:
     from fastapi.testclient import TestClient
-
+except ImportError:
+    _HAS_FASTAPI = False
+else:
+    _HAS_FASTAPI = True
     import saas_web
     from job_store import JobStore
     from media_shrinker import ConversionResult
-
-    _HAS_FASTAPI = True
-except ImportError:
-    _HAS_FASTAPI = False
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
@@ -26,7 +25,7 @@ class ResultRetentionTests(unittest.TestCase):
     """Pin owned-root creation and bounded retention for completed job outputs."""
 
     def setUp(self) -> None:
-        """Create isolated job metadata and result roots for every test."""
+        """Create isolated job metadata, credentials, and result roots for every test."""
 
         self._temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._temporary_directory.cleanup)
@@ -36,6 +35,23 @@ class ResultRetentionTests(unittest.TestCase):
         self.addCleanup(setattr, saas_web, "_RESULTS_ROOT", self.previous_results_root)
         saas_web._RESULTS_ROOT = self.test_root / "owned_results"
         saas_web._RESULTS_ROOT.mkdir()
+
+        credential_name = saas_web.CODEC_CARVER_API_KEYS_NAME
+        previous_credential = saas_web.CREDENTIAL_REGISTRY.get_credential(credential_name)
+        saas_web.CREDENTIAL_REGISTRY.delete_credential(credential_name)
+
+        def restore_credential() -> None:
+            """Restore deployment credential state after a retention test."""
+
+            if previous_credential is None:
+                saas_web.CREDENTIAL_REGISTRY.delete_credential(credential_name)
+            else:
+                saas_web.CREDENTIAL_REGISTRY.set_credential(
+                    credential_name,
+                    previous_credential,
+                )
+
+        self.addCleanup(restore_credential)
 
     def _create_done_job(
         self,
@@ -148,6 +164,19 @@ class ResultRetentionTests(unittest.TestCase):
         self.assertEqual(removed, 0)
         self.assertIsNotNone(self.store.get("malformed-job"))
 
+    def test_naive_timestamp_is_preserved_for_operator_diagnosis(self) -> None:
+        """Timezone-incompatible metadata is logged rather than guessed expired."""
+
+        now = datetime(2026, 8, 7, 0, 0, tzinfo=timezone.utc)
+        naive = datetime(2026, 8, 5, 0, 0)
+        self._create_done_job("naive-job", updated_at=naive, output_path=None)
+
+        with self.assertLogs("saas_web", level="WARNING"):
+            removed = saas_web._cleanup_expired_results(self.store, now=now)
+
+        self.assertEqual(removed, 0)
+        self.assertIsNotNone(self.store.get("naive-job"))
+
     @patch("saas_web.media_shrinker.convert_file")
     @patch("saas_web._get_results_root", side_effect=OSError("no safe result root"))
     def test_batch_result_persistence_failure_cleans_workspace(
@@ -161,11 +190,15 @@ class ResultRetentionTests(unittest.TestCase):
         real_mkdtemp = tempfile.mkdtemp
 
         def tracked_mkdtemp(*args, **kwargs):
+            """Create a test-owned workspace while recording its path for cleanup proof."""
+
             path = Path(real_mkdtemp(*args, dir=self.test_root, **kwargs))
             created_workspaces.append(path)
             return str(path)
 
         def fake_convert(*, source, root, output_dir, target_bytes):
+            """Write one valid conversion result into the request output directory."""
+
             output = Path(output_dir) / "out.flac"
             output.write_bytes(b"converted")
             result = MagicMock(spec=ConversionResult)
