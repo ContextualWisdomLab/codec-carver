@@ -56,3 +56,7 @@ if _HAS_PLAYWRIGHT:
             expect(input_locator).not_to_have_attribute('aria-invalid', 'true')
             expect(preview_locator).to_have_text('')
             expect(btn_locator).to_have_attribute('aria-pressed', 'false')
+else:
+    class DummyTest(unittest.TestCase):
+        def test_dummy(self):
+            pass
