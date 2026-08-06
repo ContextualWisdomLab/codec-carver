@@ -413,6 +413,54 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertNotIn("codec_carver_secret", archive.read("results.json").decode())
         self.assertEqual(manifest["results"][1]["status"], "ok")
 
+    @unittest.mock.patch("saas_web.tempfile.mkdtemp")
+    def test_all_invalid_batch_handles_manifest_workspace_failure(self, mock_mkdtemp):
+        from fastapi.testclient import TestClient
+        import saas_web
+        client = TestClient(saas_web.app)
+        mock_mkdtemp.side_effect = OSError("disk full")
+        batch_files = [
+            ("files", ("bad.txt", b"invalid", "text/plain")),
+        ]
+        response = client.post("/shrink-batch", data={"target_bytes": 100}, files=batch_files)
+        self.assertEqual(response.status_code, 500)
+
+    def test_all_invalid_batch_returns_manifest_without_conversion(self):
+        from fastapi.testclient import TestClient
+        import saas_web
+        client = TestClient(saas_web.app)
+        batch_files = [
+            ("files", ("bad.txt", b"invalid", "text/plain")),
+        ]
+        response = client.post("/shrink-batch", data={"target_bytes": 100}, files=batch_files)
+        self.assertEqual(response.status_code, 200)
+
+    @unittest.mock.patch("saas_web.zipfile.ZipFile")
+    def test_all_invalid_batch_cleans_workspace_after_manifest_write_failure(self, mock_zip):
+        mock_zip.side_effect = OSError("cannot write zip")
+        batch_files = [
+            ("files", ("bad.txt", b"invalid", "text/plain")),
+        ]
+
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        import saas_web
+        client = TestClient(saas_web.app)
+
+        with patch("saas_web.tempfile.mkdtemp") as mock_mkdtemp:
+            import tempfile
+            import shutil
+            workspace = Path(tempfile.mkdtemp())
+            mock_mkdtemp.return_value = str(workspace)
+
+            response = client.post("/shrink-batch", data={"target_bytes": 100}, files=batch_files)
+
+            self.assertEqual(response.status_code, 500)
+            self.assertFalse(workspace.exists())
+            if workspace.exists():
+                shutil.rmtree(workspace)
+
+
     def test_shrink_batch_rejects_zero_files(self):
         response = client.post("/shrink-batch", data={"target_bytes": 10000})
         self.assertEqual(response.status_code, 400)
@@ -898,6 +946,16 @@ class JobModelTests(unittest.TestCase):
             target_bytes=10000,
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_submit_uses_safe_fallback_filename(self):
+        from fastapi.testclient import TestClient
+        import saas_web
+        client = TestClient(saas_web.app)
+        from unittest.mock import patch
+        with patch("saas_web._persist_upload") as mock_persist:
+            mock_persist.side_effect = Exception("boom")
+            response = client.post("/jobs", data={"target_bytes": 100}, files={"file": ("..", b"data", "video/mp4")})
+            self.assertEqual(response.status_code, 500)
 
     @patch("saas_web._persist_upload", side_effect=OSError("disk full"))
     def test_submit_handles_persist_failure(self, _mock_persist):
