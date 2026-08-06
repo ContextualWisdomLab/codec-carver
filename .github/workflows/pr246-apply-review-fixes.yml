@@ -36,7 +36,7 @@ jobs:
       - name: Verify expected test-first parent
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "f7a27ed4cc0a906487a1c0a1af88b8635858a7f1"
+          test "$(git rev-parse HEAD^)" = "469adf98e78459d2feaa75575cfdbefc9af727cf"
 
       - name: Apply bounded production fix
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -97,7 +97,6 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python -m pip install --disable-pip-version-check --require-hashes -r requirements-lock.txt
-          python -m pip install --disable-pip-version-check --no-index --no-deps --no-build-isolation -e .
 
       - name: Verify focused regression
         shell: bash --noprofile --norc -e -o pipefail {0}
