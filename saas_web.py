@@ -318,19 +318,20 @@ HTML_TEMPLATE = """
                     totalSize += files[i].size;
                 }
 
+                const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
+
                 if (files.length > 20) {
                     input.setCustomValidity('Maximum is 20 files per batch.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected ' + files.length + ' files (' + formatBinaryBytes(totalSize) + ', exceeds 20 files limit)';
+                    preview.innerText = `Selected ${files.length} files (${formatBinaryBytes(totalSize)}, exceeds 20 files limit)`;
                     preview.style.color = '#dc3545';
                     return;
                 }
 
                 if (totalSize > MAX_UPLOAD_BYTES) {
-                    const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
-                    input.setCustomValidity('Total size exceeds ' + limitText + ' limit.');
+                    input.setCustomValidity(`Total size exceeds ${limitText} limit.`);
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ', exceeds ' + limitText + ' limit)';
+                    preview.innerText = `Selected ${files.length} file(s) (${formatBinaryBytes(totalSize)}, exceeds ${limitText} limit)`;
                     preview.style.color = '#dc3545';
                     return;
                 }
