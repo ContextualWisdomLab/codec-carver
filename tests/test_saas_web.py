@@ -200,6 +200,29 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response, {"error": "Upload processing failed"})
 
     @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_sanitizes_windows_paths(self, mock_convert_file):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "output.flac"
+            output.write_bytes(b"audio")
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = output
+            mock_convert_file.return_value = [mock_result]
+
+            response = saas_web.shrink_media(
+                BackgroundTasks(),
+                file=SimpleNamespace(
+                    filename="..\\..\\etc\\passwd", file=io.BytesIO(b"dummy wav data")
+                ),
+                target_bytes=10000,
+            )
+
+        self.assertEqual(Path(response.path), output)
+        self.assertEqual(
+            mock_convert_file.call_args.kwargs["source"].name, "passwd"
+        )
+
+    @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_uses_safe_fallback_filename(self, mock_convert_file):
         import tempfile
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -557,6 +580,28 @@ class TestShrinkBatch(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json(), {"error": "Upload processing failed"})
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_sanitizes_windows_paths(self, mock_convert_file):
+        def fake_convert(source, root, output_dir, target_bytes):
+            out = output_dir / "output.flac"
+            out.write_bytes(b"audio")
+            res = MagicMock(spec=ConversionResult)
+            res.output_path = out
+            return [res]
+
+        mock_convert_file.side_effect = fake_convert
+
+        response = client.post(
+            "/shrink-batch",
+            files=[("files", ("..\\..\\etc\\passwd", b"audio", "audio/wav"))],
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        manifest = json.loads(archive.read("results.json"))
+        self.assertEqual(manifest["results"][0]["filename"], "passwd")
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_batch_uses_safe_fallback_filename(self, mock_convert_file):
