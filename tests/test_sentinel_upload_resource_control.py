@@ -18,12 +18,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from fastapi import BackgroundTasks
-from fastapi.testclient import TestClient
+try:
+    from fastapi import BackgroundTasks
+    from fastapi.testclient import TestClient
 
-import saas_web
+    import saas_web
+
+    _HAS_FASTAPI = True
+except ImportError:
+    _HAS_FASTAPI = False
 
 
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class TestSentinelUploadResourceControl(unittest.TestCase):
     """Verify fail-fast validation and sanitized persistence at upload boundaries."""
 
@@ -64,7 +70,10 @@ class TestSentinelUploadResourceControl(unittest.TestCase):
             self.assertEqual(archive.namelist(), ["results.json"])
             manifest = json.loads(archive.read("results.json"))
 
-        self.assertEqual([entry["filename"] for entry in manifest], ["first.txt", "second.json"])
+        self.assertEqual(
+            [entry["filename"] for entry in manifest],
+            ["first.txt", "second.json"],
+        )
         self.assertTrue(all(entry["status"] == "error" for entry in manifest))
         self.assertTrue(
             all(
@@ -93,7 +102,9 @@ class TestSentinelUploadResourceControl(unittest.TestCase):
             {"error": "Upload processing failed"},
         )
 
-    def test_all_invalid_batch_cleans_workspace_after_manifest_write_failure(self) -> None:
+    def test_all_invalid_batch_cleans_workspace_after_manifest_write_failure(
+        self,
+    ) -> None:
         """Delete the allocated batch workspace when manifest archive writing fails."""
 
         with tempfile.TemporaryDirectory() as parent_directory:
