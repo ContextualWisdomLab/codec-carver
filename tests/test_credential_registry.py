@@ -39,6 +39,12 @@ class CredentialRegistryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.registry.delete_credential("\t")
 
+    def test_non_string_credential_value_is_rejected(self) -> None:
+        """Registry values must remain immutable strings suitable for secret transport."""
+
+        with self.assertRaises(TypeError):
+            self.registry.set_credential("service_api_key", object())  # type: ignore[arg-type]
+
     def test_bootstrap_copies_api_keys_without_following_environment_mutation(self) -> None:
         """Environment transport is copied once; later mutation cannot change runtime state."""
 
