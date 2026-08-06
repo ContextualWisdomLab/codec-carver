@@ -36,7 +36,7 @@ jobs:
       - name: Verify expected test-first parent
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "d1b95fd5a81e22a4274ee0e7fe6c8aa6252c9a69"
+          test "$(git rev-parse HEAD^)" = "f7a27ed4cc0a906487a1c0a1af88b8635858a7f1"
 
       - name: Apply bounded production fix
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -46,40 +46,46 @@ jobs:
 
           path = Path("saas_web.py")
           source = path.read_text(encoding="utf-8")
-          old = '''    if not preprocessed_files:
-              try:
-                  temp_dir_path = Path(tempfile.mkdtemp(prefix="codec_carver_batch_"))
-                  zip_path = temp_dir_path / "codec_carver_batch.zip"
-                  with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
-                      archive.writestr("results.json", json.dumps(manifest, indent=2))
-                  return FileResponse(
-                      path=zip_path,
-                      filename=zip_path.name,
-                      media_type="application/zip",
-                      background=BackgroundTask(cleanup_temp_dir, temp_dir_path)
-                  )
-              except Exception:
-                  return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
-          '''
-          new = '''    if not preprocessed_files:
-              temp_dir_path: Path | None = None
-              try:
-                  temp_dir_path = Path(tempfile.mkdtemp(prefix="codec_carver_batch_"))
-                  zip_path = temp_dir_path / "codec_carver_batch.zip"
-                  with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
-                      archive.writestr("results.json", json.dumps(manifest, indent=2))
-                  return FileResponse(
-                      path=zip_path,
-                      filename=zip_path.name,
-                      media_type="application/zip",
-                      background=BackgroundTask(cleanup_temp_dir, temp_dir_path),
-                  )
-              except Exception:
-                  if temp_dir_path is not None:
-                      cleanup_temp_dir(temp_dir_path)
-                  logger.exception("Failed to build all-invalid batch manifest")
-                  return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
-          '''
+          old = "\n".join(
+              [
+                  "    if not preprocessed_files:",
+                  "        try:",
+                  "            temp_dir_path = Path(tempfile.mkdtemp(prefix=\"codec_carver_batch_\"))",
+                  "            zip_path = temp_dir_path / \"codec_carver_batch.zip\"",
+                  "            with zipfile.ZipFile(zip_path, \"w\", compression=zipfile.ZIP_STORED) as archive:",
+                  "                archive.writestr(\"results.json\", json.dumps(manifest, indent=2))",
+                  "            return FileResponse(",
+                  "                path=zip_path,",
+                  "                filename=zip_path.name,",
+                  "                media_type=\"application/zip\",",
+                  "                background=BackgroundTask(cleanup_temp_dir, temp_dir_path)",
+                  "            )",
+                  "        except Exception:",
+                  "            return JSONResponse(status_code=500, content={\"error\": \"Upload processing failed\"})",
+              ]
+          ) + "\n"
+          new = "\n".join(
+              [
+                  "    if not preprocessed_files:",
+                  "        temp_dir_path: Path | None = None",
+                  "        try:",
+                  "            temp_dir_path = Path(tempfile.mkdtemp(prefix=\"codec_carver_batch_\"))",
+                  "            zip_path = temp_dir_path / \"codec_carver_batch.zip\"",
+                  "            with zipfile.ZipFile(zip_path, \"w\", compression=zipfile.ZIP_STORED) as archive:",
+                  "                archive.writestr(\"results.json\", json.dumps(manifest, indent=2))",
+                  "            return FileResponse(",
+                  "                path=zip_path,",
+                  "                filename=zip_path.name,",
+                  "                media_type=\"application/zip\",",
+                  "                background=BackgroundTask(cleanup_temp_dir, temp_dir_path),",
+                  "            )",
+                  "        except Exception:",
+                  "            if temp_dir_path is not None:",
+                  "                cleanup_temp_dir(temp_dir_path)",
+                  "            logger.exception(\"Failed to build all-invalid batch manifest\")",
+                  "            return JSONResponse(status_code=500, content={\"error\": \"Upload processing failed\"})",
+              ]
+          ) + "\n"
           if source.count(old) != 1:
               raise SystemExit("expected all-invalid batch block was not found exactly once")
           path.write_text(source.replace(old, new), encoding="utf-8")
