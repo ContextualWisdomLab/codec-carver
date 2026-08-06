@@ -610,6 +610,7 @@ def shrink_media_batch(
         preprocessed_files.append((index, upload, safe_filename, entry))
 
     if not preprocessed_files:
+        temp_dir_path: Path | None = None
         try:
             temp_dir_path = Path(tempfile.mkdtemp(prefix="codec_carver_batch_"))
             zip_path = temp_dir_path / "codec_carver_batch.zip"
@@ -619,9 +620,12 @@ def shrink_media_batch(
                 path=zip_path,
                 filename=zip_path.name,
                 media_type="application/zip",
-                background=BackgroundTask(cleanup_temp_dir, temp_dir_path)
+                background=BackgroundTask(cleanup_temp_dir, temp_dir_path),
             )
         except Exception:
+            if temp_dir_path is not None:
+                cleanup_temp_dir(temp_dir_path)
+            logger.exception("Failed to build all-invalid batch manifest")
             return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
 
     try:
