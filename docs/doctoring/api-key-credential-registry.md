@@ -53,12 +53,12 @@ exact-head CI/security checks plus repository-required independent approval.
 ## Standards and research basis
 
 NIST SP 800-57 Part 1 Revision 5 remains the current final NIST general
-key-management recommendation as of August 7, 2026. NIST has published Revision
-6 only as an Initial Public Draft; it adds an expanded discussion of keying
-material storage, but it is not substituted for the current final publication.
-The separation between bootstrap transport and runtime credential use follows
-the broader lifecycle principle that sensitive keying material requires
-explicit protection, use, replacement, and destruction boundaries.
+key-management recommendation. NIST has published Revision 6 only as an Initial
+Public Draft; it adds an expanded discussion of keying material storage, but it
+is not substituted for the current final publication. The separation between
+bootstrap transport and runtime credential use follows the broader lifecycle
+principle that sensitive keying material requires explicit protection, use,
+replacement, and destruction boundaries.
 
 OWASP ASVS 5.0 secret-management requirements call for a secrets-management
 solution to create, store, control access to, and destroy backend secrets. The
