@@ -2207,6 +2207,37 @@ class CliTests(unittest.TestCase):
                 {"streams": [{"codec_type": "video"}], "format": {}},
                 Path("silent.mp4"),
             )
+
+    def test_parse_probe_payload_breaks_early_when_both_audio_and_video_found(self) -> None:
+        probe = media_shrinker._parse_probe_payload(
+            {
+                "streams": [
+                    {"codec_type": "audio", "codec_name": "aac", "duration": "100.0"},
+                    {"codec_type": "video"},
+                    {"codec_type": "subtitle"},
+                ],
+                "format": {"duration": "100.0"},
+            },
+            Path("test.mp4"),
+            source_size=1000
+        )
+        self.assertTrue(probe.has_video)
+        self.assertEqual(probe.audio_codec, "aac")
+
+        probe_reverse = media_shrinker._parse_probe_payload(
+            {
+                "streams": [
+                    {"codec_type": "video"},
+                    {"codec_type": "audio", "codec_name": "aac", "duration": "100.0"},
+                    {"codec_type": "subtitle"},
+                ],
+                "format": {"duration": "100.0"},
+            },
+            Path("test.mp4"),
+            source_size=1000
+        )
+        self.assertTrue(probe_reverse.has_video)
+        self.assertEqual(probe_reverse.audio_codec, "aac")
         with self.assertRaisesRegex(MediaShrinkerError, "has no usable duration"):
             media_shrinker._parse_probe_payload(
                 {

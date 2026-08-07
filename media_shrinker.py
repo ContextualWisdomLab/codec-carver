@@ -2053,8 +2053,12 @@ def _parse_probe_payload(
         codec_type = stream.get("codec_type")
         if codec_type == "audio" and audio_stream is None:
             audio_stream = stream
+            if has_video:
+                break
         elif codec_type == "video":
             has_video = True
+            if audio_stream is not None:
+                break
 
     if audio_stream is None:
         raise MediaShrinkerError(f"{source_path} has no audio stream")
