@@ -11,3 +11,6 @@
 
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
+
+### Changed
+- ⚡ Bolt: SQLite 데이터베이스 초기화 시 `PRAGMA journal_mode=WAL`을 한 번만 실행하도록 수정하여 단기 커넥션에서의 성능을 최적화했습니다.
