@@ -54,7 +54,7 @@ class TestSaasWeb(unittest.TestCase):
             return JSONResponse(status_code=200, content={"message": "ok"})
 
         with unittest.mock.patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = asyncio.run(require_api_key(request, call_next))
+            response = __import__("asyncio").run(require_api_key(request, call_next))
             self.assertEqual(response.status_code, 401)
 
     def test_get_ui(self):

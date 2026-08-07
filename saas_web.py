@@ -5,6 +5,7 @@ import hmac
 import logging
 import os
 import shutil
+import sqlite3
 import tempfile
 import uuid
 import zipfile
@@ -795,7 +796,7 @@ def submit_job(
     job_id = uuid.uuid4().hex
     try:
         _get_job_store().create(job_id, temp_dir=str(temp_dir_path), now=_now())
-    except ValueError:
+    except (ValueError, sqlite3.IntegrityError):
         cleanup_temp_dir(temp_dir_path)
         logger.exception("Failed to create async job record")
         return JSONResponse(
