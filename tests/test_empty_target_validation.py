@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
-import saas_web
+
+SOURCE_TEXT = (Path(__file__).resolve().parents[1] / "saas_web.py").read_text(
+    encoding="utf-8"
+)
 
 
 class EmptyTargetValidationTests(unittest.TestCase):
@@ -12,12 +16,11 @@ class EmptyTargetValidationTests(unittest.TestCase):
 
     @staticmethod
     def _handler_between(start_marker: str, end_marker: str) -> str:
-        """Return one JavaScript handler body from the rendered HTML template."""
+        """Return one JavaScript handler body from the web source text."""
 
-        html = saas_web.HTML_TEMPLATE
-        start = html.index(start_marker)
-        end = html.index(end_marker, start)
-        return html[start:end]
+        start = SOURCE_TEXT.index(start_marker)
+        end = SOURCE_TEXT.index(end_marker, start)
+        return SOURCE_TEXT[start:end]
 
     def test_single_target_empty_branch_clears_stale_state(self) -> None:
         """The single-file target handler clears preview and accessibility state."""
@@ -40,7 +43,12 @@ class EmptyTargetValidationTests(unittest.TestCase):
     def test_exactly_two_empty_target_branches_exist(self) -> None:
         """No unrelated input handler inherits the target-size special case."""
 
-        self.assertEqual(saas_web.HTML_TEMPLATE.count("if (this.value === '') {"), 2)
+        self.assertEqual(SOURCE_TEXT.count("if (this.value === '') {"), 2)
+
+    def test_contract_does_not_require_optional_web_dependencies(self) -> None:
+        """The source contract stays runnable in the dependency-light fuzz lane."""
+
+        self.assertNotIn("import saas_web", Path(__file__).read_text(encoding="utf-8"))
 
     def _assert_empty_branch(self, handler: str) -> None:
         """Assert one handler clears stale state before numeric validation."""
@@ -51,7 +59,10 @@ class EmptyTargetValidationTests(unittest.TestCase):
         self.assertIn("preview.innerText = '';", handler)
         self.assertIn("this.setCustomValidity('');", handler)
         self.assertIn("this.removeAttribute('aria-invalid');", handler)
-        self.assertIn("return;", handler[handler.index(empty_marker):handler.index(invalid_marker)])
+        self.assertIn(
+            "return;",
+            handler[handler.index(empty_marker) : handler.index(invalid_marker)],
+        )
         self.assertLess(handler.index(empty_marker), handler.index(invalid_marker))
 
 
