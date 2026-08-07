@@ -60,3 +60,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2026-08-07 - [Sentinel: FastAPI hmac.compare_digest TypeError DoS Fix]
+**취약점:** `hmac.compare_digest`에 비-ASCII 문자열이 포함될 경우 `TypeError` 발생으로 인한 서버 에러(DoS) 유발 (CWE-754)
+**학습:** 파이썬의 `hmac.compare_digest()` 함수는 인자로 전달된 문자열에 비-ASCII(non-ASCII) 문자가 포함된 경우 `TypeError` 예외를 던집니다. 악의적인 사용자가 HTTP 헤더(예: `x-api-key`)에 한글 등 유니코드 문자를 전송하면 FastAPI 미들웨어에서 처리되지 않은 예외가 발생하여 애플리케이션 리소스 고갈이나 500 서버 에러(DoS)가 발생할 수 있습니다.
+**예방:** `hmac.compare_digest()`에 문자열을 비교할 때는 두 인자를 반드시 `.encode('utf-8')`을 사용하여 바이트 배열(bytes)로 변환한 후 비교해야 안전합니다. 또한 HTTPX나 TestClient는 비-ASCII 헤더를 거부하므로 미들웨어 로직 자체를 검증하려면 `starlette.requests.Request` 객체를 직접 모킹하여 테스트해야 합니다.

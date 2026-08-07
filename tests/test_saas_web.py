@@ -709,6 +709,23 @@ class TestApiKeyAuth(unittest.TestCase):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
             self.assertEqual(saas_web.get_configured_api_keys(), [])
 
+    @patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"})
+    def test_api_key_non_ascii_handled_safely(self):
+        import asyncio
+        from starlette.requests import Request
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/jobs/123",
+            "headers": [(b"x-api-key", "malicious_key_한글".encode("utf-8"))],
+        }
+        request = Request(scope)
+        async def call_next(req):
+            return "SUCCESS"
+        response = asyncio.run(saas_web.require_api_key(request, call_next))
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.body, b'{"error":"Invalid or missing API key"}')
+
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class MultiSegmentZipTests(unittest.TestCase):
