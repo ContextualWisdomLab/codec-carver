@@ -67,7 +67,10 @@ def tokenize(text: str) -> list[str]:
     Returns:
         List of lowercase tokens (possibly empty).
     """
-    return _WORD_RE.findall(text.lower())
+    lower = text.lower()
+    if lower.isalnum():
+        return [lower]
+    return _WORD_RE.findall(lower)
 
 
 @dataclass(frozen=True)
@@ -163,7 +166,6 @@ class TranscriptIndex:
 
     def __init__(self) -> None:
         """Create an empty index."""
-        # token -> set of entry positions in self._entries
         self._postings: dict[str, set[int]] = {}
         self._entries: list[_Entry] = []
 
@@ -228,8 +230,6 @@ class TranscriptIndex:
         if not terms:
             raise ValueError("query must contain at least one word")
 
-        # Intersect postings lists (AND semantics), rarest term first so
-        # the working set shrinks as fast as possible.
         unique_terms = sorted(
             set(terms), key=lambda t: len(self._postings.get(t, ()))
         )
