@@ -1,0 +1,192 @@
+name: Rebuild PR 345 from current main
+
+on:
+  push:
+    branches:
+      - sentinel/fix-zip-slip-14064353898408349512
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rebuild-pr-345-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact feature branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: sentinel/fix-zip-slip-14064353898408349512
+
+      - name: Rebuild a minimal branch from current main
+        env:
+          TARGET_BRANCH: sentinel/fix-zip-slip-14064353898408349512
+        run: |
+          set -euo pipefail
+          expected_head="$(git rev-parse HEAD)"
+          git fetch --no-tags origin main
+          git reset --hard origin/main
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          web_path = Path("saas_web.py")
+          web_text = web_path.read_text(encoding="utf-8")
+          anchor = "\ndef _persist_upload(file: UploadFile) -> tuple[Path, Path, Path, Path]:\n"
+          helper = '''
+def _safe_upload_filename(filename: object) -> str:
+    """Return a safe basename for POSIX- and Windows-style upload paths.
+
+    Browser multipart filenames are untrusted and can contain either slash
+    convention regardless of the server operating system. The returned value
+    is always a single basename and falls back to ``upload.tmp`` for missing,
+    empty, or dot-only names.
+    """
+
+    raw_name = filename if isinstance(filename, str) else ""
+    safe_filename = Path(raw_name.replace("\\\\", "/")).name
+    if not safe_filename or safe_filename in {".", ".."}:
+        return "upload.tmp"
+    return safe_filename
+
+
+'''
+          if web_text.count(anchor) != 1:
+              raise SystemExit("could not locate _persist_upload insertion point")
+          web_text = web_text.replace(anchor, "\n" + helper + anchor.lstrip("\n"), 1)
+
+          old_single = '        safe_filename = Path(file.filename).name\n        if not safe_filename or safe_filename in (".", ".."): \n            safe_filename = "upload.tmp"\n'
+          if old_single not in web_text:
+              old_single = '        safe_filename = Path(file.filename).name\n        if not safe_filename or safe_filename in (".", ".."):\n            safe_filename = "upload.tmp"\n'
+          if web_text.count(old_single) != 1:
+              raise SystemExit("could not locate single-upload filename sanitizer")
+          web_text = web_text.replace(
+              old_single,
+              '        safe_filename = _safe_upload_filename(getattr(file, "filename", None))\n',
+              1,
+          )
+
+          old_batch = '                safe_filename = Path(upload.filename or "").name\n                if not safe_filename or safe_filename in (".", ".."):\n                    safe_filename = "upload.tmp"\n'
+          if web_text.count(old_batch) != 1:
+              raise SystemExit("could not locate batch-upload filename sanitizer")
+          web_text = web_text.replace(
+              old_batch,
+              '                safe_filename = _safe_upload_filename(getattr(upload, "filename", None))\n',
+              1,
+          )
+          web_path.write_text(web_text, encoding="utf-8")
+
+          tests_path = Path("tests/test_saas_web.py")
+          tests_text = tests_path.read_text(encoding="utf-8")
+          import_anchor = "    _persist_upload,\n"
+          if import_anchor not in tests_text:
+              raise SystemExit("could not locate saas_web import list")
+          tests_text = tests_text.replace(
+              import_anchor,
+              "    _persist_upload,\n    _safe_upload_filename,\n",
+              1,
+          )
+          class_anchor = "\n\nclass TestSaasWeb(unittest.TestCase):\n"
+          direct_tests = '''
+
+class TestSafeUploadFilename(unittest.TestCase):
+    """Cross-platform multipart filename sanitization tests."""
+
+    def test_returns_one_basename_for_both_separator_conventions(self):
+        cases = {
+            "../../etc/passwd": "passwd",
+            "..\\\\..\\\\windows\\\\system32\\\\cmd.exe": "cmd.exe",
+            "folder\\\\nested/mixed.wav": "mixed.wav",
+            "recording.wav": "recording.wav",
+        }
+        for supplied, expected in cases.items():
+            with self.subTest(supplied=supplied):
+                self.assertEqual(_safe_upload_filename(supplied), expected)
+
+    def test_uses_safe_fallback_for_missing_or_dot_only_names(self):
+        for supplied in (None, 123, "", ".", "..", "folder/.."):
+            with self.subTest(supplied=supplied):
+                self.assertEqual(_safe_upload_filename(supplied), "upload.tmp")
+'''
+          if tests_text.count(class_anchor) != 1:
+              raise SystemExit("could not locate TestSaasWeb class")
+          tests_text = tests_text.replace(class_anchor, direct_tests + class_anchor, 1)
+
+          integration_anchor = '''    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_uses_safe_fallback_filename(self, mock_convert_file):
+'''
+          integration_test = '''    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_sanitizes_windows_path_traversal(self, mock_convert_file):
+        def fake_convert(source, root, output_dir, target_bytes):
+            output_path = Path(output_dir) / (Path(source).stem + ".flac")
+            output_path.write_bytes(b"shrunk")
+            result = MagicMock(spec=ConversionResult)
+            result.output_path = output_path
+            return [result]
+
+        mock_convert_file.side_effect = fake_convert
+        response = client.post(
+            "/shrink-batch",
+            files=[
+                ("files", ("..\\\\..\\\\windows\\\\system32\\\\cmd.exe", b"audio", "audio/wav")),
+            ],
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            self.assertEqual(archive.namelist(), ["01_cmd.flac"])
+
+'''
+          if tests_text.count(integration_anchor) != 1:
+              raise SystemExit("could not locate batch fallback test")
+          tests_text = tests_text.replace(
+              integration_anchor,
+              integration_test + integration_anchor,
+              1,
+          )
+          tests_path.write_text(tests_text, encoding="utf-8")
+
+          sentinel_path = Path(".jules/sentinel.md")
+          sentinel_text = sentinel_path.read_text(encoding="utf-8").rstrip()
+          entry = '''
+
+## 2026-08-07 - Cross-platform multipart filename containment
+**Vulnerability:** POSIX `Path.name` preserves backslashes, so a Windows-style traversal name could survive into a ZIP member name consumed on Windows.
+**Learning:** Multipart filenames are protocol input, not native local paths; normalize both slash conventions before selecting a basename.
+**Prevention:** Route every upload filename through one tested sanitizer and keep archive member names generated from sanitized basenames only.
+'''
+          if "## 2026-08-07 - Cross-platform multipart filename containment" not in sentinel_text:
+              sentinel_path.write_text(sentinel_text + entry, encoding="utf-8")
+
+          changelog_path = Path("CHANGELOG.md")
+          changelog_text = changelog_path.read_text(encoding="utf-8").rstrip()
+          bullet = "- Windows-style traversal separators in multipart filenames are removed before generated ZIP member names are created."
+          if bullet not in changelog_text:
+              changelog_path.write_text(changelog_text + "\n\n### Fixed\n" + bullet + "\n", encoding="utf-8")
+          PY
+
+          python3 -m py_compile saas_web.py tests/test_saas_web.py
+          git diff --check
+          python3 -m pip install --disable-pip-version-check --require-hashes -r requirements-lock.txt
+          python3 -m unittest tests.test_saas_web.TestSafeUploadFilename -v
+          python3 -m unittest tests.test_saas_web.TestSaasWeb.test_shrink_batch_sanitizes_windows_path_traversal -v
+          python3 -m unittest discover -s tests -v
+
+          git add .jules/sentinel.md CHANGELOG.md saas_web.py tests/test_saas_web.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(web): contain cross-platform upload filenames"
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${expected_head}" origin "HEAD:${TARGET_BRANCH}"
