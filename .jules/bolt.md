@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2025-02-28 - 정규 표현식 전 알파뉴메릭 패스트 패스(Fast-path) 도입을 통한 토큰화 성능 최적화
+**학습:** `re.sub` 또는 `re.findall` 등 정규 표현식을 호출하기 전에, `str.isalnum()`으로 문자열이 순수 알파뉴메릭(알파벳과 숫자만 포함)인지 확인하는 패스트 패스를 도입하면 상당한 성능 향상을 이끌어 낼 수 있습니다. 이 코드베이스처럼 텍스트를 처리하거나 토큰화하는 함수가 다량의 일반 단어(특수문자 없음)를 처리할 때 정규 표현식 엔진의 오버헤드를 줄일 수 있습니다.
+**실행:** 정규 표현식을 통해 알파벳이나 숫자가 아닌 문자를 제거하는 코드를 작성할 때, `isalnum()`(또는 `isalpha()`)을 사용해 미리 점검하여 조건이 충족될 경우 정규식을 건너뛰게 구현합니다.
