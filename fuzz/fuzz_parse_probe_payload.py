@@ -26,7 +26,10 @@ _SOURCE = Path("fuzz_probe_source.bin")
 # Values ffprobe realistically emits for numeric-ish fields.
 _SCALARS = (None, "N/A", "", "0", "1234.5", "-1", "1e9", "nan", "inf", 0, 1500, 3.14)
 _CODEC_TYPES = (None, "audio", "video", "subtitle", "data", "")
-_CODEC_NAMES = (None, "flac", "opus", "aac", "pcm_s16le", "mp3", "")
+# codec_name is usually a string, but a malicious/garbled payload can make it a
+# non-string JSON value; the parser must reject those, not leak them into
+# MediaProbe.audio_codec where _is_lossless_probe().lower() would crash.
+_CODEC_NAMES = (None, "flac", "opus", "aac", "pcm_s16le", "mp3", "", ["bad"], 7, {"x": 1})
 
 
 def _pick(fdp, options):
@@ -36,10 +39,18 @@ def _pick(fdp, options):
     return options[fdp.ConsumeIntInRange(0, len(options) - 1)]
 
 
-def _build_payload(fdp) -> dict:
-    """Assemble a JSON-shaped ffprobe payload from fuzzer-controlled bytes."""
+def _build_payload(fdp) -> object:
+    """Assemble a JSON-shaped ffprobe payload from fuzzer-controlled bytes.
+
+    Members are only *usually* objects: a stream entry, the ``streams`` value,
+    the ``format`` section, or the whole payload may each be a non-object scalar
+    so the parser's type guards are actually fuzzed rather than pre-shaped away.
+    """
     streams = []
     for _ in range(fdp.ConsumeIntInRange(0, 4)):
+        if fdp.ConsumeIntInRange(0, 4) == 0:
+            streams.append(_pick(fdp, _SCALARS))
+            continue
         streams.append(
             {
                 "codec_type": _pick(fdp, _CODEC_TYPES),
@@ -48,15 +59,18 @@ def _build_payload(fdp) -> dict:
                 "bit_rate": _pick(fdp, _SCALARS),
             }
         )
-    payload = {
-        "streams": streams,
-        "format": {
-            "duration": _pick(fdp, _SCALARS),
-            "size": _pick(fdp, _SCALARS),
-            "bit_rate": _pick(fdp, _SCALARS),
-            "format_name": _pick(fdp, (None, "wav", "mov,mp4,m4a", "flac", "")),
-        },
+    format_section = {
+        "duration": _pick(fdp, _SCALARS),
+        "size": _pick(fdp, _SCALARS),
+        "bit_rate": _pick(fdp, _SCALARS),
+        "format_name": _pick(fdp, (None, "wav", "mov,mp4,m4a", "flac", "")),
     }
+    payload = {
+        "streams": _pick(fdp, _SCALARS) if fdp.ConsumeIntInRange(0, 6) == 0 else streams,
+        "format": _pick(fdp, _SCALARS) if fdp.ConsumeIntInRange(0, 6) == 0 else format_section,
+    }
+    if fdp.ConsumeIntInRange(0, 8) == 0:
+        return _pick(fdp, _SCALARS)
     return payload
 
 
@@ -77,6 +91,7 @@ def check_invariants(payload: dict, source_size) -> None:
     assert probe.audio_bit_rate is None or isinstance(probe.audio_bit_rate, int)
     assert isinstance(probe.has_video, bool)
     assert isinstance(probe.format_name, str)
+    assert probe.audio_codec is None or isinstance(probe.audio_codec, str)
 
 
 def test_one_input(data: bytes) -> None:
