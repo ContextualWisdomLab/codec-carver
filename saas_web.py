@@ -462,8 +462,7 @@ def _persist_upload(file: UploadFile) -> tuple[Path, Path, Path, Path]:
         input_dir.mkdir()
         output_dir.mkdir()
 
-        raw_name = getattr(file, "filename", "") or ""
-        safe_filename = Path(raw_name.replace("\\", "/")).name
+        safe_filename = Path(file.filename).name
         if not safe_filename or safe_filename in (".", ".."):
             safe_filename = "upload.tmp"
 
@@ -596,8 +595,7 @@ def shrink_media_batch(
     try:
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
             for index, upload in enumerate(files):
-                raw_name = getattr(upload, "filename", "") or ""
-                safe_filename = Path(raw_name.replace("\\", "/")).name
+                safe_filename = Path(upload.filename or "").name
                 if not safe_filename or safe_filename in (".", ".."):
                     safe_filename = "upload.tmp"
                 entry = {

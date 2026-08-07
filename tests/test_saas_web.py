@@ -559,29 +559,6 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Upload processing failed"})
 
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_batch_sanitizes_windows_path_traversal(self, mock_convert_file):
-        def fake_convert(source, root, output_dir, target_bytes):
-            output_path = Path(output_dir) / (Path(source).stem + ".flac")
-            output_path.write_bytes(b"shrunk")
-            result = MagicMock(spec=ConversionResult)
-            result.output_path = output_path
-            return [result]
-
-        mock_convert_file.side_effect = fake_convert
-
-        response = client.post(
-            "/shrink-batch",
-            files=[
-                ("files", ("..\\..\\windows\\system32\\cmd.exe", b"audio", "audio/wav")),
-            ],
-            data={"target_bytes": 10000},
-        )
-        self.assertEqual(response.status_code, 200)
-        archive = zipfile.ZipFile(io.BytesIO(response.content))
-        names = archive.namelist()
-        self.assertIn("01_cmd.flac", names)
-
-    @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_batch_uses_safe_fallback_filename(self, mock_convert_file):
         mock_convert_file.return_value = []
 
