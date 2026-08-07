@@ -1,3 +1,7 @@
+## 2024-08-07 - File Upload Path Traversal via Windows Backslashes
+**Vulnerability:** Path traversal was possible because backslashes `\` in filenames from Windows clients were not sanitized before calling `Path(filename).name` on POSIX systems.
+**Learning:** Python`s `pathlib.Path` uses the underlying OS path semantics. On POSIX (e.g. Linux), `\` is treated as a regular character, not a directory separator.
+**Prevention:** Explicitly sanitize `\` by replacing it with `/` (e.g., `filename.replace("\\", "/")`) before parsing the filename with `Path` on backend servers handling uploads.
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
 **Learning:** Python's `Path.with_name` plus a suffix string to make a temp file opens a race condition because it's predictable and the permissions default to system `umask` which might expose secret `0600` data. Additionally, interpolating variables directly into FFmpeg filtergraph strings allows arbitrary filter injection.

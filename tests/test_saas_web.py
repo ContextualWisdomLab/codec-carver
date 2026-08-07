@@ -202,6 +202,31 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response, {"error": "Upload processing failed"})
 
     @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_sanitizes_backslash_paths(self, mock_convert_file):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "output.flac"
+            output.write_bytes(b"audio")
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = output
+            mock_convert_file.return_value = [mock_result]
+
+            dummy_input = Path(temp_dir) / "input.wav"
+            dummy_input.write_bytes(b"wav")
+
+            with open(dummy_input, "rb") as f:
+                response = client.post(
+                    "/shrink",
+                    files={"file": (r"..\..\test_evil.wav", f, "audio/wav")},
+                    data={"target_bytes": 10000}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            mock_convert_file.assert_called_once()
+            args, kwargs = mock_convert_file.call_args
+            self.assertEqual(kwargs["source"].name, "test_evil.wav")
+
+    @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_uses_safe_fallback_filename(self, mock_convert_file):
         import tempfile
         with tempfile.TemporaryDirectory() as temp_dir:
