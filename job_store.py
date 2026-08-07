@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     output_name TEXT,
     error       TEXT,
     temp_dir    TEXT
-)
+);
+CREATE INDEX IF NOT EXISTS idx_status_created_id ON jobs (status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_created_id ON jobs (created_at, id);
 """
 
 _COLUMNS = (

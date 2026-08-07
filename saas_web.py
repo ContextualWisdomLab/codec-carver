@@ -230,9 +230,10 @@ HTML_TEMPLATE = """
                 }
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
-                    input.setCustomValidity('File exceeds 5 GiB limit.');
+                    const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
+                    input.setCustomValidity('File exceeds ' + limitText + ' limit.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected file size: ' + text + ' (exceeds 5 GiB limit)';
+                    preview.innerText = 'Selected file size: ' + text + ' (exceeds ' + limitText + ' limit)';
                     preview.style.color = '#dc3545';
                     return;
                 }
@@ -322,6 +323,15 @@ HTML_TEMPLATE = """
                     input.setCustomValidity('Maximum is 20 files per batch.');
                     input.setAttribute('aria-invalid', 'true');
                     preview.innerText = 'Selected ' + files.length + ' files (' + formatBinaryBytes(totalSize) + ', exceeds 20 files limit)';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+
+                if (totalSize > MAX_UPLOAD_BYTES) {
+                    const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
+                    input.setCustomValidity('Total file size exceeds ' + limitText + ' limit.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ', exceeds ' + limitText + ' limit)';
                     preview.style.color = '#dc3545';
                     return;
                 }

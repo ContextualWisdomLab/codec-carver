@@ -1,6 +1,8 @@
-## 2024-08-04 - SQLite WAL Optimization
+## 2024-08-04 - SQLite WAL & Index Optimization
 **Learning:** SQLite's PRAGMA journal_mode=WAL is persistent per database file. To optimize performance in applications with many short-lived connections, execute it once during initialization (e.g., via conn.executescript() with the schema) rather than redundantly on every connection.
 **Action:** Move PRAGMA journal_mode=WAL to database initialization instead of _connect() for SQLite implementations.
+**Learning:** Missing composite indexes for frequently queried patterns (like `status` + `created_at` + `id` ordering) can lead to full table scans.
+**Action:** Add appropriate composite indexes explicitly covering the filtering and sorting columns for key lookup queries.
 
 ## 2024-05-28 - Avoid O(N^2) Path.resolve() in Batch Processing
 **Learning:** Python's `pathlib.Path.resolve()` is relatively slow because it touches the filesystem to follow symlinks and resolve relative paths. When dealing with a batch operation (e.g., scanning large directories of media files), calculating protected files via `any(target == src.resolve() for src in sources)` on every check leads to massive O(N^2) CPU overhead.
