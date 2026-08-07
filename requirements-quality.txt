@@ -1,0 +1,5 @@
+# Hash-pinned quality tooling used by CI and the hourly commercial-readiness gate.
+--only-binary :all:
+
+coverage==7.15.2 \
+    --hash=sha256:eb6bcae8d1a9d305351ecb108232441d11c5cfe9de840a04388ba5d2db8d735c

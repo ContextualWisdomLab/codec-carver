@@ -1,0 +1,69 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
+  "small_model": "nvidia-nim/meta/llama-3.3-70b-instruct",
+  "enabled_providers": ["nvidia-nim"],
+  "lsp": false,
+  "mcp": {},
+  "permission": {
+    "edit": "deny",
+    "bash": "deny",
+    "read": "allow",
+    "grep": "allow",
+    "glob": "allow",
+    "list": "allow",
+    "task": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "lsp": "deny",
+    "external_directory": "deny"
+  },
+  "agent": {
+    "commercial-auditor": {
+      "description": "Read-only buyer-visible gap auditor",
+      "mode": "primary",
+      "prompt": "{file:./commercial-auditor.md}",
+      "steps": 8,
+      "permission": {
+        "edit": "deny", "bash": "deny", "read": "allow",
+        "grep": "allow", "glob": "allow", "list": "allow",
+        "task": "deny", "webfetch": "deny", "websearch": "deny",
+        "lsp": "deny", "external_directory": "deny"
+      }
+    },
+    "commercial-builder": {
+      "description": "Bounded buyer-visible implementation agent",
+      "mode": "primary",
+      "prompt": "{file:./commercial-builder.md}",
+      "steps": 32,
+      "permission": {
+        "edit": "allow", "bash": "deny", "read": "allow",
+        "grep": "allow", "glob": "allow", "list": "allow",
+        "task": "deny", "webfetch": "deny", "websearch": "deny",
+        "lsp": "deny", "external_directory": "deny"
+      }
+    }
+  },
+  "provider": {
+    "nvidia-nim": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NVIDIA NIM",
+      "options": {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{env:NVIDIA_API_KEY}"
+      },
+      "models": {
+        "nvidia/llama-3.3-nemotron-super-49b-v1.5": {
+          "name": "NVIDIA Llama 3.3 Nemotron Super 49B v1.5",
+          "tool_call": true,
+          "limit": {"context": 131072, "output": 8192}
+        },
+        "meta/llama-3.3-70b-instruct": {
+          "name": "Meta Llama 3.3 70B Instruct",
+          "tool_call": true,
+          "limit": {"context": 131072, "output": 8192}
+        }
+      }
+    }
+  }
+}

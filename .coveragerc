@@ -1,4 +1,5 @@
 [run]
+branch = true
 source =
     chapters
     diarize
@@ -7,6 +8,14 @@ source =
     media_shrinker
     remote_input
     saas_web
+    speaker_timeline
+    speaker_timeline_artifacts
+    speaker_timeline_cli
+    speaker_timeline_identity
+    speaker_timeline_plan
+    speaker_timeline_reconcile
+    speaker_timeline_render
+    speaker_timeline_types
     subtitles
     summarize
     transcribe
