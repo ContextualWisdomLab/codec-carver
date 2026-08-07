@@ -11,3 +11,4 @@
 
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
+- ffmpeg·ffprobe의 비 UTF-8 메타데이터 출력을 공유 subprocess 경계에서 replacement decoding하여 유효한 미디어 처리가 `UnicodeDecodeError`로 중단되지 않도록 수정했습니다.
