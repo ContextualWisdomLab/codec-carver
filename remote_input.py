@@ -221,7 +221,9 @@ def _derive_filename(url: str) -> str:
     contains a path separator or NUL byte, or is unreasonably long.
     """
     path = urllib.parse.urlsplit(url).path
-    candidate = urllib.parse.unquote(path).rsplit("/", 1)[-1]
+    path = urllib.parse.unquote(path)
+    path = path.replace("\\", "/")
+    candidate = path.rsplit("/", 1)[-1]
     if (
         not candidate
         or candidate in {".", ".."}

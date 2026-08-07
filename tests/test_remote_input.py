@@ -376,6 +376,12 @@ class FilenameTests(unittest.TestCase):
             remote_input._derive_filename("https://h/a%2Fb%2Fc.mp4"), "c.mp4"
         )
 
+    def test_backslash_traversal_falls_back(self):
+        """Encoded backslashes decode and are normalized to prevent Windows traversal."""
+        self.assertEqual(
+            remote_input._derive_filename("https://h/..%5C..%5C..%5Cetc%5Cpasswd"), "passwd"
+        )
+
     def test_overlong_name_falls_back(self):
         """A 300-character basename falls back to download.bin."""
         self.assertEqual(

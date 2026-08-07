@@ -220,6 +220,27 @@ class TestSaasWeb(unittest.TestCase):
             mock_convert_file.call_args.kwargs["source"].name, "upload.tmp"
         )
 
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_normalizes_backslashes(self, mock_convert_file):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "output.flac"
+            output.write_bytes(b"audio")
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = output
+            mock_convert_file.return_value = [mock_result]
+
+            response = saas_web.shrink_media(
+                BackgroundTasks(),
+                file=SimpleNamespace(filename="..\\..\\..\\evil.bat", file=io.BytesIO(b"dummy wav data")),
+                target_bytes=10000,
+            )
+
+        self.assertEqual(Path(response.path), output)
+        self.assertEqual(
+            mock_convert_file.call_args.kwargs["source"].name, "evil.bat"
+        )
+
     def test_shrink_media_rejects_uploaded_body_over_limit(self):
         previous_limit = saas_web.MAX_UPLOAD_BYTES
         saas_web.MAX_UPLOAD_BYTES = 3
