@@ -44,6 +44,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('aria-describedby="file_help file_size_preview"', html)
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
+        self.assertIn("fileInput.click()", html)
 
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
@@ -596,6 +597,7 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertIn('onchange="updateBatchFilePreview(this)"', html)
         self.assertIn('id="batch_files_preview"', html)
         self.assertIn('function updateBatchFilePreview(input)', html)
+        self.assertIn("batchFileInput.click()", html)
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")

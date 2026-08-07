@@ -157,7 +157,7 @@ HTML_TEMPLATE = """
         .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
         @keyframes spinner-border { to { transform: rotate(360deg); } }
-        .box { transition: background-color 0.2s, border-color 0.2s; }
+        .box { transition: background-color 0.2s, border-color 0.2s; cursor: pointer; }
         .box.dragover { background-color: #f8f9fa; border-color: #0056b3; border-style: dashed; }
         .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
         .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
@@ -393,6 +393,10 @@ HTML_TEMPLATE = """
                 updateFileSizePreview(fileInput);
             }
         }, false);
+        dropZone.addEventListener('click', (e) => {
+            if (['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+            fileInput.click();
+        });
         if (batchDropZone) {
             batchDropZone.addEventListener('drop', (e) => {
                 let dt = e.dataTransfer;
@@ -402,6 +406,10 @@ HTML_TEMPLATE = """
                     updateBatchFilePreview(batchFileInput);
                 }
             }, false);
+            batchDropZone.addEventListener('click', (e) => {
+                if (['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+                batchFileInput.click();
+            });
         }
         </script>
     </div>
