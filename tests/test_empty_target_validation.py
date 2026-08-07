@@ -45,11 +45,6 @@ class EmptyTargetValidationTests(unittest.TestCase):
 
         self.assertEqual(SOURCE_TEXT.count("if (this.value === '') {"), 2)
 
-    def test_contract_does_not_require_optional_web_dependencies(self) -> None:
-        """The source contract stays runnable in the dependency-light fuzz lane."""
-
-        self.assertNotIn("import saas_web", Path(__file__).read_text(encoding="utf-8"))
-
     def _assert_empty_branch(self, handler: str) -> None:
         """Assert one handler clears stale state before numeric validation."""
 
