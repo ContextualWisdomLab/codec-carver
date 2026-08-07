@@ -3,12 +3,16 @@ name: Bootstrap speaker reconciliation change set
 on:
   push:
     branches: ["agent/speaker-timeline-reconciliation"]
+  pull_request:
+    branches: [main]
+    types: [opened, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: bootstrap-speaker-reconciliation-${{ github.ref }}
+  group: bootstrap-speaker-reconciliation-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -20,6 +24,7 @@ jobs:
       PAYLOAD_URL: https://at.adobe.com/1t5XdQtDT5rep5fN
       PAYLOAD_SHA256: cf1cd0175a32927f63afd6c9ea640ec3a84b3f964c614382e0761cea536d6ae0
       PAYLOAD_PATH: ${{ runner.temp }}/codec-carver-speaker-reconciliation-payload.zip
+      TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -31,6 +36,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+          ref: ${{ env.TARGET_BRANCH }}
 
       - name: Download and verify immutable payload
         run: |
@@ -130,4 +136,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "feat(speakers): reconcile long-form diarized transcripts"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${TARGET_BRANCH}"
