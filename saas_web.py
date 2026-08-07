@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-from starlette.background import BackgroundTask
 from job_store import JobStore
 import media_shrinker
 
@@ -112,15 +111,26 @@ async def require_api_key(request: Request, call_next):
     """
 
     configured_keys = get_configured_api_keys()
-    if configured_keys and not (request.method == "GET" and request.url.path == "/"):
-        provided_key = request.headers.get("x-api-key", "")
-        if not any(
-            hmac.compare_digest(provided_key, key) for key in configured_keys
-        ):
+    allow_open = os.environ.get("CODEC_CARVER_ALLOW_OPEN_WHEN_NO_KEYS", "").strip().lower()
+
+    if not (request.method == "GET" and request.url.path == "/"):
+        if not configured_keys and allow_open not in ("1", "true", "yes"):
             return JSONResponse(
                 status_code=401,
-                content={"error": "Invalid or missing API key"},
+                content={"error": "Authentication required. Service is closed by default when no keys are configured."},
+                headers={"WWW-Authenticate": "ApiKey"},
             )
+
+        if configured_keys:
+            provided_key = request.headers.get("x-api-key", "")
+            if not any(
+                hmac.compare_digest(provided_key, key) for key in configured_keys
+            ):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "Invalid or missing API key"},
+                )
+
     return await call_next(request)
 
 
@@ -211,6 +221,14 @@ HTML_TEMPLATE = """
                 }
             });
 
+            document.getElementById('batch_preset_buttons_container').addEventListener('click', function(e) {
+                if (e.target.classList.contains('preset-btn')) {
+                    const input = document.getElementById('batch_target_bytes');
+                    input.value = e.target.dataset.bytes;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            });
+
             function updateFileSizePreview(input) {
                 const file = input.files[0];
                 const preview = document.getElementById('file_size_preview');
@@ -223,9 +241,10 @@ HTML_TEMPLATE = """
                 }
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
-                    input.setCustomValidity('File exceeds 5 GiB limit.');
+                    const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
+                    input.setCustomValidity('File exceeds ' + limitText + ' limit.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected file size: ' + text + ' (exceeds 5 GiB limit)';
+                    preview.innerText = 'Selected file size: ' + text + ' (exceeds ' + limitText + ' limit)';
                     preview.style.color = '#dc3545';
                     return;
                 }
@@ -259,6 +278,32 @@ HTML_TEMPLATE = """
 
             });
 
+            document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
+                const val = parseInt(this.value, 10);
+                const preview = document.getElementById('batch_target_bytes_preview');
+                this.setCustomValidity('');
+                this.removeAttribute('aria-invalid');
+                preview.style.color = '#1e7e34';
+
+                const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
+                buttons.forEach(btn => {
+                    const presetValue = Number.parseInt(btn.dataset.bytes, 10);
+                    btn.setAttribute(
+                        'aria-pressed',
+                        !e.isTrusted && presetValue === val ? 'true' : 'false'
+                    );
+                });
+
+                if (isNaN(val) || val <= 0) {
+                    preview.innerText = 'Must be greater than 0.';
+                    preview.style.color = '#dc3545';
+                    this.setCustomValidity('Must be greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
+                } else {
+                    preview.innerText = formatBinaryBytes(val);
+                }
+            });
+
             document.getElementById('shrink-form').addEventListener('submit', function() {
                 const btn = document.getElementById('submit-btn');
                 setTimeout(() => {
@@ -280,14 +325,28 @@ HTML_TEMPLATE = """
                     return;
                 }
 
+                let totalSize = 0;
+                for (let i = 0; i < files.length; i++) {
+                    totalSize += files[i].size;
+                }
+
                 if (files.length > 20) {
                     input.setCustomValidity('Maximum is 20 files per batch.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected ' + files.length + ' files (exceeds 20 files limit)';
+                    preview.innerText = 'Selected ' + files.length + ' files (' + formatBinaryBytes(totalSize) + ', exceeds 20 files limit)';
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected ' + files.length + ' file(s)';
+
+                if (totalSize > MAX_UPLOAD_BYTES) {
+                    const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
+                    input.setCustomValidity('Total file size exceeds ' + limitText + ' limit.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ', exceeds ' + limitText + ' limit)';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
             }
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
@@ -354,8 +413,15 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="batch_target_bytes">Target Bytes (per file): <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="batch_target_bytes_help" required>
+                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="batch_target_bytes_help batch_target_bytes_preview" required>
                 <br><span id="batch_target_bytes_help" class="help-text">Maximum allowed size in bytes for each output file</span>
+                <br><span id="batch_target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
+                <div id="batch_preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes for batch">
+                    <button type="button" class="preset-btn" data-bytes="26214400" aria-pressed="false">25 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="104857600" aria-pressed="false">100 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="524288000" aria-pressed="false">500 MiB</button>
+                    <button type="button" class="preset-btn" data-bytes="1073741824" aria-pressed="false">1 GiB</button>
+                </div>
             </p>
             <button type="submit" id="batch-submit-btn">Upload and Shrink Batch</button>
         </form>
@@ -402,7 +468,7 @@ def _download_path_for_outputs(
     return _zip_outputs(outputs, dest_dir, archive_name)
 
 
-def _persist_upload(file: UploadFile, safe_filename: str) -> tuple[Path, Path, Path, Path]:
+def _persist_upload(file: UploadFile) -> tuple[Path, Path, Path, Path]:
     """Save an uploaded file into a fresh temp workspace.
 
     Returns ``(temp_dir_path, input_dir, output_dir, source_path)``. Any
@@ -416,6 +482,10 @@ def _persist_upload(file: UploadFile, safe_filename: str) -> tuple[Path, Path, P
         output_dir = temp_dir_path / "output"
         input_dir.mkdir()
         output_dir.mkdir()
+
+        safe_filename = Path(file.filename).name
+        if not safe_filename or safe_filename in (".", ".."):
+            safe_filename = "upload.tmp"
 
         source_path = input_dir / safe_filename
         bytes_written = 0
@@ -465,12 +535,8 @@ def shrink_media(
     if error is not None:
         return {"error": error}
 
-    safe_filename = Path(file.filename or "").name
-    if not safe_filename or safe_filename in (".", ".."):
-        safe_filename = "upload.tmp"
-
     try:
-        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file, safe_filename)
+        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file)
     except Exception:
         logger.exception("Failed to prepare uploaded media")
         return {"error": "Upload processing failed"}
@@ -538,50 +604,6 @@ def shrink_media_batch(
             content={"error": f"Too many files. Maximum is {MAX_BATCH_FILES} files per batch."},
         )
 
-    preprocessed_files = []
-    manifest = []
-    for index, upload in enumerate(files):
-        safe_filename = Path(upload.filename or "").name
-        if not safe_filename or safe_filename in (".", ".."):
-            safe_filename = "upload.tmp"
-
-        entry = {
-            "index": index,
-            "filename": safe_filename,
-            "status": "error",
-            "output_name": None,
-            "output_bytes": None,
-            "error": None,
-        }
-
-        error = _validate_request(upload, target_bytes)
-        if error is not None:
-            entry["error"] = error
-            manifest.append(entry)
-            continue
-
-        manifest.append(entry)
-        preprocessed_files.append((index, upload, safe_filename, entry))
-
-    if not preprocessed_files:
-        temp_dir_path: Path | None = None
-        try:
-            temp_dir_path = Path(tempfile.mkdtemp(prefix="codec_carver_batch_"))
-            zip_path = temp_dir_path / "codec_carver_batch.zip"
-            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
-                archive.writestr("results.json", json.dumps(manifest, indent=2))
-            return FileResponse(
-                path=zip_path,
-                filename=zip_path.name,
-                media_type="application/zip",
-                background=BackgroundTask(cleanup_temp_dir, temp_dir_path),
-            )
-        except Exception:
-            if temp_dir_path is not None:
-                cleanup_temp_dir(temp_dir_path)
-            logger.exception("Failed to build all-invalid batch manifest")
-            return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
-
     try:
         temp_dir_path = Path(tempfile.mkdtemp(prefix="codec_carver_batch_"))
     except Exception:
@@ -589,10 +611,29 @@ def shrink_media_batch(
         return JSONResponse(status_code=500, content={"error": "Upload processing failed"})
 
     workspace_root = temp_dir_path.resolve()
+    manifest = []
     zip_path = temp_dir_path / "codec_carver_batch.zip"
     try:
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
-            for index, upload, safe_filename, entry in preprocessed_files:
+            for index, upload in enumerate(files):
+                safe_filename = Path(upload.filename or "").name
+                if not safe_filename or safe_filename in (".", ".."):
+                    safe_filename = "upload.tmp"
+                entry = {
+                    "index": index,
+                    "filename": safe_filename,
+                    "status": "error",
+                    "output_name": None,
+                    "output_bytes": None,
+                    "error": None,
+                }
+                manifest.append(entry)
+
+                error = _validate_request(upload, target_bytes)
+                if error is not None:
+                    entry["error"] = error
+                    continue
+
                 input_dir = temp_dir_path / f"input_{index}"
                 output_dir = temp_dir_path / f"output_{index}"
                 try:
@@ -764,12 +805,8 @@ def submit_job(
     if error is not None:
         return JSONResponse(status_code=400, content={"error": error})
 
-    safe_filename = Path(file.filename or "").name
-    if not safe_filename or safe_filename in (".", ".."):
-        safe_filename = "upload.tmp"
-
     try:
-        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file, safe_filename)
+        temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file)
     except Exception:
         logger.exception("Failed to prepare uploaded media")
         return JSONResponse(

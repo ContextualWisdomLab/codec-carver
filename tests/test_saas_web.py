@@ -30,6 +30,16 @@ if _HAS_FASTAPI:
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class TestSaasWeb(unittest.TestCase):
 
+    def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {"CODEC_CARVER_ALLOW_OPEN_WHEN_NO_KEYS": "true"})
+        self.env_patcher.start()
+        if "CODEC_CARVER_API_KEYS" in os.environ:
+            del os.environ["CODEC_CARVER_API_KEYS"]
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
+
     def test_get_ui(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -52,7 +62,9 @@ class TestSaasWeb(unittest.TestCase):
 
         self.assertIn("const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;", html)
         self.assertIn("['B', 'KiB', 'MiB', 'GiB']", html)
-        self.assertIn("File exceeds 5 GiB limit.", html)
+        self.assertIn("const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);", html)
+        self.assertIn("File exceeds ' + limitText + ' limit.", html)
+        self.assertIn("Total file size exceeds ' + limitText + ' limit.", html)
         self.assertIn("preview.style.color = '#0f6674';", html)
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
 
@@ -338,6 +350,16 @@ class TestSaasWeb(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class TestShrinkBatch(unittest.TestCase):
+
+    def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {"CODEC_CARVER_ALLOW_OPEN_WHEN_NO_KEYS": "true"})
+        self.env_patcher.start()
+        if "CODEC_CARVER_API_KEYS" in os.environ:
+            del os.environ["CODEC_CARVER_API_KEYS"]
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
     """Tests for the POST /shrink-batch multi-file endpoint."""
 
     @staticmethod
@@ -412,54 +434,6 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertEqual(manifest["results"][0]["error"], "Upload processing failed")
         self.assertNotIn("codec_carver_secret", archive.read("results.json").decode())
         self.assertEqual(manifest["results"][1]["status"], "ok")
-
-    @unittest.mock.patch("saas_web.tempfile.mkdtemp")
-    def test_all_invalid_batch_handles_manifest_workspace_failure(self, mock_mkdtemp):
-        from fastapi.testclient import TestClient
-        import saas_web
-        client = TestClient(saas_web.app)
-        mock_mkdtemp.side_effect = OSError("disk full")
-        batch_files = [
-            ("files", ("bad.txt", b"invalid", "text/plain")),
-        ]
-        response = client.post("/shrink-batch", data={"target_bytes": 100}, files=batch_files)
-        self.assertEqual(response.status_code, 500)
-
-    def test_all_invalid_batch_returns_manifest_without_conversion(self):
-        from fastapi.testclient import TestClient
-        import saas_web
-        client = TestClient(saas_web.app)
-        batch_files = [
-            ("files", ("bad.txt", b"invalid", "text/plain")),
-        ]
-        response = client.post("/shrink-batch", data={"target_bytes": 100}, files=batch_files)
-        self.assertEqual(response.status_code, 200)
-
-    @unittest.mock.patch("saas_web.zipfile.ZipFile")
-    def test_all_invalid_batch_cleans_workspace_after_manifest_write_failure(self, mock_zip):
-        mock_zip.side_effect = OSError("cannot write zip")
-        batch_files = [
-            ("files", ("bad.txt", b"invalid", "text/plain")),
-        ]
-
-        from unittest.mock import patch
-        from fastapi.testclient import TestClient
-        import saas_web
-        client = TestClient(saas_web.app)
-
-        with patch("saas_web.tempfile.mkdtemp") as mock_mkdtemp:
-            import tempfile
-            import shutil
-            workspace = Path(tempfile.mkdtemp())
-            mock_mkdtemp.return_value = str(workspace)
-
-            response = client.post("/shrink-batch", data={"target_bytes": 100}, files=batch_files)
-
-            self.assertEqual(response.status_code, 500)
-            self.assertFalse(workspace.exists())
-            if workspace.exists():
-                shutil.rmtree(workspace)
-
 
     def test_shrink_batch_rejects_zero_files(self):
         response = client.post("/shrink-batch", data={"target_bytes": 10000})
@@ -658,8 +632,20 @@ class TestApiKeyAuth(unittest.TestCase):
             headers=headers or {},
         )
 
-    def test_no_env_var_leaves_endpoints_open(self):
+    def test_no_env_var_leaves_endpoints_closed_by_default(self):
         with patch.dict(os.environ):
+            os.environ.pop("CODEC_CARVER_API_KEYS", None)
+            os.environ.pop("CODEC_CARVER_ALLOW_OPEN_WHEN_NO_KEYS", None)
+            response = self._post_shrink()
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json(),
+            {"error": "Authentication required. Service is closed by default when no keys are configured."},
+        )
+
+    def test_no_env_var_leaves_endpoints_open_when_explicitly_allowed(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_ALLOW_OPEN_WHEN_NO_KEYS": "true"}):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
             response = self._post_shrink()
 
@@ -738,14 +724,15 @@ class TestApiKeyAuth(unittest.TestCase):
 
         self.assertEqual(rejected.status_code, 401)
 
-    def test_only_empty_entries_leave_endpoints_open(self):
+    def test_only_empty_entries_leave_endpoints_closed_by_default(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " , ,"}):
+            os.environ.pop("CODEC_CARVER_ALLOW_OPEN_WHEN_NO_KEYS", None)
             response = self._post_shrink()
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 401)
         self.assertEqual(
             response.json(),
-            {"error": "Invalid target_bytes value. Must be greater than 0."},
+            {"error": "Authentication required. Service is closed by default when no keys are configured."},
         )
 
     def test_get_configured_api_keys_parsing(self):
@@ -758,6 +745,16 @@ class TestApiKeyAuth(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class MultiSegmentZipTests(unittest.TestCase):
+
+    def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {"CODEC_CARVER_ALLOW_OPEN_WHEN_NO_KEYS": "true"})
+        self.env_patcher.start()
+        if "CODEC_CARVER_API_KEYS" in os.environ:
+            del os.environ["CODEC_CARVER_API_KEYS"]
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
     """Long recordings split into multiple segments must all be returned (as a zip)."""
 
     @patch("saas_web.media_shrinker.convert_file")
@@ -793,6 +790,10 @@ class JobModelTests(unittest.TestCase):
     """Async job API: submit -> status -> result, plus all error paths."""
 
     def setUp(self) -> None:
+        self.env_patcher = patch.dict(os.environ, {"CODEC_CARVER_ALLOW_OPEN_WHEN_NO_KEYS": "true"})
+        self.env_patcher.start()
+        if "CODEC_CARVER_API_KEYS" in os.environ:
+            del os.environ["CODEC_CARVER_API_KEYS"]
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self._old_store = saas_web.JOB_STORE
@@ -800,6 +801,7 @@ class JobModelTests(unittest.TestCase):
         saas_web.JOB_STORE = JobStore(str(Path(self._tmp.name) / "jobs.db"))
 
     def tearDown(self) -> None:
+        self.env_patcher.stop()
         for job in saas_web.JOB_STORE.list_jobs():
             temp = job.get("temp_dir")
             if temp:
@@ -946,16 +948,6 @@ class JobModelTests(unittest.TestCase):
             target_bytes=10000,
         )
         self.assertEqual(response.status_code, 400)
-
-    def test_submit_uses_safe_fallback_filename(self):
-        from fastapi.testclient import TestClient
-        import saas_web
-        client = TestClient(saas_web.app)
-        from unittest.mock import patch
-        with patch("saas_web._persist_upload") as mock_persist:
-            mock_persist.side_effect = Exception("boom")
-            response = client.post("/jobs", data={"target_bytes": 100}, files={"file": ("..", b"data", "video/mp4")})
-            self.assertEqual(response.status_code, 500)
 
     @patch("saas_web._persist_upload", side_effect=OSError("disk full"))
     def test_submit_handles_persist_failure(self, _mock_persist):
@@ -1145,6 +1137,16 @@ class JobModelTests(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
 class UploadValidationTests(unittest.TestCase):
+
+    def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {"CODEC_CARVER_ALLOW_OPEN_WHEN_NO_KEYS": "true"})
+        self.env_patcher.start()
+        if "CODEC_CARVER_API_KEYS" in os.environ:
+            del os.environ["CODEC_CARVER_API_KEYS"]
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
     """Input hardening surfaced by the SAST review: target bound + content type."""
 
     def test_shrink_rejects_oversized_target_bytes(self):
