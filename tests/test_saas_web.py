@@ -1089,6 +1089,9 @@ class JobModelTests(unittest.TestCase):
         self, mock_persist_upload, mock_get_store
     ):
         class RejectingStore:
+            def list_jobs(self, *_args, **_kwargs):
+                return []
+
             def create(self, *_args, **_kwargs):
                 raise ValueError("duplicate")
 
