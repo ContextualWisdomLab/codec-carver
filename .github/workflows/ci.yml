@@ -1,122 +1,75 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  materialize-reviewed-change-set:
-    if: github.actor != 'github-actions[bot]'
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      PAYLOAD_URL: https://at.adobe.com/1t5XdQtDT5rep5fN
-      PAYLOAD_SHA256: cf1cd0175a32927f63afd6c9ea640ec3a84b3f964c614382e0761cea536d6ae0
-      PAYLOAD_PATH: ${{ runner.temp }}/codec-carver-speaker-reconciliation-payload.zip
-      TARGET_BRANCH: ${{ github.event.pull_request.head.ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          egress-policy: audit
+          python-version: ${{ matrix.python-version }}
 
-      - name: Checkout pull request head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-          ref: ${{ env.TARGET_BRANCH }}
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
-      - name: Download and verify immutable payload
+      - name: Install package and hash-pinned quality tooling
         run: |
-          set -euo pipefail
-          curl --fail --show-error --silent --location \
-            --retry 4 --retry-all-errors \
-            --output "$PAYLOAD_PATH" "$PAYLOAD_URL"
-          printf '%s  %s\n' "$PAYLOAD_SHA256" "$PAYLOAD_PATH" | sha256sum --check --strict
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements-lock.txt
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements-quality.txt
+          python -m pip install --disable-pip-version-check --no-index --no-deps --no-build-isolation -e .
 
-      - name: Materialize only declared regular files
+      - name: Compile check
+        run: >-
+          python -m py_compile
+          media_shrinker.py config_file.py presets.py saas_web.py mcp_driver.py
+          job_store.py diarize.py speaker_timeline*.py
+
+      - name: Run full tests under branch coverage
         run: |
-          set -euo pipefail
+          python -m coverage erase
+          python -m coverage run --branch -m unittest discover -s tests -v
+
+      - name: Enforce 100 percent speaker-path line and branch coverage
+        run: >-
+          python -m coverage report --fail-under=100
+          diarize.py speaker_timeline*.py
+
+      - name: Enforce production docstrings on the speaker path
+        run: |
           python - <<'PY'
-          from __future__ import annotations
+          import ast
+          from pathlib import Path
 
-          import hashlib
-          import json
-          import os
-          from pathlib import Path, PurePosixPath
-          import tempfile
-          import zipfile
-
-          archive_path = Path(os.environ["PAYLOAD_PATH"])
-          repository = Path.cwd().resolve()
-          manifest_name = ".payload-manifest.json"
-
-          with zipfile.ZipFile(archive_path) as archive:
-              corrupted = archive.testzip()
-              if corrupted is not None:
-                  raise SystemExit(f"payload ZIP failed CRC validation: {corrupted}")
-              names = archive.namelist()
-              if len(names) != len(set(names)):
-                  raise SystemExit("payload ZIP contains duplicate paths")
-              if manifest_name not in names:
-                  raise SystemExit("payload manifest is missing")
-              manifest = json.loads(archive.read(manifest_name))
-              if manifest.get("schema_version") != "codec-carver/bootstrap-payload/v1":
-                  raise SystemExit("payload schema version is not supported")
-              declared = manifest.get("files")
-              if not isinstance(declared, dict) or not declared:
-                  raise SystemExit("payload manifest has no declared files")
-              if set(names) != set(declared) | {manifest_name}:
-                  raise SystemExit("payload contains undeclared or missing files")
-
-              for relative_name, expected_digest in sorted(declared.items()):
-                  if not isinstance(relative_name, str) or not isinstance(expected_digest, str):
-                      raise SystemExit("payload manifest entry has an invalid type")
-                  relative_path = PurePosixPath(relative_name)
-                  if relative_path.is_absolute() or ".." in relative_path.parts:
-                      raise SystemExit(f"unsafe payload path: {relative_name}")
-                  info = archive.getinfo(relative_name)
-                  file_type = (info.external_attr >> 16) & 0o170000
-                  if file_type not in {0, 0o100000}:
-                      raise SystemExit(f"non-regular payload entry: {relative_name}")
-                  content = archive.read(relative_name)
-                  if hashlib.sha256(content).hexdigest() != expected_digest:
-                      raise SystemExit(f"SHA-256 mismatch: {relative_name}")
-                  destination = (repository / Path(*relative_path.parts)).resolve()
-                  if repository not in destination.parents:
-                      raise SystemExit(f"payload escaped repository: {relative_name}")
-                  destination.parent.mkdir(parents=True, exist_ok=True)
-                  descriptor, temporary_name = tempfile.mkstemp(
-                      prefix=f".{destination.name}.", dir=destination.parent
-                  )
-                  try:
-                      with os.fdopen(descriptor, "wb") as handle:
-                          handle.write(content)
-                          handle.flush()
-                          os.fsync(handle.fileno())
-                      os.replace(temporary_name, destination)
-                  finally:
-                      try:
-                          os.unlink(temporary_name)
-                      except FileNotFoundError:
-                          pass
+          missing = []
+          for path in [Path("diarize.py"), *sorted(Path.cwd().glob("speaker_timeline*.py"))]:
+              raw_path = str(path)
+              tree = ast.parse(path.read_text(encoding="utf-8"), filename=raw_path)
+              if ast.get_docstring(tree, clean=False) is None:
+                  missing.append(f"{raw_path}: module")
+              for node in ast.walk(tree):
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                      if ast.get_docstring(node, clean=False) is None:
+                          missing.append(f"{raw_path}:{node.lineno}: {node.name}")
+          if missing:
+              raise SystemExit("Missing docstrings:\n" + "\n".join(missing))
           PY
 
-      - name: Verify and publish exact head
+      - name: Verify console entry points
         run: |
-          set -euo pipefail
-          rm -f .github/workflows/bootstrap-speaker-reconciliation.yml
-          python -m py_compile diarize.py speaker_timeline.py speaker_timeline_cli.py
-          python -m unittest discover -s tests -p 'test_diarize_v2.py' -v
-          python -m unittest discover -s tests -p 'test_speaker_timeline*.py' -v
-          python speaker_timeline_cli.py --help >/dev/null
-          git diff --check
-          git add -A
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "feat(speakers): reconcile long-form diarized transcripts"
-          git push origin "HEAD:${TARGET_BRANCH}"
+          codec-carver --help
+          codec-carver-speakers --help

@@ -4,22 +4,31 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codec-carver"
-version = "0.1.0"
-description = "Carve long recordings into metadata-preserved, size-capped FLAC/Opus files."
+version = "0.2.0"
+description = "Carve long recordings and build verified recording-global speaker transcripts."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "Seongho Bae" }]
-keywords = ["audio", "flac", "opus", "ffmpeg", "compression", "archival", "transcription"]
+keywords = [
+    "audio",
+    "flac",
+    "opus",
+    "ffmpeg",
+    "compression",
+    "archival",
+    "transcription",
+    "speaker-diarization",
+    "webvtt",
+    "rttm",
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Sound/Audio :: Conversion",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
     "Topic :: System :: Archiving :: Compression",
     "Environment :: Console",
 ]
-# The coverage workflow imports the web and MCP entry points through the test
-# suite, so the package metadata must expose those runtime dependencies without
-# relying on requirements.txt side effects.
 dependencies = [
     "aiofiles==25.1.0",
     "fastapi==0.139.0",
@@ -33,6 +42,7 @@ dependencies = [
 web = ["fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1"]
 mcp = ["mcp==1.28.1"]
 transcribe = ["faster-whisper==1.2.1"]
+diarize = ["pyannote.audio==4.0.7"]
 dev = [
     "interrogate==1.7.0",
     "fastapi==0.139.0",
@@ -47,14 +57,17 @@ all = [
     "fastapi==0.139.0", "uvicorn==0.51.0", "python-multipart==0.0.32", "aiofiles==25.1.0", "httpx==0.28.1",
     "mcp==1.28.1",
     "faster-whisper==1.2.1",
+    "pyannote.audio==4.0.7",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Seongho-Bae/codec-carver"
-Repository = "https://github.com/Seongho-Bae/codec-carver"
+Homepage = "https://github.com/ContextualWisdomLab/codec-carver"
+Repository = "https://github.com/ContextualWisdomLab/codec-carver"
+Issues = "https://github.com/ContextualWisdomLab/codec-carver/issues"
 
 [project.scripts]
 codec-carver = "media_shrinker:main"
+codec-carver-speakers = "speaker_timeline_cli:main"
 
 [tool.setuptools]
 py-modules = [
@@ -67,6 +80,14 @@ py-modules = [
     "presets",
     "remote_input",
     "saas_web",
+    "speaker_timeline",
+    "speaker_timeline_artifacts",
+    "speaker_timeline_cli",
+    "speaker_timeline_identity",
+    "speaker_timeline_plan",
+    "speaker_timeline_reconcile",
+    "speaker_timeline_render",
+    "speaker_timeline_types",
     "subtitles",
     "summarize",
     "transcribe",
