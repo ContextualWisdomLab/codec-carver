@@ -11,3 +11,4 @@
 
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
+- Atheris를 3.1.0으로 고정하고 공식 CPython 3.12–3.14 wheel SHA-256을 검증해 제품 퍼징과 Python 3.14 중앙 OpenCode 검증이 동일한 binary-only hash lock을 사용하도록 수정했습니다. 운영·공급망 근거는 [`docs/doctoring/atheris-interpreter-compatibility.md`](docs/doctoring/atheris-interpreter-compatibility.md)에 기록했습니다.
