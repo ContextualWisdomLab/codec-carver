@@ -3,7 +3,7 @@ name: Rebuild PR 317 as a bounded decoding repair
 on:
   pull_request:
     branches: [main]
-    types: [ready_for_review]
+    types: [synchronize, reopened, ready_for_review]
 
 permissions:
   contents: write
