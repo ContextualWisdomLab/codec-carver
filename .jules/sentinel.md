@@ -1,3 +1,8 @@
+## 2026-08-08 - [Sentinel: Insecure Uvicorn Host Binding]
+**Vulnerability:** Service bound to all network interfaces (0.0.0.0) exposing it externally.
+**Learning:** Uvicorn binding to `0.0.0.0` increases attack surface and may bypass intended network isolation.
+**Prevention:** Restrict host binding to `127.0.0.1` unless external access is intentionally required.
+
 ## 2026-07-25 - [Sentinel: Path Traversal/Zip Slip via Windows file paths]
 **Vulnerability:** Path Traversal (CWE-22) via backslashes in uploaded file names from Windows clients.
 **Learning:** POSIX `pathlib.Path(filename).name` does not treat backslashes `\` as directory separators. A Windows client submitting `..\..\etc\passwd` would have its filename treated as a single literal string, leading to potential path traversal or Zip Slip when this filename is used to create files or ZIP manifests.

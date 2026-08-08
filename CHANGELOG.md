@@ -14,3 +14,6 @@
 
 ### Security
 * (Sentinel) Windows 클라이언트에서 업로드된 파일 이름의 백슬래시(`\`)를 악용한 Path Traversal / Zip Slip 취약점 수정.
+
+### Security
+* (Sentinel) Uvicorn 호스트 바인딩을 0.0.0.0에서 127.0.0.1로 변경하여 외부 노출 방지.
