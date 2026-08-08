@@ -1,3 +1,7 @@
+## 2024-08-10 - 드롭존 클릭 이벤트 지원
+**Learning:** 파일 입력 버튼 대신 넓은 드롭존 영역을 클릭해도 파일 선택 창이 열리도록 하면 모바일 환경이나 마우스 사용자 모두에게 더 넓은 타겟 영역을 제공해 접근성 및 사용성이 향상됩니다. 또한 내부 요소 클릭은 무시하도록 하여 폼 인터랙션 충돌을 막는 것이 중요합니다.
+**Action:** 폼의 루트 컨테이너(드롭존)에 클릭 이벤트 리스너를 추가하여 내부의 hidden input을 `.click()`으로 트리거하되, 대화형 자식 요소(input, button, label 등)를 명시적으로 제외하는 조건을 작성하십시오.
+
 ## 2024-07-15 - Dynamic Size formatting and Total Size Validation
 **Learning:** Hardcoding human-readable sizes (like '5 GiB') in validation error messages is error-prone when the underlying constant changes. Moreover, failing to validate total upload size against backend limits (e.g., MAX_UPLOAD_BYTES) in batch file uploads frustrates users who wait for a large upload to finish only to get a server-side 413 Payload Too Large error.
 **Action:** Always format backend byte limit constants dynamically (e.g., `formatBinaryBytes(MAX_UPLOAD_BYTES)`) on the client side to display accurate error messages. For multiple file inputs, ensure both the file count and the combined file size are validated against backend limits, giving immediate inline feedback via `setCustomValidity` and `aria-invalid`.
