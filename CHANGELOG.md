@@ -11,3 +11,4 @@
 
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
+- SQLite JobStore 인스턴스 초기화 시 `PRAGMA journal_mode=WAL`을 한 번만 실행하도록 변경하여 DB 연결 성능을 크게 개선했습니다.

@@ -1,3 +1,6 @@
+## 2024-08-08 - [JobStore SQLite 성능 최적화]
+**Learning:** SQLite의 `PRAGMA journal_mode=WAL` 설정은 DB 파일 수준에서 영구적으로 유지되므로 매 연결마다 반복해서 실행할 필요가 없음. 매번 실행하면 매우 큰 오버헤드가 발생함. 여러 구문을 실행하기 위해 `conn.executescript()`를 활용.
+**Action:** WAL 모드는 DB 초기화 시 스키마 생성과 함께 한 번만 실행되도록 변경.
 ## 2024-05-28 - Avoid O(N^2) Path.resolve() in Batch Processing
 **Learning:** Python's `pathlib.Path.resolve()` is relatively slow because it touches the filesystem to follow symlinks and resolve relative paths. When dealing with a batch operation (e.g., scanning large directories of media files), calculating protected files via `any(target == src.resolve() for src in sources)` on every check leads to massive O(N^2) CPU overhead.
 **Action:** Pre-resolve the entire list of candidate paths once into a `frozenset` at the beginning of the batch process. Pass this resolved set down the call stack so that collision/protection checks become O(1) hash map lookups instead of triggering millions of unnecessary disk access operations.
