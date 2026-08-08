@@ -1,3 +1,7 @@
+## 2026-07-25 - [Sentinel: Path Traversal/Zip Slip via Windows file paths]
+**Vulnerability:** Path Traversal (CWE-22) via backslashes in uploaded file names from Windows clients.
+**Learning:** POSIX `pathlib.Path(filename).name` does not treat backslashes `\` as directory separators. A Windows client submitting `..\..\etc\passwd` would have its filename treated as a single literal string, leading to potential path traversal or Zip Slip when this filename is used to create files or ZIP manifests.
+**Prevention:** Sanitize uploaded filenames by explicitly replacing backslashes with forward slashes (e.g., `filename.replace("\\", "/")`) before passing them to `Path().name`.
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
 **Learning:** Python's `Path.with_name` plus a suffix string to make a temp file opens a race condition because it's predictable and the permissions default to system `umask` which might expose secret `0600` data. Additionally, interpolating variables directly into FFmpeg filtergraph strings allows arbitrary filter injection.

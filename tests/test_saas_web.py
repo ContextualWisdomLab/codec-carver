@@ -213,6 +213,30 @@ class TestSaasWeb(unittest.TestCase):
 
             response = saas_web.shrink_media(
                 BackgroundTasks(),
+                file=SimpleNamespace(
+                    filename="..\\..\\etc\\passwd",
+                    file=io.BytesIO(b"dummy wav data")
+                ),
+                target_bytes=10000,
+            )
+
+        self.assertEqual(Path(response.path), output)
+        self.assertEqual(
+            mock_convert_file.call_args.kwargs["source"].name, "passwd"
+        )
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_media_uses_safe_fallback_filename_for_dots(self, mock_convert_file):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "output.flac"
+            output.write_bytes(b"audio")
+            mock_result = MagicMock(spec=ConversionResult)
+            mock_result.output_path = output
+            mock_convert_file.return_value = [mock_result]
+
+            response = saas_web.shrink_media(
+                BackgroundTasks(),
                 file=SimpleNamespace(filename=".", file=io.BytesIO(b"dummy wav data")),
                 target_bytes=10000,
             )
@@ -220,6 +244,29 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(Path(response.path), output)
         self.assertEqual(
             mock_convert_file.call_args.kwargs["source"].name, "upload.tmp"
+        )
+
+    @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_handles_windows_path_traversal(self, mock_convert_file):
+        mock_convert_file.return_value = []
+
+        response = saas_web.shrink_media_batch(
+            BackgroundTasks(),
+            files=[
+                SimpleNamespace(
+                    filename="..\\..\\etc\\passwd",
+                    content_type="audio/wav",
+                    file=io.BytesIO(b"dummy"),
+                )
+            ],
+            target_bytes=10000,
+        )
+
+        archive = zipfile.ZipFile(response.path)
+        manifest = json.loads(archive.read("results.json"))
+        self.assertEqual(manifest["results"][0]["filename"], "passwd")
+        self.assertEqual(
+            mock_convert_file.call_args.kwargs["source"].name, "passwd"
         )
 
     def test_shrink_media_rejects_uploaded_body_over_limit(self):

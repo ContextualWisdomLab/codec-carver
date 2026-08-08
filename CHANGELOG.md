@@ -11,3 +11,6 @@
 
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
+
+### Security
+* (Sentinel) Windows 클라이언트에서 업로드된 파일 이름의 백슬래시(`\`)를 악용한 Path Traversal / Zip Slip 취약점 수정.
