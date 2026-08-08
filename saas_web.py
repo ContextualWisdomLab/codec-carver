@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -83,19 +84,40 @@ async def limit_request_size(request: Request, call_next):
     except RequestTooLarge:
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
+class APIKeyRegistry:
+    """Thread-safe credential registry for API keys."""
+
+    def __init__(self):
+        self._keys = []
+        self._lock = threading.Lock()
+        self._bootstrap_from_env()
+
+    def _bootstrap_from_env(self):
+        raw = os.environ.get("CODEC_CARVER_API_KEYS")
+        if raw is not None:
+            self.set_keys([key.strip() for key in raw.split(",") if key.strip()])
+            os.environ.pop("CODEC_CARVER_API_KEYS", None)
+
+    def set_keys(self, keys: list[str]):
+        """Update the registered API keys."""
+        with self._lock:
+            self._keys = list(keys)
+
+    def get_keys(self) -> list[str]:
+        """Return the currently registered API keys."""
+        with self._lock:
+            return list(self._keys)
+
+API_KEY_REGISTRY = APIKeyRegistry()
+
+
 def get_configured_api_keys():
-    """Return the API keys configured via the CODEC_CARVER_API_KEYS env var.
+    """Return the currently registered API keys.
 
-    The variable holds a comma-separated list of keys. Whitespace around each
-    key is stripped and empty entries are ignored. Keys are read from the
-    environment at request time (not import time) so tests can patch the
-    environment easily and key rotation needs no server restart. Returns an
-    empty list when the variable is unset or contains no usable keys, which
-    leaves the service open (today's default behaviour).
+    Keys are read from the in-process registry at request time, allowing
+    zero-downtime key rotation via registry updates.
     """
-
-    raw = os.environ.get("CODEC_CARVER_API_KEYS", "")
-    return [key.strip() for key in raw.split(",") if key.strip()]
+    return API_KEY_REGISTRY.get_keys()
 
 
 @app.middleware("http")

@@ -64,3 +64,8 @@
 **취약점:** `hmac.compare_digest`에 비-ASCII 문자열이 포함될 경우 `TypeError` 발생으로 인한 서버 에러(DoS) 유발 (CWE-754)
 **학습:** 파이썬의 `hmac.compare_digest()` 함수는 인자로 전달된 문자열에 비-ASCII(non-ASCII) 문자가 포함된 경우 `TypeError` 예외를 던집니다. 악의적인 사용자가 HTTP 헤더(예: `x-api-key`)에 한글 등 유니코드 문자를 전송하면 FastAPI 미들웨어에서 처리되지 않은 예외가 발생하여 애플리케이션 리소스 고갈이나 500 서버 에러(DoS)가 발생할 수 있습니다.
 **예방:** `hmac.compare_digest()`에 문자열을 비교할 때는 두 인자를 반드시 `.encode('utf-8')`을 사용하여 바이트 배열(bytes)로 변환한 후 비교해야 안전합니다. 또한 HTTPX나 TestClient는 비-ASCII 헤더를 거부하므로 미들웨어 로직 자체를 검증하려면 `starlette.requests.Request` 객체를 직접 모킹하여 테스트해야 합니다.
+
+## 2026-08-07 - [Sentinel: Runtime Credential Contract & Environment Variables]
+**취약점:** `CODEC_CARVER_API_KEYS` 환경 변수를 요청마다 읽어오는 설계는 런타임 환경에 민감한 정보가 노출된 채 유지되게 만듭니다 (CWE-522).
+**학습:** 자격 증명(Credential)의 부트스트랩 전송과 런타임 조회를 혼동하면 안 됩니다. 환경 변수는 런타임 로딩을 위해 처음에만 읽고, 메모리 내 안전한 레지스트리(In-process Registry)에 저장한 직후 환경에서 삭제(`os.environ.pop`)해야 합니다. 테스트 역시 요청 시점의 환경 변수 조작(`patch.dict`)에 의존해서는 안 되며 런타임 레지스트리 직접 주입을 사용해야 합니다.
+**예방:** 스레드 안전한(thread-safe) 인메모리 `APIKeyRegistry` 객체를 도입하여 애플리케이션 시작 시점에만 환경 변수를 파싱 후 초기화하고, 환경 변수에서 시크릿을 지웁니다. 이후 런타임 미들웨어는 이 레지스트리만을 참조하여 API 키를 검증하도록 설계해야 합니다.
