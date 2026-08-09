@@ -1,3 +1,8 @@
+## 2026-08-09 - [Sentinel: Unhandled TypeError in hmac.compare_digest]
+**Vulnerability:** Unhandled Exception (CWE-754) / DoS via non-ASCII characters in `hmac.compare_digest`.
+**Learning:** `hmac.compare_digest` requires ASCII-only strings or bytes. Passing an HTTP header containing non-ASCII characters (parsed as a Python string by ASGI servers like Uvicorn) causes a `TypeError`, resulting in an unhandled 500 error instead of a secure 401 rejection.
+**Prevention:** When comparing potentially untrusted strings using `hmac.compare_digest`, encode both strings to bytes (e.g., using `.encode("utf-8")`) beforehand to safely handle any character input and prevent runtime exceptions.
+
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
 **Learning:** Python's `Path.with_name` plus a suffix string to make a temp file opens a race condition because it's predictable and the permissions default to system `umask` which might expose secret `0600` data. Additionally, interpolating variables directly into FFmpeg filtergraph strings allows arbitrary filter injection.

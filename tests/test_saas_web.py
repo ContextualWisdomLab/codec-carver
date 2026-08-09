@@ -639,6 +639,17 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
 
+    def test_non_ascii_key_rejected_safely(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            # httpx test client refuses to send non-ASCII strings as headers;
+            # we must bypass its validation by explicitly passing raw bytes for the request
+            # to simulate an attacker sending raw bytes over the wire.
+            req = client.build_request("POST", "/shrink", headers=[(b"x-api-key", b"\xff")])
+            response = client.send(req)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
     def test_correct_key_reaches_handler(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
             response = self._post_shrink(headers={"X-API-Key": "secret-key"})

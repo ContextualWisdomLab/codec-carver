@@ -11,3 +11,4 @@
 
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
+- `x-api-key` 헤더에 ASCII가 아닌 문자가 포함될 때 `hmac.compare_digest`에서 발생하던 `TypeError`를 수정했습니다.
