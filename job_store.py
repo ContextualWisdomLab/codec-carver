@@ -94,8 +94,10 @@ class JobStore:
             )
         self._db_path = str(db_path)
         self._lock = threading.Lock()
-        with self._connect() as conn:
-            conn.execute(_SCHEMA)
+        # Initialize WAL mode once; it persists in the database file.
+        from contextlib import closing
+        with closing(sqlite3.connect(self._db_path, timeout=30.0)) as conn:
+            conn.executescript("PRAGMA journal_mode=WAL;\n" + _SCHEMA)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -108,7 +110,6 @@ class JobStore:
         conn = sqlite3.connect(self._db_path, timeout=30.0)
         try:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
             yield conn
             conn.commit()
         finally:
