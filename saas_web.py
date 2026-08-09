@@ -385,6 +385,18 @@ HTML_TEMPLATE = """
             e.preventDefault();
             e.stopPropagation();
         }
+        dropZone.addEventListener('click', (e) => {
+            if (!['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) {
+                fileInput.click();
+            }
+        });
+        if (batchDropZone) {
+            batchDropZone.addEventListener('click', (e) => {
+                if (!['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) {
+                    batchFileInput.click();
+                }
+            });
+        }
         dropZone.addEventListener('drop', (e) => {
             let dt = e.dataTransfer;
             let files = dt.files;
