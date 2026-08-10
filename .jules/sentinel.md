@@ -1,3 +1,7 @@
+## 2026-07-28 - [Sentinel: Windows Path Traversal in Uploads]
+**Vulnerability:** Path Traversal (CWE-22) via Windows path separators in filenames.
+**Learning:** Python`s `Path(file.filename).name` on POSIX systems does not recognize `\` as a directory separator, allowing attackers to upload files containing backslashes (e.g., `..\..\etc\passwd`) that escape intended directories.
+**Prevention:** Explicitly sanitize filenames by replacing all backslashes with forward slashes (`filename.replace("\\", "/")`) before applying `Path().name`.
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
 **Learning:** Python's `Path.with_name` plus a suffix string to make a temp file opens a race condition because it's predictable and the permissions default to system `umask` which might expose secret `0600` data. Additionally, interpolating variables directly into FFmpeg filtergraph strings allows arbitrary filter injection.
