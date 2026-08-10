@@ -11,3 +11,5 @@
 
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
+
+- `job_store.py`에서 매 연결마다 실행되던 SQLite `PRAGMA journal_mode=WAL` 구문을 스키마 초기화 시 한 번만 실행하도록 최적화하여 불필요한 오버헤드 감소
