@@ -1130,7 +1130,10 @@ class UploadValidationTests(unittest.TestCase):
 
 class TestApiKeyNonAsciiHeader(unittest.IsolatedAsyncioTestCase):
     async def test_api_key_non_ascii_header(self):
-        import starlette.requests
+        try:
+            import starlette.requests
+        except ImportError:
+            self.skipTest("starlette not installed")
         from unittest.mock import patch, MagicMock
         from saas_web import require_api_key
 
