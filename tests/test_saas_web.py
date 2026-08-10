@@ -35,6 +35,25 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
 
+    @patch("saas_web.get_configured_api_keys", return_value=["valid-key"])
+    def test_require_api_key_handles_non_ascii_header_without_500(self, mock_get_keys):
+        import asyncio
+        from starlette.requests import Request
+        from starlette.responses import Response
+
+        async def call_next(request: Request):
+            return Response(content="ok")
+
+        scope = {
+            'type': 'http',
+            'method': 'POST',
+            'path': '/shrink',
+            'headers': [(b'x-api-key', '한글키'.encode('utf-8'))]
+        }
+        request = Request(scope)
+        response = asyncio.run(saas_web.require_api_key(request, call_next))
+        self.assertEqual(response.status_code, 401)
+
     def test_get_ui_includes_accessible_file_input_helpers(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
