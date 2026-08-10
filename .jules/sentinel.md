@@ -1,3 +1,7 @@
+## 2026-08-10 - [Sentinel: Uncontrolled Resource Consumption in Job Cleanup]
+**Vulnerability:** Resource Exhaustion (CWE-400 / CWE-770) via unretrieved job results.
+**Learning:** When successful jobs only clean up their temporary directories upon result download, an attacker can intentionally create jobs and abandon them to exhaust disk space or inodes over time.
+**Prevention:** Implement an automatic cleanup mechanism (like a background sweep or TTL) for jobs that complete but are never retrieved.
 ## 2026-07-28 - [Sentinel: Windows Path Traversal in Uploads]
 **Vulnerability:** Path Traversal (CWE-22) via Windows path separators in filenames.
 **Learning:** Python`s `Path(file.filename).name` on POSIX systems does not recognize `\` as a directory separator, allowing attackers to upload files containing backslashes (e.g., `..\..\etc\passwd`) that escape intended directories.
