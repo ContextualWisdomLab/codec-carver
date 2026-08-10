@@ -393,6 +393,10 @@ HTML_TEMPLATE = """
                 updateFileSizePreview(fileInput);
             }
         }, false);
+        dropZone.addEventListener('click', (e) => {
+            if (['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+            fileInput.click();
+        });
         if (batchDropZone) {
             batchDropZone.addEventListener('drop', (e) => {
                 let dt = e.dataTransfer;
@@ -402,6 +406,10 @@ HTML_TEMPLATE = """
                     updateBatchFilePreview(batchFileInput);
                 }
             }, false);
+            batchDropZone.addEventListener('click', (e) => {
+                if (['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+                batchFileInput.click();
+            });
         }
         </script>
     </div>
