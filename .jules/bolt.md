@@ -67,3 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2024-06-25 - [Optimize set initialization in loops]
+**학습:** 파이썬에서 `set` 교집합(`&`) 연산은 항상 새로운 `set` 객체를 반환합니다. 누적 교집합을 구할 때 첫 번째 루프에서 원본 `set`을 방어적으로 복사(`set(postings)`)하는 것은 불필요하며 상당한 성능 저하를 일으킵니다. 첫 할당에서는 원본 참조를 그대로 사용하고 다음 반복부터 `&` 연산이 새 객체를 생성하게 하는 것이 안전하고 빠릅니다.
+**실행:** 루프 내에서 불변 교집합(`&`) 연산을 통해 값을 누적할 때, 초기값을 설정하기 위해 방어적 복사본을 생성하지 마십시오.

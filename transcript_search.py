@@ -242,7 +242,7 @@ class TranscriptIndex:
             if not postings:
                 return []
             candidates = (
-                set(postings) if candidates is None else candidates & postings
+                postings if candidates is None else candidates & postings
             )
             if not candidates:
                 return []
