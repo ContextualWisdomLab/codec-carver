@@ -2,7 +2,10 @@ import asyncio
 import io
 import json
 import os
-import pytest
+try:
+    import pytest
+except ImportError:
+    pytest = None
 import tempfile
 import unittest
 import zipfile
@@ -1125,26 +1128,26 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
-@pytest.mark.asyncio
-async def test_api_key_non_ascii_header():
-    import starlette.requests
-    from unittest.mock import patch, MagicMock
-    from saas_web import require_api_key
+class TestApiKeyNonAsciiHeader(unittest.IsolatedAsyncioTestCase):
+    async def test_api_key_non_ascii_header(self):
+        import starlette.requests
+        from unittest.mock import patch, MagicMock
+        from saas_web import require_api_key
 
-    scope = {
-        'type': 'http',
-        'method': 'POST',
-        'path': '/shrink',
-        'headers': [(b'x-api-key', 'invalid-non-ascii-🔥'.encode('utf-8'))]
-    }
-    request = starlette.requests.Request(scope)
-    mock_call_next = MagicMock()
+        scope = {
+            'type': 'http',
+            'method': 'POST',
+            'path': '/shrink',
+            'headers': [(b'x-api-key', 'invalid-non-ascii-🔥'.encode('utf-8'))]
+        }
+        request = starlette.requests.Request(scope)
+        mock_call_next = MagicMock()
 
-    with patch('saas_web.get_configured_api_keys', return_value=['valid-key']):
-        response = await require_api_key(request, mock_call_next)
-        assert response.status_code == 401
-        import json
-        assert json.loads(response.body) == {"error": "Invalid or missing API key"}
+        with patch('saas_web.get_configured_api_keys', return_value=['valid-key']):
+            response = await require_api_key(request, mock_call_next)
+            self.assertEqual(response.status_code, 401)
+            import json
+            self.assertEqual(json.loads(response.body), {"error": "Invalid or missing API key"})
 
 if __name__ == '__main__':
     unittest.main()
