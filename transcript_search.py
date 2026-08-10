@@ -241,8 +241,9 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
+            # 방어적 복사(set(postings))를 제거하여 초기 O(N) 오버헤드 방지
             candidates = (
-                set(postings) if candidates is None else candidates & postings
+                postings if candidates is None else candidates & postings
             )
             if not candidates:
                 return []

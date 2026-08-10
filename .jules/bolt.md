@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2024-05-29 - 세트 교집합 연산 시 불필요한 방어적 복사 제거
+**학습:** 루프에서 비트 연산자(&)를 사용하여 세트 교집합을 수행할 때 소스 세트의 방어적 복사본(예: set(postings))을 초기에 생성할 필요가 없다. & 연산자는 본질적으로 새로운 세트를 반환하므로 초기 O(N) 복사는 중복되고 성능 병목 현상을 일으킨다.
+**실행:** 세트 교집합을 위한 루프 초기화 시 원본 세트를 그대로 할당하여 불필요한 메모리 할당 및 복사 오버헤드를 방지한다.
