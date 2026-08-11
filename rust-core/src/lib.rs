@@ -1080,8 +1080,7 @@ fn copy_and_hash_staged_source(
         // no-follow descriptor path first and accept it only when the complete
         // advertised file size was copied; otherwise retain the coordinated
         // iCloud path which can fetch genuinely remote bytes.
-        let direct_allowed =
-            provider_allows_direct_read(provider_reports_downloaded(source));
+        let direct_allowed = provider_allows_direct_read(provider_reports_downloaded(source));
         if direct_allowed {
             let mut direct_capture = capture.as_ref().map(|_| Vec::new());
             let direct_result = open_regular_beneath(root, relative_path).and_then(|input| {
