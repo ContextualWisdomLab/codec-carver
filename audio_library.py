@@ -6435,6 +6435,14 @@ class AudioLibrary:
                         else None
                     ),
                 ):
+                    # A valid JSON cache is not sufficient for the public
+                    # artifact contract: every transcription must also have
+                    # one readable, speaker-grouped text sidecar.  Rebuild it
+                    # on cache hits so an interrupted cleanup or a partial
+                    # copy cannot silently leave the transcript incomplete.
+                    atomic_text_write(
+                        text_output, speaker_transcript_text(cached_transcript)
+                    )
                     skipped += 1
                     status = "cached"
                 else:
@@ -7086,6 +7094,11 @@ class AudioLibrary:
                         else None
                     ),
                 ):
+                    # Keep the one-file speaker transcript contract true even
+                    # when only the JSON sidecar survived a prior run.
+                    atomic_text_write(
+                        text_path, speaker_transcript_text(cached_transcript)
+                    )
                     cached += 1
                     status = "cached"
                 else:

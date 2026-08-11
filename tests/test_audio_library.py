@@ -5742,6 +5742,10 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(summary["cached"], 1)
             progress.assert_called_once()
             fake.transcribe.assert_not_called()
+            self.assertEqual(
+                (state / "transcripts" / f"{HASH_A}.txt").read_text(encoding="utf-8"),
+                "[S01] cached\n",
+            )
 
             atomic_json_write(
                 state / "transcripts" / f"{HASH_A}.json",
@@ -7317,11 +7321,14 @@ class AudioLibraryTests(unittest.TestCase):
                 state / "transcripts" / f"{HASH_B}.json",
                 _cached_transcript("cached"),
             )
+            text_sidecar = state / "transcripts" / f"{HASH_B}.txt"
+            self.assertFalse(text_sidecar.exists())
             fake.reset_mock()
             with patch("audio_library.GpuTranscriber", return_value=fake):
                 summary = library.stream_transcribe(max_files=1, evict_after=False)
             self.assertEqual(summary["cached"], 1)
             fake.transcribe.assert_not_called()
+            self.assertEqual(text_sidecar.read_text(encoding="utf-8"), "[S01] cached\n")
 
             atomic_json_write(
                 state / "transcripts" / f"{HASH_B}.json",
