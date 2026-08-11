@@ -68,10 +68,13 @@ and CPU fallback are not part of this path.
 The benchmark report compares fixed and VAD-aware segmentation on the same
 source and model: wall time, real-time factor, peak memory, duplicate/missing
 boundary counts, timestamp and speaker continuity, text diff, and checkpoint
-resume cost. Tests cover interruption, corrupted partials, stale source/TMK
-SHA, late TMK, dataless placeholders, Unicode paths, duplicate boundary
-emissions, and rollback. A VAD failure is a recorded evidence status and does
-not block fixed-range recovery.
+resume cost. The model-free helper records fixed-nominal and VAD-refinement
+planner measurements separately and labels them as segmentation-planning-only;
+it never presents those numbers as model inference speed. Tests cover
+interruption, corrupted partials, stale source/TMK SHA, late TMK, dataless
+placeholders, Unicode paths, duplicate boundary emissions, and rollback. A
+VAD failure is a recorded evidence status and does not block fixed-range
+recovery.
 
 The deterministic baseline can be reproduced without loading a model:
 

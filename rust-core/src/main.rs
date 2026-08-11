@@ -13,6 +13,9 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Hash and inventory an audio library, including Sony TMK sidecars.
+    ///
+    /// `--output` is a standalone CLI convenience; the Python API omits it
+    /// and owns durable state persistence after validating this stdout JSON.
     Inventory {
         #[arg(long)]
         root: PathBuf,

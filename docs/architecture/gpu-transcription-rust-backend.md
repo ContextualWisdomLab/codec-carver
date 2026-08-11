@@ -149,6 +149,10 @@ preferred interface for recording curation.
   state commits through descriptor-relative atomic replacement, never follows a
   final-name symlink, and recoverably quarantines partial or schema-invalid
   mutation journals instead of blocking future inventory runs.
+  The standalone Rust `inventory --output` option is an explicitly opt-in
+  diagnostic path and uses the same descriptor-relative, no-follow atomic
+  writer; the Python API never supplies that option, so normal library state
+  remains owned by Python.
 - The Rust executable comes only from an integrity-pinned explicit path or a
   repository build and is checked for owner, mode, symlink, and SHA-256 drift.
   Python copies the exact bytes from a stable, no-follow source descriptor into

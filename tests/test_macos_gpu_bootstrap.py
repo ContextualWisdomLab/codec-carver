@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import subprocess
 import sys
@@ -145,13 +144,10 @@ class MacosGpuBootstrapTests(unittest.TestCase):
                 encoding="utf-8",
             )
             hostile_dirname.chmod(0o700)
-            inherited_path = os.environ.get("PATH")
-            hostile_path = (
-                str(root) if not inherited_path else f"{root}:{inherited_path}"
-            )
+            hostile_path = f"{root}:/usr/bin:/bin:/usr/sbin:/sbin"
             completed = self._run_bootstrap(
                 "--help",
-                env={**os.environ, "PATH": hostile_path},
+                env={"HOME": str(root), "PATH": hostile_path},
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertFalse(marker.exists())
@@ -193,12 +189,8 @@ fi
                 executable.chmod(0o700)
             uv_sha256 = hashlib.sha256((fake_bin / "uv").read_bytes()).hexdigest()
 
-            inherited_path = os.environ.get("PATH")
-            test_path = (
-                str(fake_bin) if not inherited_path else f"{fake_bin}:{inherited_path}"
-            )
+            test_path = f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin"
             env = {
-                **os.environ,
                 "HOME": str(home),
                 "PATH": test_path,
             }
