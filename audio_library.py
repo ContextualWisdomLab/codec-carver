@@ -85,8 +85,7 @@ TMK_CHUNK_OVERLAP_SECONDS = 1.0
 MAX_TMK_CHUNK_MARKERS = 4096
 AUTOMATIC_MLX_CHUNK_SECONDS = 300.0
 AUTOMATIC_MLX_CHUNK_MIN_DURATION_SECONDS = 600.0
-MAX_MLX_SPEAKER_CHUNK_SECONDS = 90 * 60.0
-SPEAKER_TRANSCRIPTION_POLICY_VERSION = 1
+SPEAKER_TRANSCRIPTION_POLICY_VERSION = 2
 TRANSCRIPTION_CHECKPOINT_SCHEMA_VERSION = 1
 PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES = 255
 PORTABLE_LOCATION_NFD_UTF8_MAX_BYTES = 72
@@ -1918,25 +1917,28 @@ def automatic_mlx_chunk_ranges(
 def mlx_speaker_chunk_ranges(
     markers: Any, duration_seconds: float | None
 ) -> list[tuple[float, float]]:
-    """Keep joint speaker transcription within its documented 90-minute limit."""
+    """Split long joint speaker transcription into resumable MLX work ranges."""
 
     if (
         duration_seconds is None
         or not math.isfinite(duration_seconds)
-        or duration_seconds <= MAX_MLX_SPEAKER_CHUNK_SECONDS
+        or duration_seconds <= AUTOMATIC_MLX_CHUNK_MIN_DURATION_SECONDS
     ):
         return []
     duration = float(duration_seconds)
     boundaries = [value for value in canonical_tmk_markers(markers) if value < duration]
     ranges = []
     start = 0.0
-    while duration - start > MAX_MLX_SPEAKER_CHUNK_SECONDS:
-        limit = start + MAX_MLX_SPEAKER_CHUNK_SECONDS
+    while duration - start > AUTOMATIC_MLX_CHUNK_SECONDS:
+        limit = start + AUTOMATIC_MLX_CHUNK_SECONDS
         candidates = [value for value in boundaries if start < value <= limit]
         end = max(candidates) if candidates else limit
         ranges.append((start, end))
         start = end
-    ranges.append((start, duration))
+    if duration - start < MIN_TRANSCRIBABLE_SECONDS and ranges:
+        ranges[-1] = (ranges[-1][0], duration)
+    else:
+        ranges.append((start, duration))
     return ranges
 
 

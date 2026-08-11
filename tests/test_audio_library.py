@@ -3521,14 +3521,18 @@ class GpuTranscriberTests(unittest.TestCase):
         mlx_audio_utils.load_model.assert_called_once_with(pinned[2])
         self.assertEqual(joint_model.generate.call_count, 2)
 
-    def test_joint_speaker_chunking_prefers_latest_tmk_boundary(self) -> None:
+    def test_joint_speaker_chunking_is_bounded_and_prefers_tmk_boundary(self) -> None:
         self.assertEqual(
             audio_library.mlx_speaker_chunk_ranges(
-                [1800.0, 3600.0, 5300.0, 7200.0], 8000.0
+                [250.0, 550.0], 620.0
             ),
-            [(0.0, 5300.0), (5300.0, 8000.0)],
+            [(0.0, 250.0), (250.0, 550.0), (550.0, 620.0)],
         )
-        self.assertEqual(audio_library.mlx_speaker_chunk_ranges([300.0], 5400.0), [])
+        self.assertEqual(
+            audio_library.mlx_speaker_chunk_ranges([], 620.0),
+            [(0.0, 300.0), (300.0, 600.0), (600.0, 620.0)],
+        )
+        self.assertEqual(audio_library.mlx_speaker_chunk_ranges([300.0], 600.0), [])
 
     def test_speaker_transcript_groups_consecutive_turns_in_one_file(self) -> None:
         self.assertEqual(
