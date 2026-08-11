@@ -561,6 +561,29 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Upload processing failed"})
 
     @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_uses_safe_fallback_filename_with_backslashes(self, mock_convert_file):
+        mock_convert_file.return_value = []
+
+        response = saas_web.shrink_media_batch(
+            BackgroundTasks(),
+            files=[
+                SimpleNamespace(
+                    filename="..\\..\\windows.ini",
+                    content_type="audio/wav",
+                    file=io.BytesIO(b"dummy"),
+                )
+            ],
+            target_bytes=10000,
+        )
+
+        archive = zipfile.ZipFile(response.path)
+        manifest = json.loads(archive.read("results.json"))
+        self.assertEqual(manifest["results"][0]["filename"], "windows.ini")
+        self.assertEqual(
+            mock_convert_file.call_args.kwargs["source"].name, "windows.ini"
+        )
+
+    @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_batch_uses_safe_fallback_filename(self, mock_convert_file):
         mock_convert_file.return_value = []
 
