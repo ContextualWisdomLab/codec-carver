@@ -72,7 +72,7 @@ jobs:
           # Atheris 3.1 supports CPython 3.11-3.14; this bounded fuzz lane uses 3.12.
           python-version: "3.12"
       - name: Install Atheris
-        run: pip install --require-hashes --only-binary=:all: -r fuzz/requirements-fuzz.txt
+        run: "python -m pip install --require-hashes --only-binary=:all: -r fuzz/requirements-fuzz.txt"
       - name: Select time budget
         id: budget
         run: |
