@@ -130,6 +130,8 @@ def main() -> int:
     parser.add_argument("--search-seconds", type=float, default=20.0)
     parser.add_argument("--min-silence-seconds", type=float, default=0.35)
     args = parser.parse_args()
+    if not math.isfinite(args.duration_seconds) or args.duration_seconds <= 0.0:
+        raise SystemExit("--duration-seconds must be finite and positive")
     nominal_result, fixed_measurement = _measure_planner(
         lambda: audio_library.automatic_mlx_chunk_ranges(args.duration_seconds),
         args.duration_seconds,
