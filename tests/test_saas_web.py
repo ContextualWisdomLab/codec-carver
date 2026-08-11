@@ -57,7 +57,9 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("Total file size exceeds ' + limitText + ' limit.", html)
         self.assertIn("preview.style.color = '#0f6674';", html)
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
-        self.assertIn("['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)", html)
+        self.assertIn("e.target instanceof Element", html)
+        self.assertIn("e.target.closest('input, button, label')", html)
+        self.assertNotIn("['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)", html)
         self.assertIn("fileInput.click();", html)
 
     def test_security_headers_present_without_plain_http_hsts(self):

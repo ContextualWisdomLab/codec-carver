@@ -394,7 +394,7 @@ HTML_TEMPLATE = """
             }
         }, false);
         dropZone.addEventListener('click', (e) => {
-            if (['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+            if (!(e.target instanceof Element) || e.target.closest('input, button, label')) return;
             fileInput.click();
         });
         if (batchDropZone) {
@@ -407,7 +407,7 @@ HTML_TEMPLATE = """
                 }
             }, false);
             batchDropZone.addEventListener('click', (e) => {
-                if (['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+                if (!(e.target instanceof Element) || e.target.closest('input, button, label')) return;
                 batchFileInput.click();
             });
         }
