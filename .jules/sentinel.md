@@ -1,7 +1,7 @@
-## 2026-07-25 - [Sentinel: Path Traversal/Zip Slip in Uploaded Filenames via Backslashes]
-**Vulnerability:** Path traversal (Zip Slip) vulnerability due to incomplete filename sanitization on POSIX servers (CWE-22 / CWE-29).
-**Learning:** On POSIX systems, `pathlib.Path(filename).name` does not treat backslashes (`\`) as directory separators. A client can supply a filename like `..\..\windows.ini`, bypassing the intended basename extraction and potentially allowing path traversal or overwriting files during extraction if the resulting filename is used to create an archive.
-**Prevention:** Explicitly normalize directory separators by replacing all backslashes with forward slashes (`filename.replace('\\', '/')`) before passing the string to path manipulation libraries like `pathlib.Path().name`.
+## 2026-07-25 - [Cross-platform upload basename normalization]
+**Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
+**Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
+**Prevention:** Normalize client path separators before extracting a basename, retain the existing empty/`.`/`..` fallback, and test the persisted source name and manifest metadata. Treat the normalization as cross-platform consistency and defense in depth, not as evidence of a demonstrated Zip Slip exploit.
 
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
