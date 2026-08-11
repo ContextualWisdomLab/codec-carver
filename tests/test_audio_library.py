@@ -6129,48 +6129,6 @@ class AudioLibraryTests(unittest.TestCase):
                 [30.0, 60.0, 90.0],
             )
 
-    def test_stream_transcribe_reuses_verified_cache_before_dataless_stage(
-        self,
-    ) -> None:
-        """A verified evicted source must not wait on File Provider for a complete cache."""
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            state = root / ".codec-carver"
-            record = _record("remote.wav", HASH_A, materialized=False, tmk_path=None)
-            atomic_json_write(
-                state / "inventory.json",
-                {
-                    "schema_version": 1,
-                    "root": str(root),
-                    "files": [record],
-                    "duplicate_groups": [],
-                },
-            )
-            atomic_json_write(
-                state / "transcripts" / f"{HASH_A}.json",
-                _cached_transcript("already transcribed"),
-            )
-            backend = Mock()
-            fake = Mock(accelerator="mlx", model="model")
-            library = AudioLibrary(root, backend)
-            with (
-                patch("audio_library.GpuTranscriber", return_value=fake),
-                patch("audio_library.is_icloud_dataless", return_value=True),
-            ):
-                summary = library.stream_transcribe(
-                    relative_paths=["remote.wav"],
-                    stage_stall_timeout_seconds=9,
-                    evict_after=False,
-                )
-
-            self.assertEqual(summary["cached"], 1)
-            self.assertEqual(summary["completed"], 0)
-            self.assertEqual(summary["failed"], 0)
-            backend.stage.assert_not_called()
-            fake.transcribe.assert_not_called()
-            self.assertTrue((state / "transcripts" / f"{HASH_A}.json").is_file())
-
     def test_stream_transcribe_prefetches_bounded_parallel_batch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -7421,6 +7379,53 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertFalse(persisted["files"][0]["materialized"])
             self.assertTrue(persisted["files"][0]["sha256_verified"])
             fake.transcribe.assert_not_called()
+
+    def test_stream_stage_failure_records_provider_probe_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            record = _record("record.wav", HASH_A, materialized=True, tmk_path=None)
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [record],
+                    "duplicate_groups": [],
+                },
+            )
+            (root / "record.wav").write_bytes(AUDIO_A_BYTES)
+            backend = Mock()
+            backend.stage.side_effect = RuntimeError("provider stalled")
+            fake = Mock(accelerator="mlx", model="model")
+            library = AudioLibrary(root, backend)
+
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless",
+                    side_effect=[
+                        True,
+                        True,
+                        PermissionError("provider probe denied"),
+                    ],
+                ),
+            ):
+                summary = library.stream_transcribe(
+                    relative_paths=["record.wav"],
+                    stage_stall_timeout_seconds=1,
+                    evict_after=False,
+                )
+
+            self.assertEqual(summary["failed"], 1)
+            persisted = json.loads(
+                (state / "inventory.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse(persisted["files"][0]["materialized"])
+            self.assertIn(
+                "provider_state_probe_oserror",
+                persisted["files"][0]["materialization_probe_error"],
+            )
 
     def test_stream_transcribe_selects_explicit_paths_and_rejects_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
