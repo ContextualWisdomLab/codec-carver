@@ -93,6 +93,13 @@ preferred interface for recording curation.
 - Mutation planning fails closed when SHA-256 or transcripts are unresolved;
   an explicit deferred mode changes only ready recordings and serializes every
   untouched source path instead of fabricating a transcript description.
+- If a readable source still reports the macOS File Provider `dataless` bit,
+  mutation planning performs one fresh Rust stage into private scratch and
+  verifies the complete staged SHA-256 before authorizing a rename or quarantine.
+  The short-lived proof descriptor is closed immediately; it never rewrites the
+  inventory's live `materialized` flag and does not replace Rust's source recheck
+  during apply. A missing source, placeholder-only hash, provider stall, or
+  staged-byte mismatch remains deferred.
 - Rust parses standardized timestamps and optional location components
   idempotently. Python archives prior inventories. An executed mutation journal
   restores SHA-256 identity continuity because Rust checked the source before

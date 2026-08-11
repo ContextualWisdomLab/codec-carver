@@ -8531,13 +8531,37 @@ class AudioLibrary:
         return staged_artifact
 
     def _record_ready_for_mutation(self, record: dict[str, Any]) -> bool:
-        """Require current local bytes; persisted hashes never authorize mutation."""
+        """Require current bytes; stage stale File Provider sources before mutation."""
 
         source = self.root / record["path"]
         if source.is_file() and not is_icloud_dataless(source):
             self._verify_materialized_record(record)
             return True
-        return False
+        # File Provider can leave the macOS dataless bit set after the complete
+        # logical file is already readable. A persisted digest alone must never
+        # authorize a rename or quarantine, but a fresh Rust stage gives us the
+        # same content-bound proof used by GPU inference without changing the
+        # inventory's live materialization flag. Keep this path fail-closed: a
+        # missing source, placeholder-only hash, provider stall, or staged-byte
+        # mismatch simply defers the recording and its TMK sidecar.
+        if not source.is_file() or not record_sha_is_verified(record):
+            return False
+        artifact: VerifiedStagedArtifact | None = None
+        try:
+            artifact = self._stage_materialized_record(
+                record,
+                timeout_seconds=DEFAULT_STAGE_STALL_TIMEOUT_SECONDS,
+            )
+            artifact.verify_unchanged()
+            return True
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            return False
+        finally:
+            if artifact is not None:
+                try:
+                    artifact.close()
+                except OSError:
+                    pass
 
     def _validate_mutation_plan(self) -> dict[str, Any]:
         """Reject a tampered plan before it reaches even a mocked/native backend."""

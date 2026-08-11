@@ -9811,6 +9811,47 @@ class CliTests(unittest.TestCase):
             self.assertEqual(plan["operations"], [])
             self.assertEqual(plan["deferred_paths"], ["canonical.wav", "duplicate.wav"])
 
+    def test_mutation_readiness_stages_readable_stale_dataless_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "record.wav"
+            source.write_bytes(AUDIO_A_BYTES)
+            record = _record("record.wav", HASH_A, materialized=False)
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {"record.wav": HASH_A})
+
+            with patch("audio_library.is_icloud_dataless", return_value=True):
+                self.assertTrue(library._record_ready_for_mutation(record))
+
+            backend.stage.assert_called_once_with(
+                library.root,
+                "record.wav",
+                library.staging_dir,
+                timeout_seconds=audio_library.DEFAULT_STAGE_STALL_TIMEOUT_SECONDS,
+            )
+            self.assertTrue(record["sha256_verified"])
+            self.assertEqual(record["sha256_source"], "content")
+            self.assertFalse(record["materialized"])
+            self.assertEqual(list(library.staging_dir.iterdir()), [])
+
+    def test_mutation_readiness_defers_stale_dataless_stage_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "record.wav"
+            source.write_bytes(AUDIO_A_BYTES)
+            record = _record("record.wav", HASH_A, materialized=False)
+            backend = Mock()
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {"record.wav": HASH_B})
+
+            with patch("audio_library.is_icloud_dataless", return_value=True):
+                self.assertFalse(library._record_ready_for_mutation(record))
+
+            self.assertFalse(record["sha256_verified"])
+            self.assertIn("staged", record["error"])
+            self.assertEqual(list(library.staging_dir.iterdir()), [])
+
     def test_security_boundaries_defer_audio_without_any_sha(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
