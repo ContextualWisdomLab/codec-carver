@@ -15,10 +15,10 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt as UnixMetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 #[cfg(target_os = "macos")]
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt as MacosMetadataExt;
@@ -833,6 +833,42 @@ fn request_icloud_download(path: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
+fn run_fileprovider_evaluate(path: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut child = Command::new("/usr/bin/fileproviderctl")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .arg("evaluate")
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let output = child.wait_with_output().ok()?;
+                return Some((output.stdout, output.stderr));
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn provider_reports_downloaded(path: &Path) -> Option<bool> {
     fn flag(output: &str, key: &str) -> Option<bool> {
         output.lines().find_map(|line| {
@@ -848,15 +884,9 @@ fn provider_reports_downloaded(path: &Path) -> Option<bool> {
         })
     }
 
-    let output = Command::new("/usr/bin/fileproviderctl")
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-        .arg("evaluate")
-        .arg(path)
-        .output()
-        .ok()?;
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    let (stdout, stderr) = run_fileprovider_evaluate(path)?;
+    let mut text = String::from_utf8_lossy(&stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&stderr));
     Some(
         flag(&text, "isDownloaded")?
             && flag(&text, "isMostRecentVersionDownloaded")?

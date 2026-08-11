@@ -67,6 +67,11 @@ preferred interface for recording curation.
   `read_mode=coordinated_icloud`. This does not rely on the undocumented and
   ineffective-on-current-macOS `brctl download` command; materialized files
   retain the direct fast path.
+- The macOS `fileproviderctl evaluate` probe is also bounded to ten seconds and
+  requires a successful child exit before its flags are parsed. A timeout,
+  abnormal exit, or non-zero status is treated as unknown provider state and
+  fails closed into the Foundation-coordinated path; it cannot turn a stale
+  dataless read into an unbounded wait.
 - Python monitors the Rust PID-specific partial file. Its 420-second stall
   deadline resets on every size change, bounding a stuck File Provider without
   terminating a large source that is still copying and hashing normally. A
