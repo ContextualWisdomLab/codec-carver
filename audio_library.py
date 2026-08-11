@@ -76,6 +76,9 @@ TRUSTED_CHILD_ENV_KEYS = (
 DEFAULT_PREFETCH_MAX_BYTES = 512 * 1024 * 1024
 DEFAULT_STAGE_STALL_TIMEOUT_SECONDS = 420
 STAGE_TOTAL_TIMEOUT_MULTIPLIER = 4
+STAGE_READ_MODES = frozenset(
+    {"materialized", "direct_read_stale_dataless_flag", "coordinated_icloud"}
+)
 MACOS_SF_DATALESS = 0x40000000
 MACOS_F_GETPATH = 50
 MACOS_PATH_MAX = 1024
@@ -7300,6 +7303,9 @@ class AudioLibrary:
                             **tmk_chunk_hint,
                         }
                     )
+                    stage_read_mode = record.get("stage_read_mode")
+                    if stage_read_mode is not None:
+                        result["stage_read_mode"] = stage_read_mode
                     provenance = result.get("segmentation_provenance")
                     if not isinstance(provenance, dict):
                         provenance = (
@@ -7356,6 +7362,8 @@ class AudioLibrary:
                             "sha256": sha256,
                         }
                     )
+                    if stage_read_mode is not None:
+                        provenance_source["stage_read_mode"] = stage_read_mode
                     provenance_tmk = provenance.setdefault("tmk", {})
                     provenance_tmk.update(
                         {
@@ -9102,6 +9110,11 @@ def verify_staged_artifact(
         verified = dict(inspected)
         verified["sha256"] = actual_sha256
         verified["size_bytes"] = size_bytes
+        read_mode = staged.get("read_mode")
+        if read_mode is not None:
+            if not isinstance(read_mode, str) or read_mode not in STAGE_READ_MODES:
+                raise ValueError(f"backend stage read mode is invalid: {read_mode!r}")
+            verified["stage_read_mode"] = read_mode
         os.lseek(file_fd, 0, os.SEEK_SET)
         handle = os.fdopen(file_fd, "rb")
         file_fd = None

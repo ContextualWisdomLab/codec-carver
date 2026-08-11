@@ -9066,6 +9066,7 @@ class CliTests(unittest.TestCase):
                     "sha256": HASH_A,
                     "size_bytes": len(AUDIO_A_BYTES),
                 },
+                "read_mode": "direct_read_stale_dataless_flag",
             }
             with self.assertRaisesRegex(ValueError, "response must be"):
                 audio_library.verify_staged_artifact(library.staging_dir, [])
@@ -9079,6 +9080,13 @@ class CliTests(unittest.TestCase):
                     library.staging_dir,
                     {"staged_path": None, "record": {}},
                 )
+            candidate.write_bytes(AUDIO_A_BYTES)
+            invalid_mode_stage = {**stage, "read_mode": "unknown"}
+            with self.assertRaisesRegex(ValueError, "read mode is invalid"):
+                audio_library.verify_staged_artifact(
+                    library.staging_dir, invalid_mode_stage
+                )
+            self.assertFalse(candidate.exists())
 
             candidate.write_bytes(AUDIO_A_BYTES)
             user_id = os.geteuid()
@@ -9197,6 +9205,10 @@ class CliTests(unittest.TestCase):
 
             candidate.write_bytes(AUDIO_A_BYTES)
             artifact = audio_library.verify_staged_artifact(library.staging_dir, stage)
+            self.assertEqual(
+                artifact.record["stage_read_mode"],
+                "direct_read_stale_dataless_flag",
+            )
             real_fstat = os.fstat
 
             def report_changed_after_handoff(descriptor):

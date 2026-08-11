@@ -18,6 +18,9 @@ preferred interface for recording curation.
 - Every supported audio and TMK file has a full SHA-256 value when its bytes are
   locally available.
 - A macOS iCloud `dataless` placeholder is reported, not opened indefinitely.
+  File Provider can leave that flag stale after the logical bytes are already
+  readable; Rust therefore records whether staging used a materialized read,
+  a secure direct read through the stale flag, or coordinated iCloud access.
 - Low-disk runs process one remote recording at a time. Rust streams the iCloud
   source into system scratch while hashing the same byte stream, GPU inference
   reads that local stage, and the stage is deleted after the checkpoint.
@@ -53,12 +56,17 @@ preferred interface for recording curation.
   ranges remain authoritative whenever they exist.
 - Streaming order is based on the live macOS dataless flag rather than stale
   inventory state, so locally resident audio reaches the GPU before iCloud work.
-- Before a dataless stage, Rust calls Foundation's supported
+- Before a dataless stage, Rust first tries the same component-by-component,
+  `O_NOFOLLOW` descriptor read used for a local source. This avoids a
+  `realpath(3)`/File Provider wait when the dataless bit is stale and accepts
+  the path only after the complete advertised byte count is copied. The stage
+  JSON exposes `read_mode=direct_read_stale_dataless_flag` for this case. If
+  that read is unavailable or incomplete, Rust calls Foundation's supported
   `FileManager.startDownloadingUbiquitousItem` API and coordinates the read with
-  `NSFileCoordinator`. The copy-and-hash runs inside the coordinated accessor,
-  which keeps the current File Provider domain's download request active. This
-  does not rely on the undocumented and ineffective-on-current-macOS
-  `brctl download` command; materialized files retain the direct fast path.
+  `NSFileCoordinator`; the stage then reports
+  `read_mode=coordinated_icloud`. This does not rely on the undocumented and
+  ineffective-on-current-macOS `brctl download` command; materialized files
+  retain the direct fast path.
 - Python monitors the Rust PID-specific partial file. Its 420-second stall
   deadline resets on every size change, bounding a stuck File Provider without
   terminating a large source that is still copying and hashing normally. A
@@ -139,9 +147,11 @@ preferred interface for recording curation.
   requires exactly one link. Python confirms the name still identifies the
   opened inode, unlinks it, hashes the now-anonymous descriptor, and requires
   its real byte count and SHA-256 to match the backend record and any known
-  inventory digest. MLX decoding and CUDA transcription consume that retained
-  descriptor, so hardlinks and pathname replacement cannot change inference
-  input.
+  inventory digest. The optional Rust `read_mode` is validated and copied to
+  the transcript's `source.stage_read_mode` evidence; it does not overwrite
+  the provider's live materialization flag in the inventory. MLX decoding and
+  CUDA transcription consume that retained descriptor, so hardlinks and
+  pathname replacement cannot change inference input.
 - Rust opens every materialized audio path component with no-follow descriptors
   and the GPU consumes only a private copy hashed from that opened descriptor.
   Symlink swaps cannot redirect the GPU read after validation.
@@ -310,13 +320,13 @@ macOS dataless detection, filename/creation-time evidence, TMK decoding,
 duplicate grouping, and guarded filesystem changes. A single-file `inspect`
 command supports local single-file inspection. The `materialize` command
 validates one regular, non-symlink library child and queues Foundation's native
-iCloud download without waiting. The `stage` command handles an iCloud
-placeholder in one coordinated pass: Foundation materializes it while Rust
-writes local system scratch and calculates SHA-256 concurrently, verifies any
-existing staged content, and returns the scratch path plus the original file
-record. Already-local sources are opened component by component with `openat`,
-`O_NOFOLLOW`, and directory descriptors before that same single-pass
-copy-and-hash. The `evict` command releases local iCloud blocks with Foundation
+iCloud download without waiting. The `stage` command first probes the source
+through the component-by-component `openat`/`O_NOFOLLOW` path without
+canonicalizing the File Provider file itself. A complete read is copied to
+local scratch and hashed in one pass even when the provider's dataless bit is
+stale; otherwise Foundation materialization and `NSFileCoordinator` provide the
+coordinated path. The stage JSON returns the scratch path, source record, and
+the read mode used. The `evict` command releases local iCloud blocks with Foundation
 rather than a shell utility. A changed known hash stops transcription. Mutation
 execution opens and locks the library root, reopens and hashes each source
 through `openat`, traverses destination parents without following symlinks, and

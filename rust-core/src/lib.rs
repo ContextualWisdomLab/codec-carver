@@ -14,6 +14,8 @@ use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as UnixMetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -125,6 +127,21 @@ pub struct InventoryManifest {
 pub struct StageResult {
     pub record: FileRecord,
     pub staged_path: String,
+    /// How bytes were obtained when the source carried a stale dataless flag.
+    ///
+    /// This is deliberately kept outside `FileRecord`: the inventory still
+    /// reports the provider's materialization flag, while a stage operation
+    /// records the byte-read evidence used for GPU consumption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_mode: Option<StageReadMode>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageReadMode {
+    Materialized,
+    DirectReadStaleDatalessFlag,
+    CoordinatedIcloud,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -353,18 +370,16 @@ pub fn stage_relative(
         .with_context(|| format!("cannot resolve library root {}", root.display()))?;
     validate_existing_relative_path(&relative_path.to_string_lossy())?;
     let requested = canonical_root.join(relative_path);
-    let canonical_path = requested
-        .canonicalize()
-        .with_context(|| format!("cannot resolve library file {}", requested.display()))?;
-    if !canonical_path.starts_with(&canonical_root) {
-        bail!("library file escaped root: {}", canonical_path.display());
-    }
-    let (kind, extension) = classify(&canonical_path)
-        .ok_or_else(|| anyhow!("unsupported audio/TMK file: {}", canonical_path.display()))?;
-    let pending = pending_file(&canonical_root, &canonical_path, kind, extension.clone())?;
-
-    #[cfg(target_os = "macos")]
-    request_icloud_download_if_needed(&canonical_path, pending.materialized)?;
+    // Do not canonicalize the file itself here. On macOS a File Provider
+    // placeholder can block in `realpath(3)` while its data is already
+    // readable through an O_NOFOLLOW descriptor. The lexical path has already
+    // passed traversal validation, and the actual byte read below is secured
+    // by `open_regular_beneath`.
+    let _source_probe = open_regular_beneath(&canonical_root, relative_path)?;
+    drop(_source_probe);
+    let (kind, extension) = classify(&requested)
+        .ok_or_else(|| anyhow!("unsupported audio/TMK file: {}", requested.display()))?;
+    let pending = pending_file(&canonical_root, &requested, kind, extension.clone())?;
 
     let canonical_staging = prepare_staging_directory(staging_dir)?;
     let nonce = SystemTime::now()
@@ -377,21 +392,22 @@ pub fn stage_relative(
     ));
     let mut tmk_bytes = (kind == FileKind::Tmk)
         .then(|| Vec::with_capacity(pending.size_bytes.min(MAX_TMK_CAPTURE_BYTES as u64) as usize));
-    let sha256 = match copy_and_hash_staged_source(
+    let (sha256, read_mode) = match copy_and_hash_staged_source(
         &canonical_root,
         relative_path,
-        &canonical_path,
+        &requested,
         &partial,
         tmk_bytes.as_mut(),
         pending.materialized,
+        pending.size_bytes,
     ) {
-        Ok(hash) => hash,
+        Ok(value) => value,
         Err(error) => {
             let _ = fs::remove_file(&partial);
             return Err(error);
         }
     };
-    ensure_complete_stage(&canonical_path, &partial, pending.size_bytes)?;
+    ensure_complete_stage(&requested, &partial, pending.size_bytes)?;
     let normalized_relative: String = relative_path.to_string_lossy().nfc().collect();
     let source_key = format!("{:x}", Sha256::digest(normalized_relative.as_bytes()));
     let staged_path = canonical_staging.join(format!("{sha256}-{source_key}.{extension}"));
@@ -462,6 +478,7 @@ pub fn stage_relative(
             error: None,
         },
         staged_path: staged_path.to_string_lossy().nfc().collect(),
+        read_mode: Some(read_mode),
     })
 }
 
@@ -816,6 +833,38 @@ fn request_icloud_download(path: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
+fn provider_reports_downloaded(path: &Path) -> Option<bool> {
+    fn flag(output: &str, key: &str) -> Option<bool> {
+        output.lines().find_map(|line| {
+            let (_, value) = line.split_once('=')?;
+            if line[..line.find('=')?].trim() != key {
+                return None;
+            }
+            match value.trim().trim_end_matches(';') {
+                "0" => Some(false),
+                "1" => Some(true),
+                _ => None,
+            }
+        })
+    }
+
+    let output = Command::new("/usr/bin/fileproviderctl")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .arg("evaluate")
+        .arg(path)
+        .output()
+        .ok()?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    Some(
+        flag(&text, "isDownloaded")?
+            && flag(&text, "isMostRecentVersionDownloaded")?
+            && !flag(&text, "isDownloading")?,
+    )
+}
+
+#[cfg(target_os = "macos")]
 fn is_dataless(metadata: &fs::Metadata) -> bool {
     const SF_DATALESS: u32 = 0x4000_0000;
     metadata.st_flags() & SF_DATALESS != 0
@@ -985,21 +1034,56 @@ fn copy_and_hash_staged_source(
     relative_path: &Path,
     source: &Path,
     destination: &Path,
-    capture: Option<&mut Vec<u8>>,
+    mut capture: Option<&mut Vec<u8>>,
     materialized: bool,
-) -> Result<String> {
+    expected_size: u64,
+) -> Result<(String, StageReadMode)> {
     #[cfg(target_os = "macos")]
     if !materialized {
-        return coordinated_copy_and_hash_file(root, relative_path, source, destination, capture);
+        // File Provider can leave SF_DATALESS set after the bytes are readable
+        // (for example while its metadata is still reconciling). Try the same
+        // no-follow descriptor path first and accept it only when the complete
+        // advertised file size was copied; otherwise retain the coordinated
+        // iCloud path which can fetch genuinely remote bytes.
+        let direct_allowed = provider_reports_downloaded(source).unwrap_or_else(|| {
+            fs::metadata(source)
+                .map(|metadata| !is_dataless(&metadata))
+                .unwrap_or(false)
+        });
+        if direct_allowed {
+            let mut direct_capture = capture.as_ref().map(|_| Vec::new());
+            let direct_result = open_regular_beneath(root, relative_path).and_then(|input| {
+                copy_and_hash_open_file(input, destination, direct_capture.as_mut())
+            });
+            if let Ok(hash) = direct_result {
+                let copied = fs::metadata(destination)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or_default();
+                if copied == expected_size {
+                    if let Some(bytes) = direct_capture
+                        && let Some(target) = capture.as_mut()
+                    {
+                        **target = bytes;
+                    }
+                    return Ok((hash, StageReadMode::DirectReadStaleDatalessFlag));
+                }
+            }
+            let _ = fs::remove_file(destination);
+        }
+        request_icloud_download_if_needed(source, false)?;
+        let hash =
+            coordinated_copy_and_hash_file(root, relative_path, source, destination, capture)?;
+        return Ok((hash, StageReadMode::CoordinatedIcloud));
     }
 
     #[cfg(not(target_os = "macos"))]
-    let _ = (materialized, source);
+    let _ = (materialized, source, expected_size);
     copy_and_hash_open_file(
         open_regular_beneath(root, relative_path)?,
         destination,
         capture,
     )
+    .map(|hash| (hash, StageReadMode::Materialized))
 }
 
 #[cfg(target_os = "macos")]
@@ -2156,8 +2240,10 @@ mod tests {
         assert!(open_regular_beneath(&root, Path::new("target")).is_err());
         assert!(inspect_relative(&root, Path::new("linked.wav")).is_err());
         assert!(stage_relative(&root, Path::new("linked.wav"), &staging).is_err());
-        assert!(!staging.join("linked.wav.partial").exists());
-        fs::remove_dir(&staging).unwrap();
+        assert!(!staging.exists() || !staging.join("linked.wav.partial").exists());
+        if staging.exists() {
+            fs::remove_dir(&staging).unwrap();
+        }
         symlink(&target, &staging).unwrap();
         let staging_error = stage_relative(&root, Path::new("target/audio.wav"), &staging)
             .unwrap_err()
@@ -2269,6 +2355,7 @@ mod tests {
             result.record.sha256.as_deref(),
             Some("6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b")
         );
+        assert_eq!(result.read_mode, Some(StageReadMode::Materialized));
         assert_eq!(fs::read(&result.staged_path).unwrap(), b"audio");
         let repeated = stage_relative(&root, Path::new("240102_0304.wav"), &staging).unwrap();
         assert_eq!(repeated.staged_path, result.staged_path);
@@ -2328,6 +2415,7 @@ mod tests {
         assert_eq!(tmk.record.tmk_marker_count, Some(2));
         assert_eq!(tmk.record.tmk_last_marker_seconds, Some(62.5));
         assert_eq!(tmk.record.tmk_markers_seconds, Some(vec![1.25, 62.5]));
+        assert_eq!(tmk.read_mode, Some(StageReadMode::Materialized));
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -2742,15 +2830,17 @@ mod tests {
 
         let coordinated = root.join("coordinated.wav");
         let mut captured = Vec::new();
-        let hash = copy_and_hash_staged_source(
+        let (hash, read_mode) = copy_and_hash_staged_source(
             &root,
             Path::new("local.wav"),
             &local_file,
             &coordinated,
             Some(&mut captured),
             false,
+            5,
         )
         .unwrap();
+        assert_eq!(read_mode, StageReadMode::DirectReadStaleDatalessFlag);
         assert_eq!(
             hash,
             "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b"
