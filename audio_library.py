@@ -6993,7 +6993,49 @@ class AudioLibrary:
                     tmk_chunk_hint = {}
                 tmk_status_counts[tmk_status] += 1
                 known_sha256 = record.get("sha256")
-                if was_dataless:
+                # A verified content SHA binds an evicted placeholder to an
+                # immutable transcript cache.  Reuse a complete cache before
+                # asking File Provider to materialize the source again.  This
+                # is intentionally limited to verified records: a filename
+                # or metadata-only SHA must never be treated as audio bytes.
+                cache_hit_before_stage = False
+                sha256: str | None = None
+                transcript_path: Path | None = None
+                text_path: Path | None = None
+                cached_transcript = None
+                if was_dataless and known_sha256 and record_sha_is_verified(record):
+                    try:
+                        sha256 = validate_sha256(known_sha256)
+                    except (TypeError, ValueError):
+                        sha256 = None
+                    else:
+                        transcript_path = safe_transcript_path(transcript_dir, sha256)
+                        text_path = safe_transcript_path(transcript_dir, sha256, ".txt")
+                        cached_transcript = read_optional_private_json(transcript_path)
+                        cache_hit_before_stage = transcript_cache_matches_record(
+                            record,
+                            cached_transcript,
+                            accelerator=transcriber.accelerator,
+                            model=transcriber.model,
+                            model_revision=vars(transcriber).get("model_revision"),
+                            requested_language=config.language,
+                            require_word_timestamps=config.word_timestamps,
+                            require_speaker_diarization=config.speaker_diarization,
+                            speaker_policy_version=(
+                                SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                                if config.speaker_diarization
+                                else None
+                            ),
+                        )
+                if cache_hit_before_stage:
+                    # Keep the persisted content identity and TMK evidence
+                    # untouched; the cache is already the durable outcome.
+                    pending_cache_stage = prefetch_futures.pop(record["path"], None)
+                    if pending_cache_stage is not None:
+                        pending_cache_stage.cancel()
+                    cached += 1
+                    status = "cached"
+                elif was_dataless:
                     preserved_tmk = {
                         "tmk_path": record.get("tmk_path"),
                         "tmk_marker_count": record.get("tmk_marker_count"),
@@ -7067,11 +7109,12 @@ class AudioLibrary:
                     self._verify_materialized_record(
                         record, timeout_seconds=inspect_timeout_seconds
                     )
-                sha256 = validate_sha256(record["sha256"])
-                transcript_path = safe_transcript_path(transcript_dir, sha256)
-                text_path = safe_transcript_path(transcript_dir, sha256, ".txt")
-                cached_transcript = read_optional_private_json(transcript_path)
-                if transcript_cache_matches_record(
+                if not cache_hit_before_stage:
+                    sha256 = validate_sha256(record["sha256"])
+                    transcript_path = safe_transcript_path(transcript_dir, sha256)
+                    text_path = safe_transcript_path(transcript_dir, sha256, ".txt")
+                    cached_transcript = read_optional_private_json(transcript_path)
+                if not cache_hit_before_stage and transcript_cache_matches_record(
                     record,
                     cached_transcript,
                     accelerator=transcriber.accelerator,
@@ -7088,7 +7131,7 @@ class AudioLibrary:
                 ):
                     cached += 1
                     status = "cached"
-                else:
+                elif not cache_hit_before_stage:
                     if staged_audio is None:
                         staged_audio = self._stage_materialized_record(
                             record, timeout_seconds=inspect_timeout_seconds

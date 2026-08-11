@@ -46,6 +46,13 @@ preferred interface for recording curation.
   transcript sidecars idempotently.
 - `stream-transcribe` consumes only checkpointed TMK metadata. An unresolved
   sidecar is retained as `tmk_error` evidence and cannot block GPU audio work.
+- Before staging a dataless audio placeholder, Python may reuse a complete
+  SHA-keyed transcript sidecar when the inventory SHA is content-verified and
+  the accelerator, model revision, language, word-timestamp, and speaker
+  policy all match. This cache-first path never treats a metadata-only digest
+  as audio evidence, never hides a pending TMK state, and avoids an unnecessary
+  File Provider wait; an incomplete or mismatched cache still follows the
+  normal Rust stage and byte verification path.
 - On MLX, verified internal TMK offsets divide a long recording into bounded
   decode ranges with one-second overlap. The persistent pinned model processes
   those ranges serially on Metal; segment midpoint ownership removes overlap

@@ -301,6 +301,11 @@ unavailable.
 `stream-transcribe` is the low-disk iCloud mode: by default Rust streams one
 remote file to system scratch while calculating SHA-256, Metal/CUDA transcribes
 that local stage, and Python atomically checkpoints before removing the stage.
+If a remote placeholder already has a content-verified SHA-256 and a complete
+matching transcript sidecar (including the pinned speaker-diarization policy),
+Python reuses that cache before requesting File Provider materialization. A
+metadata-only or runtime-mismatched cache never bypasses Rust staging, and the
+sidecar's pending/unavailable TMK evidence remains intact.
 The default selection order keeps already-materialized recordings ahead of
 remote placeholders for throughput. Add `--oldest-first` when lineage work must
 select the globally earliest `recorded_at` across nested directories before
