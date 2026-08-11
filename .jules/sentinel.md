@@ -1,10 +1,14 @@
+## 2026-08-11 - [Sentinel: Hardcoded Bind to 0.0.0.0 in Development Server]
+**Vulnerability:** Network Exposure (CWE-200) via hardcoded bind address `0.0.0.0`.
+**Learning:** Binding a development server to `0.0.0.0` exposes it to all network interfaces, potentially bypassing firewalls intended to restrict access to localhost only.
+**Prevention:** In production or development environments, services should bind to `127.0.0.1` unless explicitly intended to be publicly accessible. Use environment variables to configure host and port dynamically.
 ## 2026-08-10 - [Sentinel: Uncontrolled Resource Consumption in Job Cleanup]
 **Vulnerability:** Resource Exhaustion (CWE-400 / CWE-770) via unretrieved job results.
 **Learning:** When successful jobs only clean up their temporary directories upon result download, an attacker can intentionally create jobs and abandon them to exhaust disk space or inodes over time.
 **Prevention:** Implement an automatic cleanup mechanism (like a background sweep or TTL) for jobs that complete but are never retrieved.
 ## 2026-07-28 - [Sentinel: Windows Path Traversal in Uploads]
 **Vulnerability:** Path Traversal (CWE-22) via Windows path separators in filenames.
-**Learning:** Python's POSIX path handling does not treat `\` as a directory separator. The upload boundary therefore normalizes separators with `filename.replace("\\", "/")` before applying `Path(...).name`; downstream processing does not reinterpret backslashes, so an input such as `..\..\etc\passwd` is reduced to the basename `passwd` under `input_dir`.
+**Learning:** Python`s `Path(file.filename).name` on POSIX systems does not recognize `\` as a directory separator, allowing attackers to upload files containing backslashes (e.g., `..\..\etc\passwd`) that escape intended directories.
 **Prevention:** Explicitly sanitize filenames by replacing all backslashes with forward slashes (`filename.replace("\\", "/")`) before applying `Path().name`.
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
