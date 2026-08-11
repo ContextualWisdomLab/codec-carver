@@ -260,10 +260,11 @@ evidence-backed description when present and retains the deterministic extractor
 as a no-model failure-safe.
 `review-description` provides the corresponding bounded correction path for a
 reviewer who has inspected the full transcript. It accepts only a SHA-verified
-MLX transcript with word timestamps and a pinned transcription revision, copies
-the exact selected segment text and time ranges into an owner-only evidence
-record, and validates the central idea, outcome, and title against those
-passages before replacing an automatic title. The review never edits raw
+MLX transcript with word timestamps or joint speaker-segment timestamps and a
+pinned transcription revision, copies the exact selected segment text and time
+ranges into an owner-only evidence record, and validates the central idea,
+outcome, and title against those passages before replacing an automatic title.
+The review never edits raw
 transcript text. Review-time compound clauses may add Korean grammatical
 particles only when at least three transcript-derived semantic terms remain in
 the same filename token. Incomplete connective clauses and pronoun-only

@@ -7414,7 +7414,7 @@ class CliTests(unittest.TestCase):
             inspect_timeout_seconds=14_400,
         )
 
-    def test_review_description_binds_title_to_gpu_word_timestamp_evidence(
+    def test_review_description_binds_title_to_gpu_timestamp_evidence(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7536,6 +7536,40 @@ class CliTests(unittest.TestCase):
                 HASH_A,
             )
 
+            speaker_transcript = {
+                **stored,
+                "word_timestamps": False,
+                "speaker_diarization": True,
+                "segments": [
+                    {
+                        key: value
+                        for key, value in segment.items()
+                        if key != "words"
+                    }
+                    | {"speaker_id": "S01"}
+                    for segment in stored["segments"]
+                ],
+            }
+            atomic_json_write(transcript_path, speaker_transcript)
+            speaker_summary = library.review_description(
+                relative_path="meeting.wav",
+                title=title,
+                central_idea=central_idea,
+                outcome=outcome,
+                source_segment_ids=[1, 2, 3, 4],
+                confidence="high",
+            )
+            self.assertFalse(speaker_summary["word_timestamps"])
+            self.assertTrue(speaker_summary["speaker_segment_timestamps"])
+            reviewed_speaker = json.loads(transcript_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                reviewed_speaker[
+                    audio_library.MANUAL_REVIEW_EVIDENCE_FIELD
+                ]["method"],
+                audio_library.MANUAL_REVIEW_SEGMENT_EVIDENCE_METHOD,
+            )
+            atomic_json_write(transcript_path, stored)
+
             inventory_path = state / "inventory.json"
             inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
             inventory["files"][1]["sha256_verified"] = False
@@ -7592,7 +7626,7 @@ class CliTests(unittest.TestCase):
 
             assert_invalid_transcript({"accelerator": "cpu"}, "MLX transcript")
             assert_invalid_transcript(
-                {"word_timestamps": False}, "GPU word timestamps"
+                {"word_timestamps": False}, "GPU word or speaker segment timestamps"
             )
             assert_invalid_transcript({"model": ""}, "transcript model")
             assert_invalid_transcript(

@@ -99,6 +99,9 @@ REPETITIVE_BACKGROUND_DESCRIPTION = "반복배경음만이어지고-유의미한
 MANUAL_DESCRIPTION_SOURCE = "manual_transcript_context_review"
 MANUAL_REVIEW_EVIDENCE_FIELD = "filename_description_reviewed_evidence"
 MANUAL_REVIEW_EVIDENCE_METHOD = "manual_review_of_mlx_word_timestamps"
+MANUAL_REVIEW_SEGMENT_EVIDENCE_METHOD = (
+    "manual_review_of_mlx_speaker_segment_timestamps"
+)
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COPY_SUFFIX_RE = re.compile(r"(?i)(?:\s*\(\d+\)|\s+\d+)$")
 TMK_CHUNK_HINT_FIELDS = (
@@ -4391,7 +4394,10 @@ def validated_manual_review_grounding(transcript: dict[str, Any]) -> str:
     evidence = transcript.get(MANUAL_REVIEW_EVIDENCE_FIELD)
     if not isinstance(evidence, dict) or evidence.get("schema_version") not in {1, 2}:
         raise ValueError("manual review evidence must use schema version 1 or 2")
-    if evidence.get("method") != MANUAL_REVIEW_EVIDENCE_METHOD:
+    if evidence.get("method") not in {
+        MANUAL_REVIEW_EVIDENCE_METHOD,
+        MANUAL_REVIEW_SEGMENT_EVIDENCE_METHOD,
+    }:
         raise ValueError("manual review evidence method is unsupported")
     evidence_model = evidence.get("model")
     evidence_revision = evidence.get("model_revision")
@@ -6436,9 +6442,14 @@ class AudioLibrary:
         validate_transcript_record_identity(record, transcript)
         if transcript.get("accelerator") != "mlx":
             raise ValueError("manual description review requires an MLX transcript")
-        if transcript.get("word_timestamps") is not True:
+        uses_word_timestamps = transcript.get("word_timestamps") is True
+        uses_speaker_segment_timestamps = (
+            transcript.get("speaker_diarization") is True
+        )
+        if not uses_word_timestamps and not uses_speaker_segment_timestamps:
             raise ValueError(
-                "manual description review requires GPU word timestamps"
+                "manual description review requires GPU word or speaker segment "
+                "timestamps"
             )
         model = transcript.get("model")
         revision = transcript.get("model_revision")
@@ -6475,19 +6486,37 @@ class AudioLibrary:
                 raise ValueError(
                     f"review source segment is not an object: {source_id}"
                 )
-            words = segment.get("words")
-            if not isinstance(words, list) or not any(
-                isinstance(word, dict)
-                and isinstance(word.get("start"), (int, float))
-                and not isinstance(word.get("start"), bool)
-                and isinstance(word.get("end"), (int, float))
-                and not isinstance(word.get("end"), bool)
-                and flatten_semantic_evidence_text(word.get("word", ""))
-                for word in words
-            ):
-                raise ValueError(
-                    f"review source segment lacks timestamped words: {source_id}"
-                )
+            if uses_word_timestamps:
+                words = segment.get("words")
+                if not isinstance(words, list) or not any(
+                    isinstance(word, dict)
+                    and isinstance(word.get("start"), (int, float))
+                    and not isinstance(word.get("start"), bool)
+                    and isinstance(word.get("end"), (int, float))
+                    and not isinstance(word.get("end"), bool)
+                    and flatten_semantic_evidence_text(word.get("word", ""))
+                    for word in words
+                ):
+                    raise ValueError(
+                        f"review source segment lacks timestamped words: {source_id}"
+                    )
+            else:
+                try:
+                    normalized_segment = normalize_segment(segment)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"review source speaker segment is invalid: {source_id}"
+                    ) from exc
+                if (
+                    not normalized_segment["text"]
+                    or not re.fullmatch(
+                        r"(?:C\d{3}_)?S\d+",
+                        str(normalized_segment.get("speaker_id", "")),
+                    )
+                ):
+                    raise ValueError(
+                        f"review source speaker segment is invalid: {source_id}"
+                    )
             evidence_items.append(
                 {
                     "start": segment.get("start"),
@@ -6499,7 +6528,11 @@ class AudioLibrary:
 
         reviewed_evidence = {
             "schema_version": 1,
-            "method": MANUAL_REVIEW_EVIDENCE_METHOD,
+            "method": (
+                MANUAL_REVIEW_EVIDENCE_METHOD
+                if uses_word_timestamps
+                else MANUAL_REVIEW_SEGMENT_EVIDENCE_METHOD
+            ),
             "model": model,
             "model_revision": revision,
             "items": evidence_items,
@@ -6559,7 +6592,8 @@ class AudioLibrary:
             "tmk_marker_count": record.get("tmk_marker_count"),
             "transcript_model": model,
             "transcript_model_revision": revision,
-            "word_timestamps": True,
+            "word_timestamps": uses_word_timestamps,
+            "speaker_segment_timestamps": uses_speaker_segment_timestamps,
             "source_segment_ids": selected_source_ids,
             "title": reviewed_title,
             "central_idea": semantic.central_idea,

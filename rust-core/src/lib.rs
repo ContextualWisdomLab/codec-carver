@@ -1268,9 +1268,16 @@ fn infer_location(filename: &str) -> Option<String> {
     let stem = Path::new(filename).file_stem()?.to_string_lossy();
     if STANDARD_TIME_RE.is_match(&stem) {
         let components: Vec<&str> = stem.split("__").collect();
-        return (components.len() >= 4
+        if components.len() >= 4
             && components.last()?.starts_with("sha256-")
-            && !components[1].is_empty())
+            && !components[1].is_empty()
+        {
+            return Some(components[1].to_string());
+        }
+        return (components.len() == 3
+            && !components[1].is_empty()
+            && !components[2].starts_with("sha256-")
+            && ADDRESS_RE.is_match(components[1]))
         .then(|| components[1].to_string());
     }
     let candidates: Vec<String> = stem
@@ -2677,6 +2684,10 @@ mod tests {
         assert_eq!(
             infer_location("2024-01-02_03-04-05__양평동4가-24-1__회의__sha256-aaaaaaaaaaaa.wav"),
             Some("양평동4가-24-1".to_string())
+        );
+        assert_eq!(
+            infer_location("2024-01-02_03-04-05__양평동4가__회의.m4a"),
+            Some("양평동4가".to_string())
         );
         assert_eq!(
             infer_location("2024-01-02_03-04-05__양평동4가-회의__sha256-aaaaaaaaaaaa.wav"),
