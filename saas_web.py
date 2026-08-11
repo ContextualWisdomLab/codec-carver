@@ -191,6 +191,7 @@ HTML_TEMPLATE = """
             <button type="submit" id="submit-btn">Upload and Shrink</button>
         </form>
         <script>
+        function initializeUi() {
             const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
             function formatBinaryBytes(value) {
                 const units = ['B', 'KiB', 'MiB', 'GiB'];
@@ -410,6 +411,14 @@ HTML_TEMPLATE = """
                 if (!(e.target instanceof Element) || e.target.closest('input, button, label')) return;
                 batchFileInput.click();
             });
+        }
+        window.updateFileSizePreview = updateFileSizePreview;
+        window.updateBatchFilePreview = updateBatchFilePreview;
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeUi, { once: true });
+        } else {
+            initializeUi();
         }
         </script>
     </div>

@@ -62,6 +62,21 @@ class TestSaasWeb(unittest.TestCase):
         self.assertNotIn("['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)", html)
         self.assertIn("fileInput.click();", html)
 
+    def test_get_ui_defers_listener_setup_until_batch_markup_exists(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+
+        self.assertIn("function initializeUi()", html)
+        self.assertIn("if (document.readyState === 'loading')", html)
+        self.assertIn(
+            "document.addEventListener('DOMContentLoaded', initializeUi, { once: true });",
+            html,
+        )
+        self.assertIn("initializeUi();", html)
+        self.assertIn("window.updateFileSizePreview = updateFileSizePreview;", html)
+        self.assertIn("window.updateBatchFilePreview = updateBatchFilePreview;", html)
+
     def test_security_headers_present_without_plain_http_hsts(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
