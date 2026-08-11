@@ -1069,9 +1069,32 @@ fn copy_and_hash_staged_source(
     relative_path: &Path,
     source: &Path,
     destination: &Path,
+    capture: Option<&mut Vec<u8>>,
+    materialized: bool,
+    expected_size: u64,
+) -> Result<(String, StageReadMode)> {
+    copy_and_hash_staged_source_with_provider_report(
+        root,
+        relative_path,
+        source,
+        destination,
+        capture,
+        materialized,
+        expected_size,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_and_hash_staged_source_with_provider_report(
+    root: &Path,
+    relative_path: &Path,
+    source: &Path,
+    destination: &Path,
     mut capture: Option<&mut Vec<u8>>,
     materialized: bool,
     expected_size: u64,
+    provider_report_override: Option<bool>,
 ) -> Result<(String, StageReadMode)> {
     #[cfg(target_os = "macos")]
     if !materialized {
@@ -1080,7 +1103,9 @@ fn copy_and_hash_staged_source(
         // no-follow descriptor path first and accept it only when the complete
         // advertised file size was copied; otherwise retain the coordinated
         // iCloud path which can fetch genuinely remote bytes.
-        let direct_allowed = provider_allows_direct_read(provider_reports_downloaded(source));
+        let provider_report =
+            provider_report_override.or_else(|| provider_reports_downloaded(source));
+        let direct_allowed = provider_allows_direct_read(provider_report);
         if direct_allowed {
             let mut direct_capture = capture.as_ref().map(|_| Vec::new());
             let direct_result = open_regular_beneath(root, relative_path).and_then(|input| {
@@ -1108,7 +1133,12 @@ fn copy_and_hash_staged_source(
     }
 
     #[cfg(not(target_os = "macos"))]
-    let _ = (materialized, source, expected_size);
+    let _ = (
+        materialized,
+        source,
+        expected_size,
+        provider_report_override,
+    );
     copy_and_hash_open_file(
         open_regular_beneath(root, relative_path)?,
         destination,
@@ -2868,7 +2898,7 @@ mod tests {
 
         let coordinated = root.join("coordinated.wav");
         let mut captured = Vec::new();
-        let (hash, read_mode) = copy_and_hash_staged_source(
+        let (hash, read_mode) = copy_and_hash_staged_source_with_provider_report(
             &root,
             Path::new("local.wav"),
             &local_file,
@@ -2876,6 +2906,7 @@ mod tests {
             Some(&mut captured),
             false,
             5,
+            Some(true),
         )
         .unwrap();
         assert_eq!(read_mode, StageReadMode::DirectReadStaleDatalessFlag);
