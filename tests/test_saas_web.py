@@ -561,6 +561,32 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Upload processing failed"})
 
     @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_uses_safe_fallback_filename_with_backslashes(self, mock_convert_file):
+        mock_convert_file.return_value = []
+
+        response = saas_web.shrink_media_batch(
+            BackgroundTasks(),
+            files=[
+                SimpleNamespace(
+                    filename="..\\..\\windows.ini",
+                    content_type="audio/wav",
+                    file=io.BytesIO(b"dummy"),
+                )
+            ],
+            target_bytes=10000,
+        )
+
+        try:
+            with zipfile.ZipFile(response.path) as archive:
+                manifest = json.loads(archive.read("results.json"))
+            self.assertEqual(manifest["results"][0]["filename"], "windows.ini")
+            self.assertEqual(
+                mock_convert_file.call_args.kwargs["source"].name, "windows.ini"
+            )
+        finally:
+            saas_web.cleanup_temp_dir(Path(response.path).parent)
+
+    @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_batch_uses_safe_fallback_filename(self, mock_convert_file):
         mock_convert_file.return_value = []
 
@@ -576,13 +602,15 @@ class TestShrinkBatch(unittest.TestCase):
             target_bytes=10000,
         )
 
-        archive = zipfile.ZipFile(response.path)
-        manifest = json.loads(archive.read("results.json"))
-        self.assertEqual(manifest["results"][0]["filename"], "upload.tmp")
-        self.assertEqual(
-            mock_convert_file.call_args.kwargs["source"].name, "upload.tmp"
-        )
-        saas_web.cleanup_temp_dir(Path(response.path).parent)
+        try:
+            with zipfile.ZipFile(response.path) as archive:
+                manifest = json.loads(archive.read("results.json"))
+            self.assertEqual(manifest["results"][0]["filename"], "upload.tmp")
+            self.assertEqual(
+                mock_convert_file.call_args.kwargs["source"].name, "upload.tmp"
+            )
+        finally:
+            saas_web.cleanup_temp_dir(Path(response.path).parent)
 
     def test_get_ui_includes_batch_upload_form(self):
         response = client.get("/")
