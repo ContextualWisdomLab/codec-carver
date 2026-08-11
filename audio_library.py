@@ -87,6 +87,10 @@ AUTOMATIC_MLX_CHUNK_SECONDS = 300.0
 AUTOMATIC_MLX_CHUNK_MIN_DURATION_SECONDS = 600.0
 SPEAKER_TRANSCRIPTION_POLICY_VERSION = 2
 TRANSCRIPTION_CHECKPOINT_SCHEMA_VERSION = 1
+SEGMENTATION_PROVENANCE_SCHEMA_VERSION = 1
+DEFAULT_VAD_BOUNDARY_SEARCH_SECONDS = 20.0
+DEFAULT_VAD_MIN_SILENCE_SECONDS = 0.35
+DEFAULT_VAD_NOISE_DB = -35.0
 PORTABLE_FILENAME_NFD_UTF8_MAX_BYTES = 255
 PORTABLE_LOCATION_NFD_UTF8_MAX_BYTES = 72
 EXPLAINED_EMPTY_TRANSCRIPT_FLAGS = frozenset(
@@ -486,6 +490,13 @@ class TranscriptionConfig:
     language: str | None = "ko"
     word_timestamps: bool = False
     speaker_diarization: bool = False
+    # A VAD pass is opt-in because it decodes the source once before inference.
+    # When enabled, it only moves resource/checkpoint boundaries to a nearby
+    # natural silence; model timestamps remain the semantic boundaries.
+    vad_aware_boundaries: bool = False
+    vad_boundary_search_seconds: float = DEFAULT_VAD_BOUNDARY_SEARCH_SECONDS
+    vad_min_silence_seconds: float = DEFAULT_VAD_MIN_SILENCE_SECONDS
+    vad_noise_db: float = DEFAULT_VAD_NOISE_DB
 
 
 @dataclass
@@ -1253,7 +1264,9 @@ class GpuTranscriber:
         self.model = config.model or (
             DEFAULT_MLX_SPEAKER_MODEL
             if accelerator == "mlx" and config.speaker_diarization
-            else DEFAULT_MLX_MODEL if accelerator == "mlx" else DEFAULT_CUDA_MODEL
+            else DEFAULT_MLX_MODEL
+            if accelerator == "mlx"
+            else DEFAULT_CUDA_MODEL
         )
         if config.speaker_diarization and self.model != DEFAULT_MLX_SPEAKER_MODEL:
             raise ValueError(
@@ -1334,6 +1347,11 @@ class GpuTranscriber:
         audio_source: Path | VerifiedStagedArtifact,
         *,
         tmk_markers_seconds: Any = None,
+        source_sha256: str | None = None,
+        source_path: str | None = None,
+        tmk_status: str = "not_present",
+        tmk_sha256: str | None = None,
+        vad_silence_intervals: Any = None,
         completed_chunks: Any = None,
         chunk_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
@@ -1341,6 +1359,48 @@ class GpuTranscriber:
 
         started = time.perf_counter()
         duration_seconds = audio_duration_seconds(audio_source)
+        marker_values = canonical_tmk_markers(tmk_markers_seconds)
+        if marker_values and tmk_status == "not_present":
+            # Direct API callers that provide a verified marker vector without
+            # the inventory wrapper still get truthful provenance.
+            tmk_status = "verified"
+        if tmk_status not in {
+            "verified",
+            "tmk_unavailable",
+            "tmk_pending_materialization",
+            "not_present",
+        }:
+            raise ValueError(f"unsupported TMK status: {tmk_status}")
+        if tmk_sha256 is not None:
+            tmk_sha256 = validate_sha256(tmk_sha256, label="TMK SHA-256")
+        vad_shifts: list[dict[str, float]] = []
+        vad_status = "disabled"
+        if self.config.vad_aware_boundaries:
+            if vad_silence_intervals is not None:
+                vad_status = "provided"
+            elif (
+                not marker_values
+                and duration_seconds is not None
+                and duration_seconds > AUTOMATIC_MLX_CHUNK_MIN_DURATION_SECONDS
+            ):
+                try:
+                    vad_silence_intervals = detect_silence_intervals(
+                        audio_source,
+                        noise_db=self.config.vad_noise_db,
+                        min_silence_seconds=self.config.vad_min_silence_seconds,
+                    )
+                    vad_status = "detected"
+                except Exception:
+                    # VAD is an optimization and evidence source, never a hard
+                    # dependency.  Keep fixed resource checkpoints resumable.
+                    vad_silence_intervals = []
+                    vad_status = "unavailable"
+            else:
+                vad_status = "skipped_tmk_or_short"
+        nominal_chunk_ranges: list[tuple[float, float]] = []
+        inference_chunk_ranges: list[tuple[float, float]] = []
+        tmk_ranges: list[tuple[float, float]] = []
+        automatic_ranges: list[tuple[float, float]] = []
         minimum_duration = (
             MIN_MLX_SPEAKER_TRANSCRIBABLE_SECONDS
             if self._mlx_speaker_model is not None
@@ -1364,6 +1424,37 @@ class GpuTranscriber:
                 "quality_flags": ["too_short_for_reliable_speech"],
                 "elapsed_seconds": round(time.perf_counter() - started, 3),
             }
+            result["segmentation_provenance"] = build_segmentation_provenance(
+                source_sha256=source_sha256,
+                source_path=source_path,
+                duration_seconds=duration_seconds,
+                tmk_status=tmk_status,
+                tmk_sha256=tmk_sha256,
+                tmk_markers_seconds=marker_values,
+                checkpoint_strategy="single_pass",
+                checkpoint_ranges=[],
+                inference_ranges=[],
+                final_ranges=[],
+                overlap_seconds=TMK_CHUNK_OVERLAP_SECONDS,
+                vad_enabled=self.config.vad_aware_boundaries,
+                vad_config={
+                    "status": vad_status,
+                    "search_seconds": self.config.vad_boundary_search_seconds,
+                    "min_silence_seconds": self.config.vad_min_silence_seconds,
+                    "noise_db": self.config.vad_noise_db,
+                },
+                speaker_policy_version=(
+                    SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                    if self._mlx_speaker_model is not None
+                    else None
+                ),
+                speaker_model=self.model
+                if self._mlx_speaker_model is not None
+                else None,
+                speaker_model_revision=(
+                    self.model_revision if self._mlx_speaker_model is not None else None
+                ),
+            )
             if self._mlx_speaker_model is not None:
                 result.update(
                     {
@@ -1380,10 +1471,23 @@ class GpuTranscriber:
             return result
         resumed_chunks: list[dict[str, Any]] = []
         if self._mlx_speaker_model is not None:
-            marker_values = canonical_tmk_markers(tmk_markers_seconds)
             chunk_ranges = mlx_speaker_chunk_ranges(marker_values, duration_seconds)
             tmk_ranges = chunk_ranges if marker_values else []
             automatic_ranges = [] if marker_values else chunk_ranges
+            nominal_chunk_ranges = list(chunk_ranges)
+            if (
+                automatic_ranges
+                and self.config.vad_aware_boundaries
+                and vad_silence_intervals is not None
+            ):
+                chunk_ranges, vad_shifts = refine_checkpoint_ranges_at_silence(
+                    chunk_ranges,
+                    vad_silence_intervals,
+                    search_seconds=self.config.vad_boundary_search_seconds,
+                    min_silence_seconds=self.config.vad_min_silence_seconds,
+                )
+                automatic_ranges = chunk_ranges
+            inference_chunk_ranges = list(chunk_ranges)
 
             def normalize_joint_segments(
                 raw_segments: Any,
@@ -1409,10 +1513,7 @@ class GpuTranscriber:
                         or not math.isfinite(end)
                         or start < 0.0
                         or end < start
-                        or (
-                            decoded_seconds is not None
-                            and end > decoded_seconds + 1.0
-                        )
+                        or (decoded_seconds is not None and end > decoded_seconds + 1.0)
                     ):
                         continue
                     speaker = str(raw_segment.get("speaker_id") or "S00")
@@ -1518,8 +1619,28 @@ class GpuTranscriber:
                             {
                                 "chunk_index": chunk_index,
                                 "chunk_total": len(chunk_ranges),
+                                "nominal_start_seconds": (
+                                    nominal_chunk_ranges[chunk_index][0]
+                                    if nominal_chunk_ranges
+                                    else logical_start
+                                ),
+                                "nominal_end_seconds": (
+                                    nominal_chunk_ranges[chunk_index][1]
+                                    if nominal_chunk_ranges
+                                    else logical_end
+                                ),
                                 "logical_start_seconds": logical_start,
                                 "logical_end_seconds": logical_end,
+                                "inference_start_seconds": logical_start,
+                                "inference_end_seconds": logical_end,
+                                "overlap_seconds": TMK_CHUNK_OVERLAP_SECONDS,
+                                "boundary_source": (
+                                    "tmk_markers"
+                                    if tmk_ranges
+                                    else "vad_silence_refined"
+                                    if vad_shifts
+                                    else "fixed_duration_fallback"
+                                ),
                                 "language": language,
                                 "segments": accepted_chunk,
                                 "text": chunk_text,
@@ -1554,6 +1675,20 @@ class GpuTranscriber:
                 [] if tmk_ranges else automatic_mlx_chunk_ranges(duration_seconds)
             )
             chunk_ranges = tmk_ranges or automatic_ranges
+            nominal_chunk_ranges = list(chunk_ranges)
+            if (
+                automatic_ranges
+                and self.config.vad_aware_boundaries
+                and vad_silence_intervals is not None
+            ):
+                chunk_ranges, vad_shifts = refine_checkpoint_ranges_at_silence(
+                    chunk_ranges,
+                    vad_silence_intervals,
+                    search_seconds=self.config.vad_boundary_search_seconds,
+                    min_silence_seconds=self.config.vad_min_silence_seconds,
+                )
+                automatic_ranges = chunk_ranges
+            inference_chunk_ranges = list(chunk_ranges)
 
             def infer(decoded_audio: Any) -> dict[str, Any]:
                 """Run the already-loaded MLX model with deterministic settings."""
@@ -1637,8 +1772,28 @@ class GpuTranscriber:
                             {
                                 "chunk_index": chunk_index,
                                 "chunk_total": len(chunk_ranges),
+                                "nominal_start_seconds": (
+                                    nominal_chunk_ranges[chunk_index][0]
+                                    if nominal_chunk_ranges
+                                    else logical_start
+                                ),
+                                "nominal_end_seconds": (
+                                    nominal_chunk_ranges[chunk_index][1]
+                                    if nominal_chunk_ranges
+                                    else logical_end
+                                ),
                                 "logical_start_seconds": logical_start,
                                 "logical_end_seconds": logical_end,
+                                "inference_start_seconds": logical_start,
+                                "inference_end_seconds": logical_end,
+                                "overlap_seconds": TMK_CHUNK_OVERLAP_SECONDS,
+                                "boundary_source": (
+                                    "tmk_markers"
+                                    if tmk_ranges
+                                    else "vad_silence_refined"
+                                    if vad_shifts
+                                    else "fixed_duration_fallback"
+                                ),
                                 "language": raw.get("language"),
                                 "segments": accepted_chunk,
                                 "text": chunk_text,
@@ -1700,6 +1855,14 @@ class GpuTranscriber:
             language = getattr(info, "language", None)
         if isinstance(audio_source, VerifiedStagedArtifact):
             audio_source.verify_unchanged()
+        original_segment_count = len(segments)
+        segments = reconcile_transcript_segments(
+            segments, overlap_seconds=TMK_CHUNK_OVERLAP_SECONDS
+        )
+        if len(segments) != original_segment_count:
+            # Preserve decoder fallback text for chunks that had no timestamped
+            # segment, while removing only the duplicate boundary emissions.
+            text = trusted_transcript_text(segments, fallback=text)
         quality_flags = transcript_quality_flags(
             {
                 "text": text,
@@ -1736,6 +1899,50 @@ class GpuTranscriber:
             "quality_flags": quality_flags,
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         }
+        checkpoint_strategy = (
+            "tmk_markers"
+            if tmk_ranges
+            else "fixed_duration"
+            if automatic_ranges
+            else "single_pass"
+        )
+        result["segmentation_provenance"] = build_segmentation_provenance(
+            source_sha256=source_sha256,
+            source_path=source_path,
+            duration_seconds=duration_seconds,
+            tmk_status=tmk_status,
+            tmk_sha256=tmk_sha256,
+            tmk_markers_seconds=marker_values,
+            checkpoint_strategy=checkpoint_strategy,
+            checkpoint_ranges=nominal_chunk_ranges,
+            inference_ranges=inference_chunk_ranges,
+            final_ranges=inference_chunk_ranges,
+            overlap_seconds=TMK_CHUNK_OVERLAP_SECONDS,
+            vad_enabled=self.config.vad_aware_boundaries,
+            vad_config={
+                "status": vad_status,
+                "search_seconds": self.config.vad_boundary_search_seconds,
+                "min_silence_seconds": self.config.vad_min_silence_seconds,
+                "noise_db": self.config.vad_noise_db,
+            },
+            vad_shifts=vad_shifts,
+            reconciliation={
+                "status": "deduplicated"
+                if len(segments) != original_segment_count
+                else "no_duplicates",
+                "input_segment_count": original_segment_count,
+                "output_segment_count": len(segments),
+            },
+            speaker_policy_version=(
+                SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                if self._mlx_speaker_model is not None
+                else None
+            ),
+            speaker_model=self.model if self._mlx_speaker_model is not None else None,
+            speaker_model_revision=(
+                self.model_revision if self._mlx_speaker_model is not None else None
+            ),
+        )
         if self._mlx_speaker_model is not None:
             speakers = {
                 segment["speaker_id"]
@@ -1960,6 +2167,492 @@ def canonical_tmk_markers(markers: Any) -> list[float]:
     return sorted(set(values))
 
 
+def _canonical_ranges(value: Any) -> list[tuple[float, float]]:
+    """Return finite, ordered ranges suitable for provenance JSON."""
+
+    if not isinstance(value, (list, tuple)):
+        return []
+    ranges: list[tuple[float, float]] = []
+    for raw in value:
+        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+            continue
+        try:
+            start, end = float(raw[0]), float(raw[1])
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(start) and math.isfinite(end) and 0.0 <= start < end:
+            ranges.append((round(start, 6), round(end, 6)))
+    return ranges
+
+
+def refine_checkpoint_ranges_at_silence(
+    ranges: list[tuple[float, float]] | Any,
+    silence_intervals: Any,
+    *,
+    search_seconds: float = DEFAULT_VAD_BOUNDARY_SEARCH_SECONDS,
+    min_silence_seconds: float = DEFAULT_VAD_MIN_SILENCE_SECONDS,
+) -> tuple[list[tuple[float, float]], list[dict[str, float]]]:
+    """Move nominal checkpoint cuts to nearby silence without changing ownership.
+
+    The returned ranges are still resource/inference windows.  A model segment's
+    timestamp, not a fixed duration or a VAD cut, remains the semantic boundary.
+    This pure helper makes the VAD policy deterministic and testable; the optional
+    ffmpeg VAD adapter only has to provide ``(start, end)`` silence intervals.
+    """
+
+    nominal = _canonical_ranges(ranges)
+    if len(nominal) < 2:
+        return nominal, []
+    if (
+        isinstance(search_seconds, bool)
+        or not isinstance(search_seconds, (int, float))
+        or not math.isfinite(float(search_seconds))
+        or float(search_seconds) < 0.0
+    ):
+        raise ValueError("VAD boundary search must be finite and non-negative")
+    if (
+        isinstance(min_silence_seconds, bool)
+        or not isinstance(min_silence_seconds, (int, float))
+        or not math.isfinite(float(min_silence_seconds))
+        or float(min_silence_seconds) <= 0.0
+    ):
+        raise ValueError("VAD minimum silence must be finite and positive")
+    silences: list[tuple[float, float]] = []
+    for raw in (
+        silence_intervals if isinstance(silence_intervals, (list, tuple)) else []
+    ):
+        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+            continue
+        try:
+            start, end = float(raw[0]), float(raw[1])
+        except (TypeError, ValueError):
+            continue
+        if (
+            math.isfinite(start)
+            and math.isfinite(end)
+            and 0.0 <= start < end
+            and end - start >= float(min_silence_seconds)
+        ):
+            silences.append((start, end))
+    silences.sort()
+    if not silences or float(search_seconds) == 0.0:
+        return nominal, []
+
+    boundaries = [end for _, end in nominal[:-1]]
+    refined: list[float] = []
+    shifts: list[dict[str, float]] = []
+    previous = nominal[0][0]
+    for index, boundary in enumerate(boundaries):
+        candidates = [
+            (abs(((start + end) / 2.0) - boundary), start, end)
+            for start, end in silences
+            if boundary - float(search_seconds) <= end
+            and start <= boundary + float(search_seconds)
+        ]
+        chosen = min(candidates, default=None)
+        candidate_boundary = boundary
+        if chosen is not None:
+            _, start, end = chosen
+            # Use the middle of a nearby silence.  Clamping keeps a very long
+            # silence from moving the cut outside the configured search window.
+            midpoint = (start + end) / 2.0
+            candidate_boundary = min(
+                boundary + float(search_seconds),
+                max(boundary - float(search_seconds), midpoint),
+            )
+        left = candidate_boundary - previous
+        right = nominal[-1][1] - candidate_boundary
+        if left < MIN_TRANSCRIBABLE_SECONDS or right < MIN_TRANSCRIBABLE_SECONDS:
+            candidate_boundary = boundary
+        refined.append(candidate_boundary)
+        if not math.isclose(candidate_boundary, boundary, abs_tol=1e-6):
+            shifts.append(
+                {
+                    "nominal_seconds": round(boundary, 6),
+                    "actual_seconds": round(candidate_boundary, 6),
+                    "shift_seconds": round(candidate_boundary - boundary, 6),
+                }
+            )
+        previous = candidate_boundary
+    final_ranges: list[tuple[float, float]] = []
+    start = nominal[0][0]
+    for end in [*refined, nominal[-1][1]]:
+        if end <= start:
+            return nominal, []
+        final_ranges.append((round(start, 6), round(end, 6)))
+        start = end
+    return final_ranges, shifts
+
+
+def reconcile_transcript_segments(
+    segments: Any, *, overlap_seconds: float = TMK_CHUNK_OVERLAP_SECONDS
+) -> list[dict[str, Any]]:
+    """Remove only timestamped duplicate boundary emissions.
+
+    Repeated words separated in time are retained.  A duplicate must have the
+    same normalized text and substantial timestamp overlap, which also handles
+    chunk-local speaker IDs that legitimately differ after a boundary.
+    """
+
+    normalized = [
+        normalize_segment(segment)
+        for segment in segments
+        if isinstance(segment, dict) and str(segment.get("text", "")).strip()
+    ]
+    normalized.sort(key=lambda item: (item["start"], item["end"], item["text"]))
+    reconciled: list[dict[str, Any]] = []
+    for candidate in normalized:
+        candidate_text = re.sub(r"\s+", " ", candidate["text"]).casefold()
+        duplicate_index: int | None = None
+        for index in range(max(0, len(reconciled) - 8), len(reconciled)):
+            previous = reconciled[index]
+            previous_text = re.sub(r"\s+", " ", previous["text"]).casefold()
+            if candidate_text != previous_text:
+                continue
+            overlap = max(
+                0.0,
+                min(candidate["end"], previous["end"])
+                - max(candidate["start"], previous["start"]),
+            )
+            shorter = min(
+                max(0.001, candidate["end"] - candidate["start"]),
+                max(0.001, previous["end"] - previous["start"]),
+            )
+            if overlap / shorter >= 0.5 or (
+                overlap_seconds > 0.0
+                and abs(candidate["start"] - previous["start"]) <= overlap_seconds
+                and overlap > 0.0
+            ):
+                duplicate_index = index
+                break
+        if duplicate_index is None:
+            reconciled.append(candidate)
+            continue
+        previous = reconciled[duplicate_index]
+        # Keep the richer timestamp evidence, then retain the earliest start.
+        candidate_score = (
+            len(candidate.get("words", [])),
+            candidate["end"] - candidate["start"],
+        )
+        previous_score = (
+            len(previous.get("words", [])),
+            previous["end"] - previous["start"],
+        )
+        if candidate_score > previous_score:
+            reconciled[duplicate_index] = candidate
+    reconciled.sort(key=lambda item: (item["start"], item["end"]))
+    return reconciled
+
+
+def build_segmentation_provenance(
+    *,
+    source_sha256: str | None,
+    source_path: str | None,
+    duration_seconds: float | None,
+    tmk_status: str,
+    tmk_sha256: str | None,
+    tmk_markers_seconds: Any,
+    checkpoint_strategy: str,
+    checkpoint_ranges: Any,
+    inference_ranges: Any,
+    final_ranges: Any,
+    overlap_seconds: float,
+    vad_enabled: bool = False,
+    vad_config: dict[str, Any] | None = None,
+    vad_shifts: Any = None,
+    reconciliation: dict[str, Any] | None = None,
+    speaker_policy_version: int | None = None,
+    speaker_model: str | None = None,
+    speaker_model_revision: str | None = None,
+) -> dict[str, Any]:
+    """Create one auditable boundary model shared by partial and final state."""
+
+    allowed_statuses = {
+        "verified",
+        "tmk_unavailable",
+        "tmk_pending_materialization",
+        "not_present",
+    }
+    if tmk_status not in allowed_statuses:
+        raise ValueError(f"unsupported TMK status: {tmk_status}")
+    markers = canonical_tmk_markers(tmk_markers_seconds)
+    nominal = [list(item) for item in _canonical_ranges(checkpoint_ranges)]
+    inference = [list(item) for item in _canonical_ranges(inference_ranges)]
+    final = [list(item) for item in _canonical_ranges(final_ranges)]
+    provenance = {
+        "schema_version": SEGMENTATION_PROVENANCE_SCHEMA_VERSION,
+        # Flattened aliases make the sidecar easy to query without losing the
+        # typed source/TMK/VAD/inference/checkpoint/final/speaker submodels.
+        "source_sha256": source_sha256,
+        "tmk_status": tmk_status,
+        "tmk_sha256": tmk_sha256,
+        "segmentation_strategy": checkpoint_strategy,
+        "boundary_source": (
+            "tmk_markers"
+            if checkpoint_strategy == "tmk_markers"
+            else "fixed_duration_fallback"
+            if checkpoint_strategy == "fixed_duration"
+            else "single_pass"
+        ),
+        "nominal_checkpoint_boundaries": nominal,
+        "inference_boundaries": inference,
+        "final_boundaries": final,
+        "overlap_seconds": round(float(overlap_seconds), 6),
+        "source": {
+            "path": source_path,
+            "sha256": source_sha256,
+            "duration_seconds": (
+                round(float(duration_seconds), 6)
+                if isinstance(duration_seconds, (int, float))
+                and math.isfinite(float(duration_seconds))
+                else None
+            ),
+        },
+        "tmk": {
+            "status": tmk_status,
+            "sha256": tmk_sha256,
+            "marker_count": len(markers),
+            "markers_seconds": markers,
+        },
+        "vad": {
+            "enabled": bool(vad_enabled),
+            "config": dict(vad_config or {}),
+            "boundary_shifts": [
+                dict(item) for item in (vad_shifts or []) if isinstance(item, dict)
+            ],
+        },
+        "inference": {
+            "boundary_source": "model_timestamps_midpoint_ownership",
+            "ranges": inference,
+        },
+        "checkpoint": {
+            "strategy": checkpoint_strategy,
+            "boundary_source": (
+                "tmk_markers"
+                if checkpoint_strategy == "tmk_markers"
+                else "fixed_duration_fallback"
+                if checkpoint_strategy == "fixed_duration"
+                else "single_pass"
+            ),
+            "nominal_ranges": nominal,
+            "overlap_seconds": round(float(overlap_seconds), 6),
+        },
+        "final": {
+            "ranges": final,
+            "segment_ownership": "midpoint",
+            "duplicate_policy": "timestamp_text_overlap_reconciliation",
+            "reconciliation": dict(reconciliation or {"status": "not_run"}),
+        },
+        "speaker": {
+            "boundary_source": "model_speaker_timestamps",
+            "policy_version": speaker_policy_version,
+            "model": speaker_model,
+            "model_revision": speaker_model_revision,
+            "continuity": "preserve_model_labels;_chunk_local_when_model_isolated",
+        },
+    }
+    return provenance
+
+
+def checkpoint_identity_matches(existing: Any, expected: dict[str, Any]) -> bool:
+    """Match new checkpoint identity while retaining safe legacy SHA checkpoints."""
+
+    if not isinstance(existing, dict):
+        return False
+    # New checkpoints must match every provenance field.  Older checkpoints did
+    # not carry the schema and are accepted when their stable runtime identity
+    # matches; this is what lets an interrupted 300-second fallback resume.
+    if "segmentation_provenance" in existing:
+        return all(existing.get(key) == value for key, value in expected.items())
+    legacy_keys = {
+        "schema_version",
+        "sha256",
+        "accelerator",
+        "model",
+        "model_revision",
+        "language",
+        "word_timestamps",
+        "speaker_diarization",
+        "speaker_transcription_policy_version",
+        "tmk_markers_seconds",
+        "chunking_strategy",
+        "automatic_chunk_seconds",
+    }
+    return all(
+        existing.get(key) == expected.get(key)
+        for key in legacy_keys
+        if key in existing or key in expected and key in {"schema_version", "sha256"}
+    ) and existing.get("sha256") == expected.get("sha256")
+
+
+def backfill_segmentation_provenance(
+    transcript: dict[str, Any],
+    *,
+    source_sha256: str,
+    source_path: str | None,
+    tmk_status: str,
+    tmk_sha256: str | None,
+    tmk_markers_seconds: Any,
+    vad_enabled: bool = False,
+    vad_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Upgrade a legacy final/partial sidecar without retranscribing audio."""
+
+    source_sha256 = validate_sha256(source_sha256, label="source SHA-256")
+    duration = transcript.get("duration_seconds")
+    duration = (
+        float(duration)
+        if isinstance(duration, (int, float))
+        and not isinstance(duration, bool)
+        and math.isfinite(float(duration))
+        and float(duration) > 0.0
+        else None
+    )
+    markers = canonical_tmk_markers(tmk_markers_seconds)
+    if markers and duration is not None:
+        ranges = tmk_chunk_ranges(markers, duration)
+        strategy = "tmk_markers" if ranges else "single_pass"
+    elif duration is not None:
+        ranges = automatic_mlx_chunk_ranges(duration)
+        strategy = "fixed_duration" if ranges else "single_pass"
+    else:
+        ranges = []
+        strategy = "single_pass"
+    existing = transcript.get("segmentation_provenance")
+    if isinstance(existing, dict):
+        provenance = existing
+        source_evidence = provenance.get("source")
+        if not isinstance(source_evidence, dict):
+            source_evidence = {}
+            provenance["source"] = source_evidence
+        source_evidence.update(
+            {"path": source_path, "sha256": source_sha256, "duration_seconds": duration}
+        )
+        tmk_evidence = provenance.get("tmk")
+        if not isinstance(tmk_evidence, dict):
+            tmk_evidence = {}
+            provenance["tmk"] = tmk_evidence
+        tmk_evidence.update(
+            {
+                "status": tmk_status,
+                "sha256": tmk_sha256,
+                "marker_count": len(markers),
+                "markers_seconds": markers,
+            }
+        )
+        provenance["source_sha256"] = source_sha256
+        provenance["tmk_status"] = tmk_status
+        provenance["tmk_sha256"] = tmk_sha256
+    else:
+        provenance = build_segmentation_provenance(
+            source_sha256=source_sha256,
+            source_path=source_path,
+            duration_seconds=duration,
+            tmk_status=tmk_status,
+            tmk_sha256=tmk_sha256,
+            tmk_markers_seconds=markers,
+            checkpoint_strategy=strategy,
+            checkpoint_ranges=ranges,
+            inference_ranges=ranges,
+            final_ranges=ranges,
+            overlap_seconds=TMK_CHUNK_OVERLAP_SECONDS,
+            vad_enabled=vad_enabled,
+            vad_config=vad_config,
+            reconciliation={
+                "status": "legacy_provenance_backfilled",
+                "retranscription": False,
+            },
+        )
+    transcript["segmentation_provenance"] = provenance
+    transcript["tmk_status"] = tmk_status
+    if tmk_sha256 is not None:
+        transcript["tmk_sha256"] = tmk_sha256
+    transcript["tmk_markers_seconds"] = tmk_markers_seconds
+    return transcript
+
+
+def reconcile_late_tmk(
+    transcript: dict[str, Any],
+    *,
+    tmk_sha256: str,
+    tmk_markers_seconds: Any,
+    duration_seconds: float,
+    overlap_seconds: float = TMK_CHUNK_OVERLAP_SECONDS,
+) -> dict[str, Any]:
+    """Compare a fallback checkpoint with newly verified TMK boundaries.
+
+    The result is a selective-reprocessing plan.  It never treats a TMK request
+    or a filename hint as verified evidence; callers must supply the content
+    SHA returned by the Rust inspect/hydrate path.
+    """
+
+    tmk_sha256 = validate_sha256(tmk_sha256, label="late TMK SHA-256")
+    markers = canonical_tmk_markers(tmk_markers_seconds)
+    if not markers:
+        raise ValueError("late TMK reconciliation requires at least one marker")
+    if (
+        isinstance(duration_seconds, bool)
+        or not isinstance(duration_seconds, (int, float))
+        or not math.isfinite(float(duration_seconds))
+        or duration_seconds <= 0.0
+    ):
+        raise ValueError("late TMK duration must be finite and positive")
+    new_ranges = tmk_chunk_ranges(markers, float(duration_seconds))
+    provenance = transcript.get("segmentation_provenance")
+    provenance = provenance if isinstance(provenance, dict) else {}
+    checkpoint = provenance.get("checkpoint")
+    checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+    old_ranges = _canonical_ranges(checkpoint.get("nominal_ranges"))
+    old_strategy = str(
+        checkpoint.get("strategy") or transcript.get("chunking_strategy") or ""
+    )
+    old_tmk = provenance.get("tmk")
+    old_tmk = old_tmk if isinstance(old_tmk, dict) else {}
+    old_tmk_sha256 = old_tmk.get("sha256") or transcript.get("tmk_sha256")
+    if old_strategy == "tmk_markers" and old_tmk_sha256 == tmk_sha256:
+        return {
+            "status": "no_change",
+            "action": "reuse",
+            "affected_chunk_indices": [],
+            "old_ranges": old_ranges,
+            "new_ranges": new_ranges,
+            "tmk_sha256": tmk_sha256,
+        }
+    if old_ranges == new_ranges and old_ranges:
+        status = "promoted_fallback"
+        affected: list[int] = []
+    else:
+        old_boundaries = {end for _, end in old_ranges[:-1]}
+        new_boundaries = {end for _, end in new_ranges[:-1]}
+        changed = old_boundaries.symmetric_difference(new_boundaries)
+        affected = []
+        for index, (start, end) in enumerate([*old_ranges, *new_ranges]):
+            if any(
+                start - overlap_seconds <= boundary <= end + overlap_seconds
+                for boundary in changed
+            ):
+                affected.append(index % max(1, len(new_ranges)))
+        if not affected:
+            affected = list(range(len(new_ranges)))
+        affected = sorted(set(affected))
+        status = "selective_reprocess_required"
+    return {
+        "status": status,
+        "action": "promote_fallback" if not affected else "reprocess_affected_chunks",
+        "affected_chunk_indices": affected,
+        "old_strategy": old_strategy or None,
+        "old_ranges": old_ranges,
+        "new_ranges": new_ranges,
+        "tmk_sha256": tmk_sha256,
+        "marker_count": len(markers),
+    }
+
+
+# Descriptive alias used by integrations that refer to the transcript sidecar
+# rather than the boundary plan.
+reconcile_tmk_transcript = reconcile_late_tmk
+
+
 def validated_completed_transcription_chunks(
     value: Any,
     chunk_ranges: list[tuple[float, float]],
@@ -1990,6 +2683,48 @@ def validated_completed_transcription_chunks(
             and math.isclose(stored_end, logical_end, abs_tol=1e-6)
         ):
             raise ValueError("completed transcription chunk boundaries changed")
+        for start_key, end_key in (
+            ("nominal_start_seconds", "nominal_end_seconds"),
+            ("inference_start_seconds", "inference_end_seconds"),
+        ):
+            if start_key not in raw and end_key not in raw:
+                continue
+            try:
+                extra_start = float(raw[start_key])
+                extra_end = float(raw[end_key])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "completed transcription chunk provenance range is invalid"
+                ) from exc
+            if not (
+                math.isfinite(extra_start)
+                and math.isfinite(extra_end)
+                and 0.0 <= extra_start < extra_end <= duration_seconds + 1e-6
+            ):
+                raise ValueError(
+                    "completed transcription chunk provenance range is invalid"
+                )
+        boundary_source = raw.get("boundary_source")
+        if boundary_source is not None and boundary_source not in {
+            "tmk_markers",
+            "fixed_duration_fallback",
+            "vad_silence_refined",
+            "single_pass",
+        }:
+            raise ValueError("completed transcription chunk boundary source is invalid")
+        if "overlap_seconds" in raw:
+            try:
+                overlap = float(raw["overlap_seconds"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "completed transcription chunk overlap is invalid"
+                ) from exc
+            if (
+                not math.isfinite(overlap)
+                or overlap < 0.0
+                or overlap > duration_seconds
+            ):
+                raise ValueError("completed transcription chunk overlap is invalid")
         raw_segments = raw.get("segments")
         if not isinstance(raw_segments, list):
             raise ValueError("completed transcription chunk segments must be a list")
@@ -2132,6 +2867,81 @@ def decode_audio_for_mlx(
     return mx.array(samples).flatten().astype(mx.float32) / 32768.0
 
 
+def detect_silence_intervals(
+    audio_source: Path | VerifiedStagedArtifact,
+    *,
+    noise_db: float = DEFAULT_VAD_NOISE_DB,
+    min_silence_seconds: float = DEFAULT_VAD_MIN_SILENCE_SECONDS,
+    timeout_seconds: float = 14_400,
+) -> list[tuple[float, float]]:
+    """Extract silence evidence once with the approved ffmpeg binary.
+
+    This is deliberately separate from model inference.  A failed optional VAD
+    pass never converts a checkpoint into a semantic boundary or blocks the GPU
+    queue; callers fall back to the model's own timestamp ownership policy.
+    """
+
+    if (
+        not isinstance(noise_db, (int, float))
+        or isinstance(noise_db, bool)
+        or not math.isfinite(float(noise_db))
+        or not isinstance(min_silence_seconds, (int, float))
+        or isinstance(min_silence_seconds, bool)
+        or not math.isfinite(float(min_silence_seconds))
+        or float(min_silence_seconds) <= 0.0
+    ):
+        raise ValueError("invalid silence detection configuration")
+    ffmpeg = trusted_ffmpeg_binary()
+    if ffmpeg is None:
+        raise GpuTranscriptionUnavailableError(
+            "VAD boundary refinement requires ffmpeg at an approved system path"
+        )
+    artifact = (
+        audio_source if isinstance(audio_source, VerifiedStagedArtifact) else None
+    )
+    media_input = str(artifact.path if artifact is not None else audio_source)
+    inherited_fds: tuple[int, ...] = ()
+    if artifact is not None:
+        descriptor = artifact.rewind().fileno()
+        media_input = f"/dev/fd/{descriptor}"
+        inherited_fds = (descriptor,)
+    command = [
+        str(ffmpeg),
+        "-nostdin",
+        "-i",
+        media_input,
+        "-af",
+        f"silencedetect=noise={float(noise_db):.2f}dB:d={float(min_silence_seconds):.3f}",
+        "-f",
+        "null",
+        "-",
+    ]
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        shell=False,
+        timeout=timeout_seconds,
+        env=trusted_child_environment(),
+        pass_fds=inherited_fds,
+    )
+    if artifact is not None:
+        artifact.verify_unchanged()
+    stderr = completed.stderr.decode("utf-8", errors="replace")
+    if completed.returncode != 0:
+        raise RuntimeError(f"approved ffmpeg silence detection failed: {stderr[-512:]}")
+    starts: list[float] = []
+    intervals: list[tuple[float, float]] = []
+    for match in re.finditer(r"silence_start: ([0-9]+(?:\.[0-9]+)?)", stderr):
+        starts.append(float(match.group(1)))
+    for match in re.finditer(r"silence_end: ([0-9]+(?:\.[0-9]+)?)", stderr):
+        end = float(match.group(1))
+        start = starts.pop(0) if starts else max(0.0, end - float(min_silence_seconds))
+        if end > start:
+            intervals.append((round(start, 6), round(end, 6)))
+    return intervals
+
+
 def transcript_cache_is_usable(transcript: Any) -> bool:
     """Reject unexplained empty results so fixed decoders can retry them once."""
 
@@ -2203,8 +3013,7 @@ def transcript_cache_matches_record(
         speakers = {
             segment.get("speaker_id")
             for segment in segments
-            if isinstance(segment, dict)
-            and isinstance(segment.get("speaker_id"), str)
+            if isinstance(segment, dict) and isinstance(segment.get("speaker_id"), str)
         }
         if len(speakers) != speaker_count:
             return False
@@ -2758,9 +3567,7 @@ def explicit_conclusion_evidence_ids(grounding_text: str) -> tuple[str, ...]:
     )
 
 
-def focused_conclusion_excerpt(
-    grounding_text: str, *, context_radius: int = 2
-) -> str:
+def focused_conclusion_excerpt(grounding_text: str, *, context_radius: int = 2) -> str:
     """Repeat explicit conclusions with nearby context for small-model attention."""
 
     segments = contextual_evidence_segments(grounding_text)
@@ -2807,16 +3614,13 @@ def sufficient_context_evidence(
         return False
     selected_evidence = [segments[evidence_id] for evidence_id in selected]
     selected_terms = {
-        key
-        for value in selected_evidence
-        for _display, key in description_terms(value)
+        key for value in selected_evidence for _display, key in description_terms(value)
     }
     return (
         sum(len(value) for value in selected_evidence) >= 60
         and len(selected_terms) >= 8
         and any(
-            CONTEXT_EXPLICIT_DIRECTIVE_RE.search(value)
-            for value in selected_evidence
+            CONTEXT_EXPLICIT_DIRECTIVE_RE.search(value) for value in selected_evidence
         )
     )
 
@@ -3223,9 +4027,7 @@ def contextual_description_fields(value: str) -> dict[str, str]:
     return fields
 
 
-def complete_missing_contextual_evidence(
-    value: str, *, grounding_text: str
-) -> str:
+def complete_missing_contextual_evidence(value: str, *, grounding_text: str) -> str:
     """Add only a missing evidence line selected from transcript-grounded claims."""
 
     if re.search(r"^EVIDENCE\s*:", value, flags=re.IGNORECASE | re.MULTILINE):
@@ -3298,14 +4100,12 @@ def contextual_fallback_title(
     if not hinted:
         central_keys = {key for _display, key in description_terms(central_idea)}
         hinted = [term for term in source_terms if term[1] in central_keys]
-    overbroad_hint = len(DESCRIPTION_TOKEN_RE.findall(title_hint)) > 6 or len(
-        hinted
-    ) > 6
+    overbroad_hint = (
+        len(DESCRIPTION_TOKEN_RE.findall(title_hint)) > 6 or len(hinted) > 6
+    )
     if overbroad_hint:
         priority_terms = [
-            term
-            for term in hinted
-            if CONTEXT_PRIORITY_SUBJECT_RE.search(term[1])
+            term for term in hinted if CONTEXT_PRIORITY_SUBJECT_RE.search(term[1])
         ]
         if priority_terms:
             hinted = priority_terms
@@ -3542,8 +4342,7 @@ def literal_conclusion_contextual_description(
         words = DESCRIPTION_TOKEN_RE.findall(value)
         candidates = ["".join(words)]
         candidates.extend(
-            "".join(words[:count])
-            for count in range(min(len(words), 8), 1, -1)
+            "".join(words[:count]) for count in range(min(len(words), 8), 1, -1)
         )
         return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
 
@@ -3563,8 +4362,7 @@ def literal_conclusion_contextual_description(
             except ValueError as exc:
                 errors.append(str(exc))
     raise ValueError(
-        "literal conclusion rescue could not build a valid title: "
-        + errors[-1]
+        "literal conclusion rescue could not build a valid title: " + errors[-1]
     )
 
 
@@ -3758,9 +4556,7 @@ def validate_semantic_description(
                 semantic_reach: dict[tuple[int, bool], int] = {(0, False): 0}
                 for start in range(len(candidate)):
                     for skipped_grammar in (False, True):
-                        match_count = semantic_reach.get(
-                            (start, skipped_grammar)
-                        )
+                        match_count = semantic_reach.get((start, skipped_grammar))
                         if match_count is None:
                             continue
                         for source in source_terms:
@@ -4407,10 +5203,9 @@ def validated_manual_review_grounding(transcript: dict[str, Any]) -> str:
         raise ValueError("manual review evidence model_revision is invalid")
 
     if evidence["schema_version"] == 1:
-        if (
-            evidence_model != transcript.get("model")
-            or evidence_revision != transcript.get("model_revision")
-        ):
+        if evidence_model != transcript.get(
+            "model"
+        ) or evidence_revision != transcript.get("model_revision"):
             raise ValueError("manual review evidence model does not match transcript")
         raw_segments = transcript.get("segments")
         duration = transcript.get("duration_seconds")
@@ -4582,13 +5377,14 @@ def preserved_filename_description_fields(
         if key.startswith("filename_description")
     }
     if upgraded_from_validation is not None:
-        preserved["filename_description_validation"] = (
-            SEMANTIC_DESCRIPTION_VALIDATION
-        )
+        preserved["filename_description_validation"] = SEMANTIC_DESCRIPTION_VALIDATION
         preserved["filename_description_migrated_from_validation"] = (
             upgraded_from_validation
         )
-    if cached_transcript.get("filename_description_source") == MANUAL_DESCRIPTION_SOURCE:
+    if (
+        cached_transcript.get("filename_description_source")
+        == MANUAL_DESCRIPTION_SOURCE
+    ):
         evidence = preserved.get(MANUAL_REVIEW_EVIDENCE_FIELD)
         if not isinstance(evidence, dict):
             return {}
@@ -4607,8 +5403,7 @@ def preserved_filename_description_fields(
                 )
                 raw_segments = cached_transcript.get("segments")
                 if not isinstance(raw_segments, list) or any(
-                    not 1 <= source_id <= len(raw_segments)
-                    for source_id in source_ids
+                    not 1 <= source_id <= len(raw_segments) for source_id in source_ids
                 ):
                     return {}
                 evidence.update(
@@ -5550,9 +6345,10 @@ class AudioLibrary:
                         "Rust materialization returned an unexpected path: "
                         f"{result.get('path')!r} != {relative_path!r}"
                     )
-                if type(result.get("requested")) is not bool or type(
-                    result.get("materialized")
-                ) is not bool:
+                if (
+                    type(result.get("requested")) is not bool
+                    or type(result.get("materialized")) is not bool
+                ):
                     raise ValueError(
                         "Rust materialization returned invalid state flags"
                     )
@@ -5645,10 +6441,26 @@ class AudioLibrary:
                     markers_seconds = (
                         tmk_record.get("tmk_markers_seconds") if verified_tmk else None
                     )
+                    tmk_status = (
+                        "verified"
+                        if verified_tmk
+                        else "tmk_pending_materialization"
+                        if record.get("tmk_path")
+                        and not tmk_record.get("materialized", False)
+                        else "tmk_unavailable"
+                        if record.get("tmk_path")
+                        else "not_present"
+                    )
                     result = (
                         transcriber.transcribe(
                             staged_audio,
                             tmk_markers_seconds=markers_seconds,
+                            source_sha256=sha256,
+                            source_path=record["path"],
+                            tmk_status=tmk_status,
+                            tmk_sha256=(
+                                tmk_record.get("sha256") if verified_tmk else None
+                            ),
                         )
                         if markers_seconds
                         else transcriber.transcribe(staged_audio)
@@ -5680,12 +6492,46 @@ class AudioLibrary:
                                 else None
                             ),
                             "tmk_markers_seconds": markers_seconds,
+                            "tmk_status": tmk_status,
                         }
                     )
-                    result.update(
-                        preserved_filename_description_fields(
-                            cached_transcript, result
+                    if not isinstance(result.get("segmentation_provenance"), dict):
+                        result["segmentation_provenance"] = (
+                            build_segmentation_provenance(
+                                source_sha256=sha256,
+                                source_path=record["path"],
+                                duration_seconds=result.get("duration_seconds"),
+                                tmk_status=tmk_status,
+                                tmk_sha256=(
+                                    tmk_record.get("sha256") if verified_tmk else None
+                                ),
+                                tmk_markers_seconds=markers_seconds,
+                                checkpoint_strategy=str(
+                                    result.get("chunking_strategy") or "single_pass"
+                                ),
+                                checkpoint_ranges=[],
+                                inference_ranges=[],
+                                final_ranges=[],
+                                overlap_seconds=TMK_CHUNK_OVERLAP_SECONDS,
+                                speaker_policy_version=(
+                                    SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                                    if config.speaker_diarization
+                                    else None
+                                ),
+                                speaker_model=(
+                                    transcriber.model
+                                    if config.speaker_diarization
+                                    else None
+                                ),
+                                speaker_model_revision=(
+                                    vars(transcriber).get("model_revision")
+                                    if config.speaker_diarization
+                                    else None
+                                ),
+                            )
                         )
+                    result.update(
+                        preserved_filename_description_fields(cached_transcript, result)
                     )
                     atomic_json_write(output, result)
                     atomic_text_write(text_output, speaker_transcript_text(result))
@@ -5796,13 +6642,58 @@ class AudioLibrary:
                     "tmk_marker_count": marker_count,
                     "tmk_last_marker_seconds": last_marker_seconds,
                     "tmk_markers_seconds": markers_seconds,
+                    "tmk_status": "verified",
                 }
-                if all(
-                    transcript.get(key) == value
+                reconciliation = None
+                if isinstance(transcript.get("segmentation_provenance"), dict):
+                    duration = transcript.get("duration_seconds")
+                    if isinstance(duration, (int, float)) and math.isfinite(
+                        float(duration)
+                    ):
+                        try:
+                            reconciliation = reconcile_late_tmk(
+                                transcript,
+                                tmk_sha256=tmk_sha256,
+                                tmk_markers_seconds=markers_seconds,
+                                duration_seconds=float(duration),
+                            )
+                        except (TypeError, ValueError):
+                            # A legacy/partial sidecar may not carry enough
+                            # boundary evidence; hydration still records the
+                            # verified TMK and leaves reprocessing to the queue.
+                            reconciliation = None
+                changed = any(
+                    transcript.get(key) != value
                     for key, value in desired_metadata.items()
-                ):
-                    continue
+                )
                 transcript.update(desired_metadata)
+                if reconciliation is not None:
+                    transcript["tmk_reconciliation"] = reconciliation
+                    provenance = transcript["segmentation_provenance"]
+                    provenance.setdefault("tmk", {}).update(
+                        {
+                            "status": "verified",
+                            "sha256": tmk_sha256,
+                            "marker_count": marker_count,
+                            "markers_seconds": canonical_tmk_markers(markers_seconds),
+                        }
+                    )
+                    provenance.setdefault("final", {}).setdefault(
+                        "reconciliation", reconciliation
+                    )
+                    changed = True
+                if not isinstance(transcript.get("segmentation_provenance"), dict):
+                    changed = True
+                if not changed:
+                    continue
+                backfill_segmentation_provenance(
+                    transcript,
+                    source_sha256=validate_sha256(audio_record.get("sha256")),
+                    source_path=audio_record.get("path"),
+                    tmk_status="verified",
+                    tmk_sha256=tmk_sha256,
+                    tmk_markers_seconds=markers_seconds,
+                )
                 atomic_json_write(transcript_path, transcript)
                 changed_transcripts += 1
             return changed_transcripts
@@ -5999,6 +6890,9 @@ class AudioLibrary:
         prefetch_fallback_allowed = True
         prefetch_transcription_overlaps = 0
         tmk_chunk_hints_used = 0
+        tmk_status_counts: Counter[str] = Counter()
+        vad_refined_recordings = 0
+        late_tmk_reconciliation_plans = 0
         automatic_chunked_recordings = 0
         resumed_transcription_chunks = 0
         transcription_checkpoints_written = 0
@@ -6061,7 +6955,14 @@ class AudioLibrary:
                     )
                 )
                 if tmk_path:
+                    tmk_status = "tmk_pending_materialization"
                     if tmk_needs_metadata:
+                        tmk_status = (
+                            "tmk_pending_materialization"
+                            if not tmk_record.get("materialized", False)
+                            or is_icloud_dataless(self.root / tmk_path)
+                            else "tmk_unavailable"
+                        )
                         record["tmk_error"] = tmk_record.get("error") or (
                             "TMK metadata unresolved; run hydrate-tmk before "
                             "stream-transcribe"
@@ -6074,6 +6975,7 @@ class AudioLibrary:
                         )
                         record.update(tmk_chunk_hint)
                     else:
+                        tmk_status = "verified"
                         tmk_chunk_hint = {}
                         record.pop("tmk_error", None)
                         record["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
@@ -6084,7 +6986,9 @@ class AudioLibrary:
                             "tmk_markers_seconds"
                         )
                 else:
+                    tmk_status = "not_present"
                     tmk_chunk_hint = {}
+                tmk_status_counts[tmk_status] += 1
                 known_sha256 = record.get("sha256")
                 if was_dataless:
                     preserved_tmk = {
@@ -6196,8 +7100,10 @@ class AudioLibrary:
                         tmk_chunk_hints_used += 1
                     checkpoint_path: Path | None = None
                     checkpoint_mode: str | None = None
+                    duration_hint: float | None = None
                     if markers_seconds:
                         checkpoint_mode = "tmk_markers"
+                        duration_hint = audio_duration_seconds(audio_input)
                     elif transcriber.accelerator == "mlx":
                         duration_hint = audio_duration_seconds(audio_input)
                         if automatic_mlx_chunk_ranges(duration_hint):
@@ -6205,6 +7111,56 @@ class AudioLibrary:
                     if checkpoint_mode is not None:
                         checkpoint_path = safe_transcription_checkpoint_path(
                             transcript_dir, sha256
+                        )
+                        if checkpoint_mode == "tmk_markers":
+                            nominal_ranges = (
+                                mlx_speaker_chunk_ranges(markers_seconds, duration_hint)
+                                if config.speaker_diarization
+                                else tmk_chunk_ranges(markers_seconds, duration_hint)
+                            )
+                        else:
+                            nominal_ranges = (
+                                mlx_speaker_chunk_ranges([], duration_hint)
+                                if config.speaker_diarization
+                                else automatic_mlx_chunk_ranges(duration_hint)
+                            )
+                        checkpoint_provenance = build_segmentation_provenance(
+                            source_sha256=sha256,
+                            source_path=record["path"],
+                            duration_seconds=duration_hint,
+                            tmk_status=tmk_status,
+                            tmk_sha256=(
+                                tmk_record.get("sha256")
+                                if not tmk_needs_metadata
+                                else None
+                            ),
+                            tmk_markers_seconds=markers_seconds,
+                            checkpoint_strategy=checkpoint_mode,
+                            checkpoint_ranges=nominal_ranges,
+                            inference_ranges=nominal_ranges,
+                            final_ranges=nominal_ranges,
+                            overlap_seconds=TMK_CHUNK_OVERLAP_SECONDS,
+                            vad_enabled=config.vad_aware_boundaries,
+                            vad_config={
+                                "search_seconds": config.vad_boundary_search_seconds,
+                                "min_silence_seconds": config.vad_min_silence_seconds,
+                                "noise_db": config.vad_noise_db,
+                            },
+                            speaker_policy_version=(
+                                SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                                if config.speaker_diarization
+                                else None
+                            ),
+                            speaker_model=(
+                                transcriber.model
+                                if config.speaker_diarization
+                                else None
+                            ),
+                            speaker_model_revision=(
+                                vars(transcriber).get("model_revision")
+                                if config.speaker_diarization
+                                else None
+                            ),
                         )
                         checkpoint_identity = {
                             "schema_version": TRANSCRIPTION_CHECKPOINT_SCHEMA_VERSION,
@@ -6220,6 +7176,13 @@ class AudioLibrary:
                                 if config.speaker_diarization
                                 else None
                             ),
+                            "tmk_status": tmk_status,
+                            "tmk_sha256": (
+                                tmk_record.get("sha256")
+                                if not tmk_needs_metadata
+                                else None
+                            ),
+                            "segmentation_provenance": checkpoint_provenance,
                         }
                         if checkpoint_mode == "tmk_markers":
                             checkpoint_identity["tmk_markers_seconds"] = (
@@ -6238,9 +7201,8 @@ class AudioLibrary:
                             checkpoint_path
                         )
                         completed_checkpoint_chunks = []
-                        if existing_checkpoint and all(
-                            existing_checkpoint.get(key) == expected
-                            for key, expected in checkpoint_identity.items()
+                        if checkpoint_identity_matches(
+                            existing_checkpoint, checkpoint_identity
                         ):
                             completed_checkpoint_chunks = existing_checkpoint.get(
                                 "completed_chunks", []
@@ -6291,6 +7253,14 @@ class AudioLibrary:
                         result = transcriber.transcribe(
                             audio_input,
                             tmk_markers_seconds=markers_seconds,
+                            source_sha256=sha256,
+                            source_path=record["path"],
+                            tmk_status=tmk_status,
+                            tmk_sha256=(
+                                tmk_record.get("sha256")
+                                if not tmk_needs_metadata
+                                else None
+                            ),
                             completed_chunks=completed_checkpoint_chunks,
                             chunk_progress=checkpoint_chunk,
                         )
@@ -6325,14 +7295,91 @@ class AudioLibrary:
                                 "tmk_last_marker_seconds"
                             ),
                             "tmk_markers_seconds": record.get("tmk_markers_seconds"),
+                            "tmk_status": tmk_status,
                             "tmk_error": record.get("tmk_error"),
                             **tmk_chunk_hint,
                         }
                     )
-                    result.update(
-                        preserved_filename_description_fields(
-                            cached_transcript, result
+                    provenance = result.get("segmentation_provenance")
+                    if not isinstance(provenance, dict):
+                        provenance = (
+                            checkpoint_provenance
+                            if checkpoint_mode is not None
+                            else build_segmentation_provenance(
+                                source_sha256=sha256,
+                                source_path=record["path"],
+                                duration_seconds=result.get("duration_seconds"),
+                                tmk_status=tmk_status,
+                                tmk_sha256=(
+                                    tmk_record.get("sha256")
+                                    if not tmk_needs_metadata
+                                    else None
+                                ),
+                                tmk_markers_seconds=record.get("tmk_markers_seconds"),
+                                checkpoint_strategy=str(
+                                    result.get("chunking_strategy") or "single_pass"
+                                ),
+                                checkpoint_ranges=[],
+                                inference_ranges=[],
+                                final_ranges=[],
+                                overlap_seconds=TMK_CHUNK_OVERLAP_SECONDS,
+                                vad_enabled=config.vad_aware_boundaries,
+                                vad_config={
+                                    "search_seconds": config.vad_boundary_search_seconds,
+                                    "min_silence_seconds": config.vad_min_silence_seconds,
+                                    "noise_db": config.vad_noise_db,
+                                },
+                                speaker_policy_version=(
+                                    SPEAKER_TRANSCRIPTION_POLICY_VERSION
+                                    if config.speaker_diarization
+                                    else None
+                                ),
+                                speaker_model=(
+                                    transcriber.model
+                                    if config.speaker_diarization
+                                    else None
+                                ),
+                                speaker_model_revision=(
+                                    vars(transcriber).get("model_revision")
+                                    if config.speaker_diarization
+                                    else None
+                                ),
+                            )
                         )
+                    # Bind the final evidence to the exact current inventory
+                    # record even when a mocked/legacy adapter returned an old
+                    # result without provenance.
+                    provenance_source = provenance.setdefault("source", {})
+                    provenance_source.update(
+                        {
+                            "path": record["path"],
+                            "sha256": sha256,
+                        }
+                    )
+                    provenance_tmk = provenance.setdefault("tmk", {})
+                    provenance_tmk.update(
+                        {
+                            "status": tmk_status,
+                            "sha256": (
+                                tmk_record.get("sha256")
+                                if not tmk_needs_metadata
+                                else None
+                            ),
+                            "markers_seconds": canonical_tmk_markers(
+                                record.get("tmk_markers_seconds")
+                            ),
+                        }
+                    )
+                    result["segmentation_provenance"] = provenance
+                    vad_evidence = provenance.get("vad")
+                    if isinstance(vad_evidence, dict) and vad_evidence.get(
+                        "boundary_shifts"
+                    ):
+                        vad_refined_recordings += 1
+                    if result.get("tmk_reconciliation") is not None:
+                        late_tmk_reconciliation_plans += 1
+                    result.update(
+                        preserved_filename_description_fields(cached_transcript, result)
                     )
                     atomic_json_write(transcript_path, result)
                     atomic_text_write(text_path, speaker_transcript_text(result))
@@ -6379,6 +7426,10 @@ class AudioLibrary:
             "prefetch_fallback_suppressed": prefetch_fallback_suppressed,
             "prefetch_transcription_overlaps": prefetch_transcription_overlaps,
             "tmk_chunk_hints_used": tmk_chunk_hints_used,
+            "tmk_status_counts": dict(tmk_status_counts),
+            "vad_refined_recordings": vad_refined_recordings,
+            "late_tmk_reconciliation_plans": late_tmk_reconciliation_plans,
+            "segmentation_provenance_schema_version": SEGMENTATION_PROVENANCE_SCHEMA_VERSION,
             "automatic_chunked_recordings": automatic_chunked_recordings,
             "resumed_transcription_chunks": resumed_transcription_chunks,
             "transcription_checkpoints_written": transcription_checkpoints_written,
@@ -6392,6 +7443,99 @@ class AudioLibrary:
         }
         atomic_json_write(self.state_dir / "streaming-transcription-run.json", summary)
         return summary
+
+    def reconcile_tmk(
+        self,
+        *,
+        relative_path: str,
+    ) -> dict[str, Any]:
+        """Reconcile one transcript after a late TMK becomes content-verified.
+
+        Unaffected fallback chunks are retained and promoted when boundaries are
+        identical.  When boundaries differ, the returned plan names only the
+        intervals whose overlap/timestamps need GPU reprocessing; no old partial
+        or final evidence is deleted implicitly.
+        """
+
+        selected_path = validate_relative_path(
+            self.root, relative_path, label="TMK reconciliation audio path"
+        )
+        manifest = self._load_inventory()
+        records_by_path = {record["path"]: record for record in manifest["files"]}
+        audio_record = records_by_path.get(selected_path)
+        if not audio_record or audio_record.get("kind") != "audio":
+            raise ValueError(f"audio path is absent from inventory: {selected_path}")
+        tmk_path = audio_record.get("tmk_path")
+        tmk_record = records_by_path.get(tmk_path) if tmk_path else None
+        if not isinstance(tmk_record, dict) or tmk_record.get("kind") != "tmk":
+            raise ValueError("audio record has no linked TMK inventory record")
+        if not record_sha_is_verified(tmk_record):
+            raise ValueError("late TMK reconciliation requires a verified TMK SHA-256")
+        sha256 = validate_sha256(audio_record.get("sha256"))
+        transcript_path = safe_transcript_path(self.state_dir / "transcripts", sha256)
+        transcript = read_optional_private_json(transcript_path)
+        if transcript is None:
+            return {
+                "status": "no_transcript",
+                "audio_path": selected_path,
+                "tmk_path": tmk_path,
+                "tmk_sha256": tmk_record["sha256"],
+            }
+        duration = transcript.get("duration_seconds")
+        if not isinstance(duration, (int, float)) or not math.isfinite(float(duration)):
+            duration = audio_duration_seconds(self.root / selected_path)
+        if duration is None:
+            raise ValueError("late TMK reconciliation requires transcript duration")
+        plan = reconcile_late_tmk(
+            transcript,
+            tmk_sha256=validate_sha256(tmk_record.get("sha256")),
+            tmk_markers_seconds=tmk_record.get("tmk_markers_seconds"),
+            duration_seconds=float(duration),
+        )
+        plan.update({"audio_path": selected_path, "tmk_path": tmk_path})
+        transcript["tmk_status"] = "verified"
+        transcript["tmk_sha256"] = tmk_record["sha256"]
+        transcript["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
+        transcript["tmk_last_marker_seconds"] = tmk_record.get(
+            "tmk_last_marker_seconds"
+        )
+        transcript["tmk_markers_seconds"] = tmk_record.get("tmk_markers_seconds")
+        transcript["tmk_reconciliation"] = plan
+        provenance = transcript.get("segmentation_provenance")
+        if isinstance(provenance, dict):
+            provenance.setdefault("tmk", {}).update(
+                {
+                    "status": "verified",
+                    "sha256": tmk_record["sha256"],
+                    "marker_count": tmk_record.get("tmk_marker_count"),
+                    "markers_seconds": canonical_tmk_markers(
+                        tmk_record.get("tmk_markers_seconds")
+                    ),
+                }
+            )
+            provenance.setdefault("final", {})["reconciliation"] = plan
+            if plan["status"] == "promoted_fallback":
+                provenance["segmentation_strategy"] = "tmk_markers"
+                provenance["boundary_source"] = "tmk_markers"
+                provenance.setdefault("checkpoint", {}).update(
+                    {
+                        "strategy": "tmk_markers",
+                        "boundary_source": "tmk_markers",
+                        "nominal_ranges": plan["new_ranges"],
+                    }
+                )
+                transcript["chunking_strategy"] = "tmk_markers"
+        else:
+            backfill_segmentation_provenance(
+                transcript,
+                source_sha256=sha256,
+                source_path=selected_path,
+                tmk_status="verified",
+                tmk_sha256=tmk_record["sha256"],
+                tmk_markers_seconds=tmk_record.get("tmk_markers_seconds"),
+            )
+        atomic_json_write(transcript_path, transcript)
+        return plan
 
     def review_description(
         self,
@@ -6431,9 +7575,7 @@ class AudioLibrary:
         tmk_sha256 = (
             tmk_record.get("sha256") if record_sha_is_verified(tmk_record) else None
         )
-        transcript_path = safe_transcript_path(
-            self.state_dir / "transcripts", sha256
-        )
+        transcript_path = safe_transcript_path(self.state_dir / "transcripts", sha256)
         transcript = read_optional_private_json(transcript_path)
         if transcript is None:
             raise FileNotFoundError(
@@ -6443,9 +7585,7 @@ class AudioLibrary:
         if transcript.get("accelerator") != "mlx":
             raise ValueError("manual description review requires an MLX transcript")
         uses_word_timestamps = transcript.get("word_timestamps") is True
-        uses_speaker_segment_timestamps = (
-            transcript.get("speaker_diarization") is True
-        )
+        uses_speaker_segment_timestamps = transcript.get("speaker_diarization") is True
         if not uses_word_timestamps and not uses_speaker_segment_timestamps:
             raise ValueError(
                 "manual description review requires GPU word or speaker segment "
@@ -6483,9 +7623,7 @@ class AudioLibrary:
                 )
             segment = raw_segments[source_id - 1]
             if not isinstance(segment, dict):
-                raise ValueError(
-                    f"review source segment is not an object: {source_id}"
-                )
+                raise ValueError(f"review source segment is not an object: {source_id}")
             if uses_word_timestamps:
                 words = segment.get("words")
                 if not isinstance(words, list) or not any(
@@ -6507,12 +7645,9 @@ class AudioLibrary:
                     raise ValueError(
                         f"review source speaker segment is invalid: {source_id}"
                     ) from exc
-                if (
-                    not normalized_segment["text"]
-                    or not re.fullmatch(
-                        r"(?:C\d{3}_)?S\d+",
-                        str(normalized_segment.get("speaker_id", "")),
-                    )
+                if not normalized_segment["text"] or not re.fullmatch(
+                    r"(?:C\d{3}_)?S\d+",
+                    str(normalized_segment.get("speaker_id", "")),
                 ):
                     raise ValueError(
                         f"review source speaker segment is invalid: {source_id}"
@@ -6572,9 +7707,7 @@ class AudioLibrary:
                     "confidence": semantic.confidence,
                 },
                 "filename_description_source": MANUAL_DESCRIPTION_SOURCE,
-                "filename_description_validation": (
-                    SEMANTIC_DESCRIPTION_VALIDATION
-                ),
+                "filename_description_validation": (SEMANTIC_DESCRIPTION_VALIDATION),
                 "filename_description_reviewed_at": reviewed_at,
                 MANUAL_REVIEW_EVIDENCE_FIELD: reviewed_evidence,
             }
@@ -8247,6 +9380,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="write one transcript file with MOSS speaker-labelled turns",
     )
+    transcribe_parser.add_argument(
+        "--vad-aware-boundaries",
+        action="store_true",
+        help="allow supplied silence evidence to move resource checkpoints near 300s",
+    )
+    transcribe_parser.add_argument(
+        "--vad-boundary-search-seconds",
+        type=float,
+        default=DEFAULT_VAD_BOUNDARY_SEARCH_SECONDS,
+    )
+    transcribe_parser.add_argument(
+        "--vad-min-silence-seconds",
+        type=float,
+        default=DEFAULT_VAD_MIN_SILENCE_SECONDS,
+    )
+    transcribe_parser.add_argument(
+        "--vad-noise-db", type=float, default=DEFAULT_VAD_NOISE_DB
+    )
     stream_parser = subparsers.add_parser("stream-transcribe")
     stream_parser.add_argument(
         "--accelerator", choices=["auto", "mlx", "cuda"], default="auto"
@@ -8282,6 +9433,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="write one transcript file with MOSS speaker-labelled turns",
     )
+    stream_parser.add_argument(
+        "--vad-aware-boundaries",
+        action="store_true",
+        help="allow supplied silence evidence to move resource checkpoints near 300s",
+    )
+    stream_parser.add_argument(
+        "--vad-boundary-search-seconds",
+        type=float,
+        default=DEFAULT_VAD_BOUNDARY_SEARCH_SECONDS,
+    )
+    stream_parser.add_argument(
+        "--vad-min-silence-seconds",
+        type=float,
+        default=DEFAULT_VAD_MIN_SILENCE_SECONDS,
+    )
+    stream_parser.add_argument(
+        "--vad-noise-db", type=float, default=DEFAULT_VAD_NOISE_DB
+    )
+    reconcile_parser = subparsers.add_parser(
+        "reconcile-tmk",
+        help="bind a newly verified TMK to an existing transcript and emit a selective reprocess plan",
+    )
+    reconcile_parser.add_argument("--path", required=True)
     describe_parser = subparsers.add_parser("describe")
     describe_parser.add_argument(
         "--model",
@@ -8373,6 +9547,10 @@ def main(argv: Iterable[str] | None = None) -> int:
                 language=args.language or None,
                 word_timestamps=args.word_timestamps,
                 speaker_diarization=args.speaker_diarization,
+                vad_aware_boundaries=args.vad_aware_boundaries,
+                vad_boundary_search_seconds=args.vad_boundary_search_seconds,
+                vad_min_silence_seconds=args.vad_min_silence_seconds,
+                vad_noise_db=args.vad_noise_db,
             ),
             max_files=args.max_files,
             progress=progress_line,
@@ -8385,6 +9563,10 @@ def main(argv: Iterable[str] | None = None) -> int:
                 language=args.language or None,
                 word_timestamps=args.word_timestamps,
                 speaker_diarization=args.speaker_diarization,
+                vad_aware_boundaries=args.vad_aware_boundaries,
+                vad_boundary_search_seconds=args.vad_boundary_search_seconds,
+                vad_min_silence_seconds=args.vad_min_silence_seconds,
+                vad_noise_db=args.vad_noise_db,
             ),
             max_files=args.max_files,
             relative_paths=args.path,
@@ -8396,6 +9578,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             evict_after=not args.keep_local,
             progress=progress_line,
         )
+    elif args.command == "reconcile-tmk":
+        result = library.reconcile_tmk(relative_path=args.path)
     elif args.command == "describe":
         result = library.describe(
             model=args.model,

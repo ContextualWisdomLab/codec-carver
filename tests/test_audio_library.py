@@ -873,9 +873,7 @@ class NamingTests(unittest.TestCase):
             "quality_flags": ["no_speech_detected"],
         }
         self.assertTrue(
-            audio_library.transcript_cache_matches_record(
-                record, no_speech, **identity
-            )
+            audio_library.transcript_cache_matches_record(record, no_speech, **identity)
         )
         for invalid_empty in (
             {**no_speech, "stored_word_timestamps": True},
@@ -999,26 +997,21 @@ class NamingTests(unittest.TestCase):
                 ]
             ),
         )
-        literal_conclusion = (
-            audio_library.literal_conclusion_contextual_description(
-                grounding_text="\n".join(
-                    [
-                        "[S001] 결론 GPT에 넣어야 될 데이터도 수주풀에 있습니다",
-                        (
-                            "[S002] 그래서 시간을 넉넉하게 잡아야 된다는 게 "
-                            "제가 하고 싶은 말인 거예요"
-                        ),
-                        "[S003] 테이블 조잉을 계속 봐야 됩니다",
-                    ]
-                )
+        literal_conclusion = audio_library.literal_conclusion_contextual_description(
+            grounding_text="\n".join(
+                [
+                    "[S001] 결론 GPT에 넣어야 될 데이터도 수주풀에 있습니다",
+                    (
+                        "[S002] 그래서 시간을 넉넉하게 잡아야 된다는 게 "
+                        "제가 하고 싶은 말인 거예요"
+                    ),
+                    "[S003] 테이블 조잉을 계속 봐야 됩니다",
+                ]
             )
         )
         self.assertEqual(
             literal_conclusion.title,
-            (
-                "GPT에넣어야될데이터도수주풀에있습니다-"
-                "시간을넉넉하게잡아야된다는게"
-            ),
+            ("GPT에넣어야될데이터도수주풀에있습니다-시간을넉넉하게잡아야된다는게"),
         )
         self.assertEqual(
             literal_conclusion.evidence_segment_ids,
@@ -1026,10 +1019,7 @@ class NamingTests(unittest.TestCase):
         )
         directive_grounding = "\n".join(
             [
-                (
-                    "[S001] 고객 여러분 전동열차 화재 긴급상황이 "
-                    "생겼을 때에는"
-                ),
+                ("[S001] 고객 여러분 전동열차 화재 긴급상황이 생겼을 때에는"),
                 (
                     "[S002] 벽면에 설치된 비상통화 장치를 이용하여 "
                     "승보원에게 신고해 주시기 바랍니다"
@@ -1217,8 +1207,7 @@ class NamingTests(unittest.TestCase):
             "[S004] 공감 받은 정보에 혜택을 연결합니다."
         )
         reviewer_title = (
-            "VOC건수보다-정보품질이중요하고-등록절차를간소화하며-"
-            "활용과공감에혜택연결"
+            "VOC건수보다-정보품질이중요하고-등록절차를간소화하며-활용과공감에혜택연결"
         )
         self.assertEqual(
             validate_semantic_description(
@@ -1289,9 +1278,7 @@ class NamingTests(unittest.TestCase):
             ).title,
             "VOC-정보-공감",
         )
-        existing_evidence = (
-            f"{missing_evidence_candidate}\nEVIDENCE: S001,S002,S003"
-        )
+        existing_evidence = f"{missing_evidence_candidate}\nEVIDENCE: S001,S002,S003"
         self.assertEqual(
             audio_library.complete_missing_contextual_evidence(
                 existing_evidence,
@@ -1830,13 +1817,9 @@ class NamingTests(unittest.TestCase):
             "model": audio_library.DEFAULT_MLX_SPEAKER_MODEL,
             "model_revision": audio_library.DEFAULT_MLX_SPEAKER_MODEL_REVISION,
             "duration_seconds": 12_173.23,
-            "segments": [
-                {"start": 0.0, "end": 12_173.23, "text": "새 화자 전사"}
-            ],
+            "segments": [{"start": 0.0, "end": 12_173.23, "text": "새 화자 전사"}],
         }
-        stale_reviewed_transcript = json.loads(
-            json.dumps(manually_reviewed_transcript)
-        )
+        stale_reviewed_transcript = json.loads(json.dumps(manually_reviewed_transcript))
         stale_reviewed_transcript["filename_description_validation"] = (
             "context_evidence_title_v7"
         )
@@ -1858,7 +1841,10 @@ class NamingTests(unittest.TestCase):
             "context_evidence_title_v7",
         )
         self.assertEqual(
-            [item["source_segment_id"] for item in migrated_evidence["source_segments"]],
+            [
+                item["source_segment_id"]
+                for item in migrated_evidence["source_segments"]
+            ],
             [1, 2, 3, 4],
         )
         migrated_evidence["source_sha256"] = HASH_B
@@ -2243,9 +2229,9 @@ class NamingTests(unittest.TestCase):
                 )
             ),
             types.SimpleNamespace(
-                text=grounded_context.replace(
-                    "EVIDENCE: S001,S002\n", ""
-                ).removeprefix("CENTRAL_IDEA: ")
+                text=grounded_context.replace("EVIDENCE: S001,S002\n", "").removeprefix(
+                    "CENTRAL_IDEA: "
+                )
             ),
             types.SimpleNamespace(text="DESCRIPTION: 경영보고지연-설비데이터-통합"),
         ]
@@ -2386,10 +2372,7 @@ class NamingTests(unittest.TestCase):
                         ]
                     }
                 ),
-                (
-                    "GPT에넣어야될데이터도수주풀에있습니다-"
-                    "시간을넉넉하게잡아야된다는게"
-                ),
+                ("GPT에넣어야될데이터도수주풀에있습니다-시간을넉넉하게잡아야된다는게"),
             )
         self.assertEqual(generate.call_count, 4)
         generate.reset_mock()
@@ -2682,9 +2665,7 @@ class NamingTests(unittest.TestCase):
                 "audio_library.validated_cached_filename_description",
                 return_value=evidence_title,
             ),
-            self.assertRaisesRegex(
-                ValueError, "evidence-backed description exceeds"
-            ),
+            self.assertRaisesRegex(ValueError, "evidence-backed description exceeds"),
         ):
             standard_filename(
                 _record("a.wav", HASH_A, location=None),
@@ -3523,9 +3504,7 @@ class GpuTranscriberTests(unittest.TestCase):
 
     def test_joint_speaker_chunking_is_bounded_and_prefers_tmk_boundary(self) -> None:
         self.assertEqual(
-            audio_library.mlx_speaker_chunk_ranges(
-                [250.0, 550.0], 620.0
-            ),
+            audio_library.mlx_speaker_chunk_ranges([250.0, 550.0], 620.0),
             [(0.0, 250.0), (250.0, 550.0), (550.0, 620.0)],
         )
         self.assertEqual(
@@ -3996,6 +3975,146 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertEqual(
             audio_library.automatic_mlx_chunk_ranges(600.1),
             [(0.0, 300.0), (300.0, 600.1)],
+        )
+
+    def test_vad_moves_only_resource_boundary_to_nearby_silence(self) -> None:
+        refined, shifts = audio_library.refine_checkpoint_ranges_at_silence(
+            [(0.0, 300.0), (300.0, 500.0), (500.0, 620.0)],
+            [(294.0, 306.0), (492.0, 506.0)],
+            search_seconds=20.0,
+            min_silence_seconds=0.35,
+        )
+        self.assertEqual(refined, [(0.0, 300.0), (300.0, 499.0), (499.0, 620.0)])
+        self.assertEqual(len(shifts), 1)
+        self.assertEqual(shifts[0]["nominal_seconds"], 500.0)
+        self.assertEqual(shifts[0]["actual_seconds"], 499.0)
+
+    def test_overlap_reconciliation_keeps_repeated_speech_and_drops_duplicate(
+        self,
+    ) -> None:
+        segments = audio_library.reconcile_transcript_segments(
+            [
+                {
+                    "start": 299.8,
+                    "end": 300.8,
+                    "text": "경계 문장",
+                    "speaker_id": "C001_S01",
+                },
+                {
+                    "start": 300.0,
+                    "end": 301.0,
+                    "text": "경계 문장",
+                    "speaker_id": "C002_S02",
+                },
+                {
+                    "start": 302.0,
+                    "end": 303.0,
+                    "text": "경계 문장",
+                    "speaker_id": "C003_S01",
+                },
+            ]
+        )
+        self.assertEqual(len(segments), 2)
+        self.assertEqual([segment["start"] for segment in segments], [299.8, 302.0])
+
+    def test_segmentation_provenance_separates_tmk_vad_and_checkpoint_evidence(
+        self,
+    ) -> None:
+        provenance = audio_library.build_segmentation_provenance(
+            source_sha256=HASH_A,
+            source_path="유니코드/회의.wav",
+            duration_seconds=620.0,
+            tmk_status="tmk_pending_materialization",
+            tmk_sha256=None,
+            tmk_markers_seconds=None,
+            checkpoint_strategy="fixed_duration",
+            checkpoint_ranges=[(0.0, 300.0), (300.0, 600.0), (600.0, 620.0)],
+            inference_ranges=[(0.0, 301.0), (299.0, 601.0), (599.0, 620.0)],
+            final_ranges=[(0.0, 300.0), (300.0, 600.0), (600.0, 620.0)],
+            overlap_seconds=1.0,
+            vad_enabled=True,
+            vad_config={"status": "unavailable"},
+            reconciliation={"status": "no_duplicates"},
+            speaker_policy_version=2,
+            speaker_model="MOSS",
+            speaker_model_revision="revision",
+        )
+        self.assertEqual(provenance["source"]["sha256"], HASH_A)
+        self.assertEqual(provenance["tmk"]["status"], "tmk_pending_materialization")
+        self.assertEqual(
+            provenance["checkpoint"]["boundary_source"], "fixed_duration_fallback"
+        )
+        self.assertEqual(
+            provenance["inference"]["boundary_source"],
+            "model_timestamps_midpoint_ownership",
+        )
+        self.assertEqual(provenance["vad"]["config"]["status"], "unavailable")
+        self.assertEqual(provenance["speaker"]["policy_version"], 2)
+
+    def test_late_tmk_reconciliation_selects_affected_chunks_and_can_promote(
+        self,
+    ) -> None:
+        fallback = {
+            "chunking_strategy": "fixed_duration",
+            "duration_seconds": 620.0,
+            "segmentation_provenance": audio_library.build_segmentation_provenance(
+                source_sha256=HASH_A,
+                source_path="fallback.wav",
+                duration_seconds=620.0,
+                tmk_status="tmk_pending_materialization",
+                tmk_sha256=None,
+                tmk_markers_seconds=None,
+                checkpoint_strategy="fixed_duration",
+                checkpoint_ranges=[(0.0, 300.0), (300.0, 600.0), (600.0, 620.0)],
+                inference_ranges=[(0.0, 300.0), (300.0, 600.0), (600.0, 620.0)],
+                final_ranges=[(0.0, 300.0), (300.0, 600.0), (600.0, 620.0)],
+                overlap_seconds=1.0,
+            ),
+        }
+        changed = audio_library.reconcile_late_tmk(
+            fallback,
+            tmk_sha256=TMK_HASH,
+            tmk_markers_seconds=[280.0, 560.0],
+            duration_seconds=620.0,
+        )
+        self.assertEqual(changed["status"], "selective_reprocess_required")
+        self.assertTrue(changed["affected_chunk_indices"])
+        promoted = audio_library.reconcile_late_tmk(
+            fallback,
+            tmk_sha256=TMK_HASH,
+            tmk_markers_seconds=[300.0, 600.0],
+            duration_seconds=620.0,
+        )
+        self.assertEqual(promoted["status"], "promoted_fallback")
+        self.assertEqual(promoted["affected_chunk_indices"], [])
+
+    def test_legacy_sha_checkpoint_can_resume_after_provenance_schema_upgrade(
+        self,
+    ) -> None:
+        expected = {
+            "schema_version": 1,
+            "sha256": HASH_A,
+            "accelerator": "mlx",
+            "model": "model",
+            "model_revision": "revision",
+            "language": "ko",
+            "word_timestamps": False,
+            "speaker_diarization": True,
+            "speaker_transcription_policy_version": 2,
+            "chunking_strategy": "fixed_duration",
+            "automatic_chunk_seconds": 300.0,
+            "tmk_status": "tmk_pending_materialization",
+            "segmentation_provenance": {"schema_version": 1},
+        }
+        self.assertTrue(
+            audio_library.checkpoint_identity_matches(
+                {
+                    key: value
+                    for key, value in expected.items()
+                    if key != "segmentation_provenance" and key != "tmk_status"
+                },
+                expected,
+            )
         )
 
     def test_too_short_audio_skips_model_inference(self) -> None:
@@ -5006,9 +5125,9 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(transcript["tmk_chunk_hint_path"], "renamed.tmk")
             self.assertEqual(transcript["tmk_chunk_hint_sha256"], TMK_HASH)
             review = json.loads(
-                (
-                    library.state_dir / "manual-description-review.json"
-                ).read_text(encoding="utf-8")
+                (library.state_dir / "manual-description-review.json").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(review["path"], "renamed.wav")
             self.assertEqual(review["recorded_at"], audio["recorded_at"])
@@ -5055,9 +5174,9 @@ class AudioLibraryTests(unittest.TestCase):
             )
             self.assertEqual(rebound["tmk_chunk_hint_path"], "renamed.tmk")
             review_without_tmk = json.loads(
-                (
-                    library.state_dir / "manual-description-review.json"
-                ).read_text(encoding="utf-8")
+                (library.state_dir / "manual-description-review.json").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(review_without_tmk["path"], "without.wav")
             self.assertIsNone(review_without_tmk["tmk_path"])
@@ -5079,9 +5198,9 @@ class AudioLibraryTests(unittest.TestCase):
             )
             self.assertEqual(
                 json.loads(
-                    (
-                        library.state_dir / "manual-description-review.json"
-                    ).read_text(encoding="utf-8")
+                    (library.state_dir / "manual-description-review.json").read_text(
+                        encoding="utf-8"
+                    )
                 ),
                 orphaned_review,
             )
@@ -5630,9 +5749,7 @@ class AudioLibraryTests(unittest.TestCase):
             )
             fake.transcribe.return_value = {
                 "text": "verified replacement",
-                "segments": [
-                    {"text": "verified replacement", "speaker_id": "S01"}
-                ],
+                "segments": [{"text": "verified replacement", "speaker_id": "S01"}],
                 "language": "ko",
                 "speaker_diarization": True,
                 "speaker_diarization_status": "completed",
@@ -6130,9 +6247,7 @@ class AudioLibraryTests(unittest.TestCase):
             fake = Mock(accelerator="mlx", model="model")
             fake.transcribe.return_value = {
                 "text": "직렬 폴백 회복",
-                "segments": [
-                    {"text": "직렬 폴백 회복", "speaker_id": "S01"}
-                ],
+                "segments": [{"text": "직렬 폴백 회복", "speaker_id": "S01"}],
                 "language": "ko",
                 "speaker_diarization": True,
                 "speaker_diarization_status": "completed",
@@ -7390,9 +7505,7 @@ class CliTests(unittest.TestCase):
             audio_library.progress_line(1, 2, "a.wav", "completed")
             audio_library.tmk_progress_line(2, 3, "a.tmk", "completed")
             audio_library.description_progress_line(1, 1, "a.wav", "cached")
-            audio_library.materialization_progress_line(
-                1, 4, "remote.wav", "requested"
-            )
+            audio_library.materialization_progress_line(1, 4, "remote.wav", "requested")
         self.assertIn("1/2", output.getvalue())
         self.assertIn("TMK\t2/3", output.getvalue())
         self.assertIn("DESCRIBE\t1/1", output.getvalue())
@@ -7541,11 +7654,7 @@ class CliTests(unittest.TestCase):
                 "word_timestamps": False,
                 "speaker_diarization": True,
                 "segments": [
-                    {
-                        key: value
-                        for key, value in segment.items()
-                        if key != "words"
-                    }
+                    {key: value for key, value in segment.items() if key != "words"}
                     | {"speaker_id": "S01"}
                     for segment in stored["segments"]
                 ],
@@ -7563,9 +7672,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(speaker_summary["speaker_segment_timestamps"])
             reviewed_speaker = json.loads(transcript_path.read_text(encoding="utf-8"))
             self.assertEqual(
-                reviewed_speaker[
-                    audio_library.MANUAL_REVIEW_EVIDENCE_FIELD
-                ]["method"],
+                reviewed_speaker[audio_library.MANUAL_REVIEW_EVIDENCE_FIELD]["method"],
                 audio_library.MANUAL_REVIEW_SEGMENT_EVIDENCE_METHOD,
             )
             atomic_json_write(transcript_path, stored)

@@ -2,6 +2,10 @@
 
 Python CLI for carving long recordings into metadata-preserved FLAC/Opus files.
 
+For the long-recording curation contract (TMK/VAD evidence precedence,
+provenance, and late-TMK selective reconciliation), see
+[`docs/architecture/segmentation-reconciliation.md`](docs/architecture/segmentation-reconciliation.md).
+
 Convert supported audio recordings to FLAC or, only when needed to fit each output under a target size, high-bitrate Opus. The tool preserves originals and writes generated files to a separate output directory. Each generated output is kept below the configured size target and below four hours; longer sources are split at long silence intervals when possible.
 
 ## Install
@@ -157,6 +161,10 @@ codec-carver-library /path/to/recordings hydrate-tmk --workers 4
 codec-carver-library /path/to/recordings hydrate-tmk \
   --workers 1 --path 'FOLDER01/231101_0917.tmk'
 codec-carver-library /path/to/recordings stream-transcribe --accelerator mlx
+# If a TMK arrives after a fixed-range fallback, bind its verified SHA and get
+# a promote-or-selective-reprocess plan without deleting the old transcript.
+codec-carver-library /path/to/recordings reconcile-tmk \
+  --path 'FOLDER01/recording.wav'
 # Speaker-aware MLX transcription is the default. Each SHA-keyed .txt contains
 # one dialogue file with consecutive turns rendered as `[S01] ...`, `[S02] ...`.
 # The pinned 0.9B MOSS model transcribes Korean and assigns timestamps and
