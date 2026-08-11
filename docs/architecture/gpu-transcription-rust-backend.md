@@ -84,6 +84,10 @@ preferred interface for recording curation.
   `stage_source_stalled` code, timeout, maximum observed staged bytes, and a
   retryable flag, while the human message names FileProvider/CloudKit as the
   materialization layer to inspect.
+- A failed streaming stage refreshes only the recording's live
+  `materialized` flag from the current File Provider state. It never treats a
+  prior SHA as newly verified; content evidence can become current again only
+  after a successful Rust stage and byte/hash check.
 - After the transcript and inventory checkpoint are durable, the Rust `evict`
   command calls Foundation's `FileManager.evictUbiquitousItem` directly. The
   Python API records a native eviction problem separately in `eviction_failures`;

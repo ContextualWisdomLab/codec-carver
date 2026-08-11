@@ -7400,6 +7400,14 @@ class AudioLibrary:
                 failed += 1
                 failure = failure_entry(record["path"], exc)
                 record["error"] = failure["error"]
+                # A prior inventory may say ``materialized`` even after File
+                # Provider has evicted the source. Refresh only this live state
+                # on failure; never promote a persisted SHA back to current
+                # content evidence without a successful Rust stage.
+                try:
+                    record["materialized"] = not is_icloud_dataless(audio_path)
+                except Exception:
+                    record["materialized"] = False
                 failures.append(failure)
             finally:
                 if staged_audio is not None:
