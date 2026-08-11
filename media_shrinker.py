@@ -2054,13 +2054,21 @@ def _parse_probe_payload(
     source_size: int | None = None,
 ) -> MediaProbe:
     """Parse raw ffprobe JSON payload into a MediaProbe object."""
+    if not isinstance(payload, dict):
+        raise MediaShrinkerError(f"{source_path} ffprobe payload was not an object")
     streams = payload.get("streams", [])
+    if not isinstance(streams, list):
+        raise MediaShrinkerError(f"{source_path} ffprobe payload has invalid streams")
 
     # Fast path: O(N) loop to find audio stream and check for video in one pass
     # Avoids multiple generator expressions and any/next calls for measurable CPU savings on large files
     audio_stream = None
     has_video = False
     for stream in streams:
+        # ffprobe output is untrusted; a non-object stream entry cannot be the
+        # audio stream, so skip it rather than let stream.get() raise AttributeError.
+        if not isinstance(stream, dict):
+            continue
         codec_type = stream.get("codec_type")
         if codec_type == "audio" and audio_stream is None:
             audio_stream = stream
@@ -2070,7 +2078,18 @@ def _parse_probe_payload(
     if audio_stream is None:
         raise MediaShrinkerError(f"{source_path} has no audio stream")
 
+    # codec_name is untrusted; MediaProbe.audio_codec is typed str | None and
+    # _is_lossless_probe() calls .lower() on it, so a non-string value (e.g. a
+    # JSON list) would raise AttributeError downstream. Reject it here instead.
+    audio_codec = audio_stream.get("codec_name")
+    if audio_codec is not None and not isinstance(audio_codec, str):
+        raise MediaShrinkerError(
+            f"{source_path} ffprobe audio stream has invalid codec_name"
+        )
+
     format_section = payload.get("format", {})
+    if not isinstance(format_section, dict):
+        raise MediaShrinkerError(f"{source_path} ffprobe payload has invalid format")
     # Prefer the stream duration, but a stream-level "0"/"0.000000" (reported by
     # some containers) is unusable and must fall back to the format duration.
     duration = _first_float(audio_stream.get("duration"))
@@ -2091,7 +2110,7 @@ def _parse_probe_payload(
     return MediaProbe(
         duration_seconds=duration,
         size_bytes=parsed_size,
-        audio_codec=audio_stream.get("codec_name"),
+        audio_codec=audio_codec,
         audio_bit_rate=audio_bit_rate,
         has_video=has_video,
         format_name=str(format_section.get("format_name", "")),
