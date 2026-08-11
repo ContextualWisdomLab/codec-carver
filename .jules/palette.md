@@ -1,3 +1,6 @@
+## 2026-08-11 - Expand Drop Zones to be Clickable
+**Learning:** Expanding file drop zones to wrap form containers, add a click event listener to programmatically trigger the hidden file input's `.click()` method, while explicitly ignoring clicks on interactive child elements (e.g., `['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)`) improves usability for users who prefer clicking over dragging.
+**Action:** When creating drop zones, always ensure they are clickable to trigger the file input, providing a larger target area.
 ## 2024-07-15 - Dynamic Size formatting and Total Size Validation
 **Learning:** Hardcoding human-readable sizes (like '5 GiB') in validation error messages is error-prone when the underlying constant changes. Moreover, failing to validate total upload size against backend limits (e.g., MAX_UPLOAD_BYTES) in batch file uploads frustrates users who wait for a large upload to finish only to get a server-side 413 Payload Too Large error.
 **Action:** Always format backend byte limit constants dynamically (e.g., `formatBinaryBytes(MAX_UPLOAD_BYTES)`) on the client side to display accurate error messages. For multiple file inputs, ensure both the file count and the combined file size are validated against backend limits, giving immediate inline feedback via `setCustomValidity` and `aria-invalid`.

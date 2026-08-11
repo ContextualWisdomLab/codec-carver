@@ -368,6 +368,13 @@ HTML_TEMPLATE = """
 
         [dropZone, batchDropZone].forEach(zone => {
             if (!zone) return;
+
+            zone.addEventListener('click', (e) => {
+                if (['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+                if (zone.id === 'drop-zone') fileInput.click();
+                if (zone.id === 'batch-drop-zone' && batchFileInput) batchFileInput.click();
+            });
+
             ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
                 zone.addEventListener(eventName, preventDefaults, false);
             });
