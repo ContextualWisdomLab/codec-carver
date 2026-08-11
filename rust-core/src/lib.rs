@@ -144,11 +144,9 @@ pub enum StageReadMode {
     CoordinatedIcloud,
 }
 
-fn provider_allows_direct_read(
-    provider_report: Option<bool>,
-    metadata_reports_materialized: bool,
-) -> bool {
-    provider_report.unwrap_or(metadata_reports_materialized)
+#[cfg(any(target_os = "macos", test))]
+fn provider_allows_direct_read(provider_report: Option<bool>) -> bool {
+    matches!(provider_report, Some(true))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1082,13 +1080,8 @@ fn copy_and_hash_staged_source(
         // no-follow descriptor path first and accept it only when the complete
         // advertised file size was copied; otherwise retain the coordinated
         // iCloud path which can fetch genuinely remote bytes.
-        let metadata_reports_materialized = fs::metadata(source)
-            .map(|metadata| !is_dataless(&metadata))
-            .unwrap_or(false);
-        let direct_allowed = provider_allows_direct_read(
-            provider_reports_downloaded(source),
-            metadata_reports_materialized,
-        );
+        let direct_allowed =
+            provider_allows_direct_read(provider_reports_downloaded(source));
         if direct_allowed {
             let mut direct_capture = capture.as_ref().map(|_| Vec::new());
             let direct_result = open_regular_beneath(root, relative_path).and_then(|input| {
@@ -2178,10 +2171,9 @@ mod tests {
 
     #[test]
     fn unknown_file_provider_state_never_allows_direct_read() {
-        assert!(!provider_allows_direct_read(None, false));
-        assert!(!provider_allows_direct_read(None, true));
-        assert!(!provider_allows_direct_read(Some(false), true));
-        assert!(provider_allows_direct_read(Some(true), false));
+        assert!(!provider_allows_direct_read(None));
+        assert!(!provider_allows_direct_read(Some(false)));
+        assert!(provider_allows_direct_read(Some(true)));
     }
 
     #[test]
