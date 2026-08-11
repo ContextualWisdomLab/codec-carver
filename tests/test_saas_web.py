@@ -219,7 +219,11 @@ class TestSaasWeb(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             mock_convert_file.assert_called_once()
-            self.assertEqual(mock_convert_file.call_args.kwargs["source"].name, "passwd")
+            call = mock_convert_file.call_args.kwargs
+            source = Path(call["source"])
+            root = Path(call["root"])
+            self.assertEqual(source.name, "passwd")
+            self.assertTrue(source.resolve().is_relative_to(root.resolve()))
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_uses_safe_fallback_filename(self, mock_convert_file):
@@ -593,6 +597,12 @@ class TestShrinkBatch(unittest.TestCase):
         names, manifest, _ = self._read_zip(response)
         self.assertIn("01_passwd.flac", names)
         self.assertEqual(manifest["results"][0]["filename"], "passwd")
+        mock_convert_file.assert_called_once()
+        call = mock_convert_file.call_args.kwargs
+        source = Path(call["source"])
+        root = Path(call["root"])
+        self.assertEqual(source.name, "passwd")
+        self.assertTrue(source.resolve().is_relative_to(root.resolve()))
 
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_batch_uses_safe_fallback_filename(self, mock_convert_file):
