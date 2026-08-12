@@ -349,7 +349,9 @@ through the component-by-component `openat`/`O_NOFOLLOW` path without
 canonicalizing the File Provider file itself. A complete read is copied to
 local scratch and hashed in one pass even when the provider's dataless bit is
 stale; otherwise Foundation materialization and `NSFileCoordinator` provide the
-coordinated path. The stage JSON returns the scratch path, source record, and
+coordinated path. If File Provider status is unknown, only a bounded 8 MiB
+sidecar may attempt the direct-read path; long audio remains coordinated and
+checkpointed. The stage JSON returns the scratch path, source record, and
 the read mode used. The `evict` command releases local iCloud blocks with Foundation
 rather than a shell utility. A changed known hash stops transcription. Mutation
 execution opens and locks the library root, reopens and hashes each source

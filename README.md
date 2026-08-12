@@ -347,6 +347,8 @@ it reads the tiny TMK files concurrently, checkpoints each SHA-256 and the full
 ordered marker vector, and backfills any existing transcript sidecars. The
 transcript provenance stores the verified primary `tmk_sha256` alongside its
 path and marker vector; unresolved or stale TMK identity is recorded as null.
+When File Provider status is unknown, only small TMK sidecars use the bounded
+direct-read probe; long audio remains on the coordinated, checkpointed path.
 Verified
 TMK offsets split long MLX recordings into bounded, one-second-overlap decode
 ranges while the same pinned Whisper model remains resident; midpoint ownership
