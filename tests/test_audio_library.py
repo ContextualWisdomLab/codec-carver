@@ -3493,12 +3493,12 @@ class GpuTranscriberTests(unittest.TestCase):
             )
             control_only = transcriber.transcribe(Path("meeting.wav"))
             joint_model.generate.return_value = types.SimpleNamespace(
-                text="1024604",
+                text="[S01]1024604",
                 segments=[
                     {
                         "start": 0.0,
                         "end": 1.0,
-                        "text": "1024604",
+                        "text": "[S01]1024604",
                         "speaker_id": "S01",
                     }
                 ],

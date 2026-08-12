@@ -1503,7 +1503,7 @@ class GpuTranscriber:
                 residual = re.sub(
                     r"\[(?:\d+(?:\.\d+)?|S\d+)\]", "", value
                 ).strip(" []")
-                return bool(re.fullmatch(r"(?:S?\d+(?:\.\d+)?)*", residual))
+                return not residual or bool(re.fullmatch(r"S\d*", residual))
 
             def normalize_joint_segments(
                 raw_segments: Any,
