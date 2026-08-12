@@ -10,6 +10,7 @@ invokes Ollama and refuses a CPU fallback when GPU transcription is requested.
 from __future__ import annotations
 
 import argparse
+import gc
 import errno
 import hashlib
 import inspect
@@ -1492,6 +1493,18 @@ class GpuTranscriber:
                 automatic_ranges = chunk_ranges
             inference_chunk_ranges = list(chunk_ranges)
 
+            def is_control_token_only(value: str) -> bool:
+                """Reject MOSS timestamp/speaker control output, not numeric speech."""
+
+                if not value or not re.search(
+                    r"\[(?:\d+(?:\.\d+)?|S\d+)\]", value
+                ):
+                    return False
+                residual = re.sub(
+                    r"\[(?:\d+(?:\.\d+)?|S\d+)\]", "", value
+                ).strip(" []")
+                return not residual or bool(re.fullmatch(r"S\d*", residual))
+
             def normalize_joint_segments(
                 raw_segments: Any,
                 *,
@@ -1525,6 +1538,8 @@ class GpuTranscriber:
                     if chunk_index is not None:
                         speaker = f"C{chunk_index + 1:03d}_{speaker}"
                     segment_text = str(raw_segment.get("text", "")).strip()
+                    if is_control_token_only(segment_text):
+                        continue
                     segment_text = re.sub(r"^\[S\d+\]\s*", "", segment_text).strip()
                     normalized = normalize_segment(
                         {
@@ -1537,6 +1552,8 @@ class GpuTranscriber:
                     if normalized["text"]:
                         normalized_segments.append(normalized)
                 fallback_text = fallback_text.strip()
+                if is_control_token_only(fallback_text):
+                    fallback_text = ""
                 if not normalized_segments and fallback_text:
                     speaker = "S00"
                     if chunk_index is not None:
@@ -1649,6 +1666,19 @@ class GpuTranscriber:
                                 "text": chunk_text,
                             }
                         )
+                    # MOSS allocates the audio features and KV cache on MLX's
+                    # pooled GPU allocator.  Long recordings otherwise retain
+                    # each completed chunk until the process is killed by
+                    # unified-memory pressure, even though only Python
+                    # segments are carried forward.
+                    del raw
+                    gc.collect()
+                    try:
+                        import mlx.core as mx  # type: ignore[import-not-found]
+
+                        mx.clear_cache()
+                    except (ImportError, AttributeError):
+                        pass
                 segments.sort(key=lambda segment: (segment["start"], segment["end"]))
                 text = " ".join(chunk_texts)
             else:
