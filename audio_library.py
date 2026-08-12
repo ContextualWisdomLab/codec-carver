@@ -8143,6 +8143,33 @@ class AudioLibrary:
             if record.get("tmk_path"):
                 missing.append(record["tmk_path"])
 
+        selected_tmk_paths = {
+            record.get("tmk_path")
+            for record in records_by_path.values()
+            if record.get("kind") == "audio"
+            and record.get("path") in selected_paths
+            and record.get("tmk_path")
+        }
+        for group in manifest.get("tmk_duplicate_groups", []):
+            for duplicate in group["duplicate_paths"]:
+                if selected_paths and duplicate not in selected_tmk_paths:
+                    continue
+                if duplicate in moved_tmk:
+                    continue
+                record = records_by_path[duplicate]
+                if not ready(record):
+                    missing.append(duplicate)
+                    continue
+                operations.append(
+                    mutation(
+                        "quarantine",
+                        duplicate,
+                        quarantine_path(group["sha256"], duplicate),
+                        group["sha256"],
+                    )
+                )
+                moved_tmk.add(duplicate)
+
         for group in manifest["duplicate_groups"]:
             for duplicate in group["duplicate_paths"]:
                 if selected_paths and duplicate not in selected_paths:
@@ -8841,6 +8868,33 @@ class AudioLibrary:
                     raise ValueError(
                         f"duplicate group {index} is not bound to matching inventory records"
                     )
+        tmk_duplicate_groups = manifest.get("tmk_duplicate_groups", [])
+        if not isinstance(tmk_duplicate_groups, list):
+            raise ValueError("inventory tmk_duplicate_groups must be a list")
+        for index, group in enumerate(tmk_duplicate_groups):
+            if not isinstance(group, dict):
+                raise ValueError(f"TMK duplicate group {index} must be an object")
+            sha256 = validate_sha256(
+                group.get("sha256"), label=f"TMK duplicate group SHA-256 {index}"
+            )
+            duplicate_paths = group.get("duplicate_paths")
+            if not isinstance(duplicate_paths, list):
+                raise ValueError(f"TMK duplicate group {index} paths must be a list")
+            paths = [group.get("canonical_path"), *duplicate_paths]
+            for value in paths:
+                normalized = validate_relative_path(
+                    self.root, value, label=f"TMK duplicate group path {index}"
+                )
+                record = records_by_path.get(normalized)
+                if (
+                    record is None
+                    or record.get("kind") != "tmk"
+                    or record.get("sha256") != sha256
+                ):
+                    raise ValueError(
+                        "TMK duplicate group "
+                        f"{index} is not bound to matching inventory records"
+                    )
         return manifest
 
 
@@ -8983,41 +9037,55 @@ def rebuild_manifest_summary(manifest: dict[str, Any]) -> None:
     audio_records = [
         record for record in manifest["files"] if record["kind"] == "audio"
     ]
-    by_hash: dict[str, list[dict[str, Any]]] = {}
-    for record in audio_records:
-        if record.get("sha256") and record_sha_is_verified(record):
-            by_hash.setdefault(record["sha256"], []).append(record)
-    groups = []
-    for sha256, records in sorted(by_hash.items()):
-        if len(records) < 2:
-            continue
-        records.sort(
-            key=lambda record: (
-                record.get("recorded_at") or "9999",
-                bool(COPY_SUFFIX_RE.search(Path(record["path"]).stem)),
-                not bool(record.get("tmk_path")),
-                not bool(record.get("location")),
-                len(Path(record["path"]).parts),
-                record["path"],
+
+    def duplicate_groups_for(
+        records: list[dict[str, Any]], *, audio: bool
+    ) -> list[dict[str, Any]]:
+        """Group verified content by kind while preserving deterministic canonicals."""
+
+        by_hash: dict[str, list[dict[str, Any]]] = {}
+        for record in records:
+            if record.get("sha256") and record_sha_is_verified(record):
+                by_hash.setdefault(record["sha256"], []).append(record)
+        groups = []
+        for sha256, matching in sorted(by_hash.items()):
+            if len(matching) < 2:
+                continue
+            matching.sort(
+                key=lambda record: (
+                    record.get("recorded_at") or "9999",
+                    bool(COPY_SUFFIX_RE.search(Path(record["path"]).stem)),
+                    not bool(record.get("tmk_path")) if audio else False,
+                    not bool(record.get("location")) if audio else False,
+                    len(Path(record["path"]).parts),
+                    record["path"],
+                )
             )
-        )
-        groups.append(
-            {
-                "sha256": sha256,
-                "size_bytes": records[0]["size_bytes"],
-                "canonical_path": records[0]["path"],
-                "duplicate_paths": [record["path"] for record in records[1:]],
-                "earliest_recorded_at": min(
-                    (
-                        record["recorded_at"]
-                        for record in records
-                        if record.get("recorded_at")
+            groups.append(
+                {
+                    "sha256": sha256,
+                    "size_bytes": matching[0]["size_bytes"],
+                    "canonical_path": matching[0]["path"],
+                    "duplicate_paths": [
+                        record["path"] for record in matching[1:]
+                    ],
+                    "earliest_recorded_at": min(
+                        (
+                            record["recorded_at"]
+                            for record in matching
+                            if record.get("recorded_at")
+                        ),
+                        default=None,
                     ),
-                    default=None,
-                ),
-            }
-        )
-    manifest["duplicate_groups"] = groups
+                }
+            )
+        return groups
+
+    manifest["duplicate_groups"] = duplicate_groups_for(audio_records, audio=True)
+    manifest["tmk_duplicate_groups"] = duplicate_groups_for(
+        [record for record in manifest["files"] if record["kind"] == "tmk"],
+        audio=False,
+    )
     manifest["dataless_file_count"] = sum(
         not record.get("materialized", False) for record in manifest["files"]
     )

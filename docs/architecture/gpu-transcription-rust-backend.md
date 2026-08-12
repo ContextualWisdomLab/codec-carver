@@ -337,7 +337,11 @@ model/revision, and review time in private state.
 
 `rust-core/codec-carver-core` owns bounded-buffer SHA-256, parallel scans,
 macOS dataless detection, filename/creation-time evidence, TMK decoding,
-duplicate grouping, and guarded filesystem changes. A single-file `inspect`
+kind-separated audio/TMK duplicate grouping, and guarded filesystem changes.
+The inventory keeps `duplicate_groups` for audio and `tmk_duplicate_groups` for
+TMK sidecars separate; only current, content-verified bytes may enter either
+group, so a stale File Provider SHA hint remains evidence but never authorizes
+quarantine. A single-file `inspect`
 command supports local single-file inspection. The `materialize` command
 validates one regular, non-symlink library child and queues Foundation's native
 iCloud download without waiting. The `stage` command first probes the source

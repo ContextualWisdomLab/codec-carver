@@ -5512,6 +5512,51 @@ class AudioLibraryTests(unittest.TestCase):
                     selected_audio_paths=["canonical.wav"],
                 )
 
+    def test_selected_plan_quarantines_verified_tmk_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = _manifest(root)
+            manifest["duplicate_groups"] = []
+            for record in manifest["files"]:
+                if record["kind"] == "tmk":
+                    record.update(
+                        {
+                            "materialized": True,
+                            "sha256_verified": True,
+                            "sha256_source": "content",
+                        }
+                    )
+            manifest["tmk_duplicate_groups"] = [
+                {
+                    "sha256": TMK_HASH,
+                    "size_bytes": 20,
+                    "canonical_path": "canonical.tmk",
+                    "duplicate_paths": ["copies/duplicate.tmk"],
+                    "earliest_recorded_at": "2024-01-02T03:04:00+09:00",
+                }
+            ]
+            library = AudioLibrary(root, Mock())
+            with patch.object(library, "_record_ready_for_mutation", return_value=True):
+                operations, deferred = library._build_mutation_operations(
+                    manifest,
+                    allow_missing_transcripts=False,
+                    defer_unready=True,
+                    verify_sources=False,
+                    selected_audio_paths=["copies/duplicate.wav"],
+                )
+            self.assertEqual(
+                operations,
+                [
+                    mutation(
+                        "quarantine",
+                        "copies/duplicate.tmk",
+                        quarantine_path(TMK_HASH, "copies/duplicate.tmk"),
+                        TMK_HASH,
+                    )
+                ],
+            )
+            self.assertEqual(deferred, [])
+
     def test_plan_requires_transcripts_unless_override_is_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
