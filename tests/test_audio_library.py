@@ -3481,7 +3481,7 @@ class GpuTranscriberTests(unittest.TestCase):
             )
             unresolved = transcriber.transcribe(Path("meeting.wav"))
             joint_model.generate.return_value = types.SimpleNamespace(
-                text="[1.02][S01][1.52][S01]", segments=[]
+                text="[1.02][S01][1.52][S01][S0", segments=[]
             )
             control_only = transcriber.transcribe(Path("meeting.wav"))
 

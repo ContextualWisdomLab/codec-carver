@@ -1538,8 +1538,11 @@ class GpuTranscriber:
                     if normalized["text"]:
                         normalized_segments.append(normalized)
                 fallback_text = fallback_text.strip()
-                if re.fullmatch(
-                    r"(?:\[(?:\d+(?:\.\d+)?|S\d+)\])+", fallback_text
+                control_free_text = re.sub(
+                    r"\[(?:\d+(?:\.\d+)?|S\d+)\]", "", fallback_text
+                ).strip(" []")
+                if fallback_text and re.fullmatch(
+                    r"(?:S?\d+(?:\.\d+)?)*", control_free_text
                 ):
                     fallback_text = ""
                 if not normalized_segments and fallback_text:
