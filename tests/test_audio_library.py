@@ -5871,7 +5871,19 @@ class AudioLibraryTests(unittest.TestCase):
                 (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
             )
             self.assertEqual(transcript["tmk_sha256"], TMK_HASH)
-            self.assertEqual(fake.transcribe.call_args_list[1].kwargs, {})
+            self.assertEqual(
+                fake.transcribe.call_args_list[1].kwargs["source_sha256"], HASH_B
+            )
+            self.assertEqual(
+                fake.transcribe.call_args_list[1].kwargs["source_path"], "second.wav"
+            )
+            self.assertEqual(
+                fake.transcribe.call_args_list[1].kwargs["tmk_status"],
+                "not_present",
+            )
+            self.assertIsNone(
+                fake.transcribe.call_args_list[1].kwargs["tmk_markers_seconds"]
+            )
 
     def test_transcribe_honors_cache_and_max_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5928,6 +5940,52 @@ class AudioLibraryTests(unittest.TestCase):
                 summary = library.transcribe(max_files=1)
             self.assertEqual(summary["cached"], 1)
             fake.transcribe.assert_not_called()
+
+    def test_transcribe_preserves_pending_tmk_provenance_without_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            manifest = _manifest(root)
+            # The sidecar has a linked TMK path but no current-byte proof or
+            # parsed marker vector; it must remain explicitly pending.
+            manifest["files"][3].update(
+                {
+                    "sha256": TMK_HASH,
+                    "sha256_verified": False,
+                    "sha256_source": "previous_inventory",
+                    "materialized": False,
+                    "tmk_markers_seconds": None,
+                }
+            )
+            atomic_json_write(state / "inventory.json", manifest)
+            (root / "canonical.wav").write_bytes(b"one")
+            backend = Mock()
+            backend.inspect.return_value = manifest["files"][0]
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {"canonical.wav": HASH_A})
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "대기 중인 TMK",
+                "segments": [],
+                "language": "ko",
+            }
+            with patch("audio_library.GpuTranscriber", return_value=fake):
+                summary = library.transcribe(max_files=1)
+            self.assertEqual(summary["completed"], 1)
+            kwargs = fake.transcribe.call_args.kwargs
+            self.assertEqual(kwargs["source_sha256"], HASH_A)
+            self.assertEqual(kwargs["source_path"], "canonical.wav")
+            self.assertEqual(kwargs["tmk_status"], "tmk_pending_materialization")
+            self.assertIsNone(kwargs["tmk_markers_seconds"])
+            transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                transcript["segmentation_provenance"]["tmk"]["status"],
+                "tmk_pending_materialization",
+            )
 
     def test_hydrate_tmk_metadata_parallel_checkpoint_and_empty_resume(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6484,7 +6542,7 @@ class AudioLibraryTests(unittest.TestCase):
             backend.stage.side_effect = stage
             fake = Mock(accelerator="mlx", model="model")
 
-            def transcribe(_audio_path):
+            def transcribe(_audio_path, **_kwargs):
                 self.assertTrue(second_started.is_set())
                 if not release_second.is_set():
                     release_second.set()
@@ -6643,7 +6701,7 @@ class AudioLibraryTests(unittest.TestCase):
             backend.evict.side_effect = evict
             fake = Mock(accelerator="mlx", model="model")
 
-            def transcribe(_audio_path):
+            def transcribe(_audio_path, **_kwargs):
                 release_second.set()
                 return {"text": "overlap", "segments": [], "language": "ko"}
 
@@ -7069,7 +7127,16 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(transcript["tmk_error"], "dataless")
             self.assertIsNone(transcript["tmk_sha256"])
             self.assertIsNone(transcript["tmk_markers_seconds"])
-            self.assertEqual(fake.transcribe.call_args.kwargs, {})
+            self.assertEqual(
+                fake.transcribe.call_args.kwargs["source_sha256"], HASH_A
+            )
+            self.assertEqual(
+                fake.transcribe.call_args.kwargs["tmk_status"],
+                "tmk_pending_materialization",
+            )
+            self.assertIsNone(
+                fake.transcribe.call_args.kwargs["tmk_markers_seconds"]
+            )
 
     def test_stream_transcribe_uses_verified_copy_tmk_as_chunk_hint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7440,7 +7507,15 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(summary["completed"], 1)
             duration.assert_not_called()
             transcriber.transcribe.assert_called_once()
-            self.assertEqual(transcriber.transcribe.call_args.kwargs, {})
+            self.assertEqual(
+                transcriber.transcribe.call_args.kwargs["source_sha256"], HASH_A
+            )
+            self.assertEqual(
+                transcriber.transcribe.call_args.kwargs["source_path"], "cuda.wav"
+            )
+            self.assertEqual(
+                transcriber.transcribe.call_args.kwargs["tmk_status"], "not_present"
+            )
 
     def test_stream_transcribe_uses_cached_hash_and_isolates_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

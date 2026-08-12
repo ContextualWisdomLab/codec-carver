@@ -6492,19 +6492,15 @@ class AudioLibrary:
                         if record.get("tmk_path")
                         else "not_present"
                     )
-                    result = (
-                        transcriber.transcribe(
-                            staged_audio,
-                            tmk_markers_seconds=markers_seconds,
-                            source_sha256=sha256,
-                            source_path=record["path"],
-                            tmk_status=tmk_status,
-                            tmk_sha256=(
-                                tmk_record.get("sha256") if verified_tmk else None
-                            ),
-                        )
-                        if markers_seconds
-                        else transcriber.transcribe(staged_audio)
+                    result = transcriber.transcribe(
+                        staged_audio,
+                        tmk_markers_seconds=markers_seconds,
+                        source_sha256=sha256,
+                        source_path=record["path"],
+                        tmk_status=tmk_status,
+                        tmk_sha256=(
+                            tmk_record.get("sha256") if verified_tmk else None
+                        ),
                     )
                     result.update(
                         {
@@ -7150,6 +7146,17 @@ class AudioLibrary:
                     checkpoint_path: Path | None = None
                     checkpoint_mode: str | None = None
                     duration_hint: float | None = None
+                    transcribe_kwargs = {
+                        "tmk_markers_seconds": markers_seconds,
+                        "source_sha256": sha256,
+                        "source_path": record["path"],
+                        "tmk_status": tmk_status,
+                        "tmk_sha256": (
+                            tmk_record.get("sha256")
+                            if not tmk_needs_metadata
+                            else None
+                        ),
+                    }
                     if markers_seconds:
                         checkpoint_mode = "tmk_markers"
                         duration_hint = audio_duration_seconds(audio_input)
@@ -7299,22 +7306,13 @@ class AudioLibrary:
                                     ),
                                 )
 
-                        result = transcriber.transcribe(
-                            audio_input,
-                            tmk_markers_seconds=markers_seconds,
-                            source_sha256=sha256,
-                            source_path=record["path"],
-                            tmk_status=tmk_status,
-                            tmk_sha256=(
-                                tmk_record.get("sha256")
-                                if not tmk_needs_metadata
-                                else None
-                            ),
-                            completed_chunks=completed_checkpoint_chunks,
-                            chunk_progress=checkpoint_chunk,
+                        transcribe_kwargs.update(
+                            {
+                                "completed_chunks": completed_checkpoint_chunks,
+                                "chunk_progress": checkpoint_chunk,
+                            }
                         )
-                    else:
-                        result = transcriber.transcribe(audio_input)
+                    result = transcriber.transcribe(audio_input, **transcribe_kwargs)
                     resumed_transcription_chunks += int(
                         result.get("resumed_transcription_chunks", 0)
                     )
