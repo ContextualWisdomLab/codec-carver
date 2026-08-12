@@ -7343,6 +7343,7 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(
                 checkpoint["files"][0]["error"], summary["failures"][0]["error"]
             )
+            self.assertTrue(checkpoint["files"][0]["sha256_verified"])
 
             atomic_json_write(
                 state / "transcripts" / f"{HASH_B}.json",
@@ -7411,8 +7412,55 @@ class AudioLibraryTests(unittest.TestCase):
                 (state / "inventory.json").read_text(encoding="utf-8")
             )
             self.assertFalse(persisted["files"][0]["materialized"])
-            self.assertTrue(persisted["files"][0]["sha256_verified"])
+            self.assertFalse(persisted["files"][0]["sha256_verified"])
+            self.assertEqual(
+                persisted["files"][0]["sha256_source"], "previous_inventory"
+            )
             fake.transcribe.assert_not_called()
+
+    def test_stream_stage_failure_clears_stale_provider_probe_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            record = _record(
+                "record.wav",
+                HASH_A,
+                materialized=True,
+                tmk_path=None,
+                materialization_probe_error="stale probe failure",
+            )
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [record],
+                    "duplicate_groups": [],
+                },
+            )
+            (root / "record.wav").write_bytes(AUDIO_A_BYTES)
+            backend = Mock()
+            backend.stage.side_effect = RuntimeError("provider stalled")
+            library = AudioLibrary(root, backend)
+            fake = Mock(accelerator="mlx", model="model", model_revision=None)
+
+            with (
+                patch("audio_library.GpuTranscriber", return_value=fake),
+                patch(
+                    "audio_library.is_icloud_dataless", side_effect=[True, True, False]
+                ),
+            ):
+                summary = library.stream_transcribe(
+                    relative_paths=["record.wav"],
+                    stage_stall_timeout_seconds=1,
+                    evict_after=False,
+                )
+
+            self.assertEqual(summary["failed"], 1)
+            persisted = json.loads(
+                (state / "inventory.json").read_text(encoding="utf-8")
+            )
+            self.assertNotIn("materialization_probe_error", persisted["files"][0])
 
     def test_stream_stage_failure_records_provider_probe_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

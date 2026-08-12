@@ -6947,6 +6947,7 @@ class AudioLibrary:
             audio_path = self.root / record["path"]
             audio_input = audio_path
             staged_audio: VerifiedStagedArtifact | None = None
+            bytes_verified = False
             was_dataless = record["path"] in prefetch_futures or is_icloud_dataless(
                 audio_path
             )
@@ -7061,6 +7062,7 @@ class AudioLibrary:
                             expected_sha256=known_sha256 or None,
                         )
                         inspected = staged_audio.record
+                        bytes_verified = True
                     except Exception:
                         if known_sha256:
                             record["sha256_verified"] = False
@@ -7075,6 +7077,7 @@ class AudioLibrary:
                     self._verify_materialized_record(
                         record, timeout_seconds=inspect_timeout_seconds
                     )
+                    bytes_verified = True
                 sha256 = validate_sha256(record["sha256"])
                 transcript_path = safe_transcript_path(transcript_dir, sha256)
                 text_path = safe_transcript_path(transcript_dir, sha256, ".txt")
@@ -7414,12 +7417,19 @@ class AudioLibrary:
                 failed += 1
                 failure = failure_entry(record["path"], exc)
                 record["error"] = failure["error"]
+                if not bytes_verified:
+                    # A prior content hash is only historical evidence once
+                    # current bytes fail before Rust inspection/staging.
+                    record["sha256_verified"] = False
+                    if record.get("sha256_source") == "content":
+                        record["sha256_source"] = "previous_inventory"
                 # A prior inventory may say ``materialized`` even after File
                 # Provider has evicted the source. Refresh only this live state
                 # on failure; never promote a persisted SHA back to current
                 # content evidence without a successful Rust stage.
                 try:
                     record["materialized"] = not is_icloud_dataless(audio_path)
+                    record.pop("materialization_probe_error", None)
                 except OSError as probe_exc:
                     record["materialized"] = False
                     record["materialization_probe_error"] = (
