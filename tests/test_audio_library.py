@@ -5346,6 +5346,33 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertTrue(manifest["files"][0]["sha256_verified"])
             self.assertEqual(manifest["files"][0]["sha256_source"], "content")
 
+    def test_inventory_does_not_treat_linked_audio_sha_as_tmk_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tmk_path = f"2024-01-02_03-04-05__회의__sha256-{HASH_A[:12]}.tmk"
+            tmk_record = {
+                "path": tmk_path,
+                "kind": "tmk",
+                "extension": "tmk",
+                "size_bytes": len(TMK_BYTES),
+                "sha256": HASH_A,
+                "sha256_source": "transcript_sidecar",
+                "sha256_verified": False,
+                "materialized": False,
+            }
+            manifest = {
+                "schema_version": 1,
+                "root": str(root),
+                "files": [tmk_record],
+                "duplicate_groups": [],
+            }
+            previous = {"files": [dict(tmk_record)]}
+            restore_inventory_evidence(
+                manifest, root / ".codec-carver", previous_manifest=previous
+            )
+            self.assertNotIn("sha256", manifest["files"][0])
+            self.assertNotIn("sha256_source", manifest["files"][0])
+
     def test_plan_quarantines_duplicates_and_renames_tmk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -146,6 +146,8 @@ preferred interface for recording curation.
 - Every materialized recording is rehashed before a cache hit, GPU call, or new
   mutation. Unverified placeholder evidence cannot form an exact-duplicate
   group or a new rename/quarantine operation.
+- A standardized TMK filename may carry the linked audio SHA for pairing; the
+  TMK's own SHA-256 is populated only from TMK bytes verified by Rust.
 - Inventory paths, TMK links, digest-keyed transcript paths, and mutation paths
   are validated beneath the canonical library root. Symlinks and absolute,
   parent, Windows-drive, UNC, or malformed SHA values fail closed.

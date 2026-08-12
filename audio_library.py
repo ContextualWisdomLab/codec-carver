@@ -9271,10 +9271,21 @@ def restore_inventory_evidence(
     }
     restored = 0
     for record in manifest["files"]:
+        # Standardized TMK names carry the linked audio SHA for pairing; that
+        # token is not the TMK's own byte identity.  Drop an older unverified
+        # sidecar-derived value before considering other evidence sources.
+        if (
+            record.get("kind") == "tmk"
+            and record.get("sha256_source") == "transcript_sidecar"
+            and not record_sha_is_verified(record)
+        ):
+            record.pop("sha256", None)
+            record.pop("sha256_source", None)
+            record.pop("sha256_verified", None)
         if not record.get("sha256"):
             sha256 = journal_sha.get(record["path"])
             source = "mutation_journal"
-            if not sha256:
+            if not sha256 and record.get("kind") == "audio":
                 match = STANDARD_SHA_RE.search(Path(record["path"]).name)
                 matches = (
                     sorted(
@@ -9289,8 +9300,15 @@ def restore_inventory_evidence(
                 source = "transcript_sidecar"
             if not sha256:
                 previous = previous_by_path.get(record["path"], {})
-                if previous.get("sha256") and previous.get("size_bytes") == record.get(
-                    "size_bytes"
+                previous_source = previous.get("sha256_source")
+                if (
+                    previous.get("sha256")
+                    and previous.get("size_bytes") == record.get("size_bytes")
+                    and not (
+                        record.get("kind") == "tmk"
+                        and previous_source == "transcript_sidecar"
+                        and not record_sha_is_verified(previous)
+                    )
                 ):
                     sha256 = previous["sha256"]
                     source = "previous_inventory"
