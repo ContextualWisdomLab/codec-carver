@@ -1526,6 +1526,13 @@ class GpuTranscriber:
                     if chunk_index is not None:
                         speaker = f"C{chunk_index + 1:03d}_{speaker}"
                     segment_text = str(raw_segment.get("text", "")).strip()
+                    control_free_text = re.sub(
+                        r"\[(?:\d+(?:\.\d+)?|S\d+)\]", "", segment_text
+                    ).strip(" []")
+                    if segment_text and re.fullmatch(
+                        r"(?:S?\d+(?:\.\d+)?)*", control_free_text
+                    ):
+                        continue
                     segment_text = re.sub(r"^\[S\d+\]\s*", "", segment_text).strip()
                     normalized = normalize_segment(
                         {
