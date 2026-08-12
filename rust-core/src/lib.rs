@@ -63,6 +63,7 @@ static ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "m4a", "mp3", "flac", "aac", "opus", "ogg", "wma"];
 const IO_BUFFER_BYTES: usize = 1024 * 1024;
 const MAX_TMK_CAPTURE_BYTES: usize = 1024 * 1024;
+#[cfg(any(target_os = "macos", test))]
 const MAX_UNKNOWN_PROVIDER_DIRECT_READ_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
