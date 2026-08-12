@@ -385,6 +385,10 @@ HTML_TEMPLATE = """
             e.preventDefault();
             e.stopPropagation();
         }
+        dropZone.addEventListener('click', (e) => {
+            if (['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+            fileInput.click();
+        });
         dropZone.addEventListener('drop', (e) => {
             let dt = e.dataTransfer;
             let files = dt.files;
@@ -394,6 +398,10 @@ HTML_TEMPLATE = """
             }
         }, false);
         if (batchDropZone) {
+            batchDropZone.addEventListener('click', (e) => {
+                if (['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+                batchFileInput.click();
+            });
             batchDropZone.addEventListener('drop', (e) => {
                 let dt = e.dataTransfer;
                 let files = dt.files;

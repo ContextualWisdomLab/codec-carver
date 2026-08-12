@@ -658,6 +658,14 @@ class TestShrinkBatch(unittest.TestCase):
         finally:
             saas_web.cleanup_temp_dir(Path(response.path).parent)
 
+    def test_get_ui_includes_dropzone_click_listeners(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn("dropZone.addEventListener('click'", html)
+        self.assertIn("batchDropZone.addEventListener('click'", html)
+        self.assertIn("['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)", html)
+
     def test_get_ui_includes_batch_upload_form(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
