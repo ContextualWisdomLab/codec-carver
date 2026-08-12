@@ -4168,6 +4168,86 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertEqual(promoted["status"], "promoted_fallback")
         self.assertEqual(promoted["affected_chunk_indices"], [])
 
+    def test_audio_library_late_tmk_binds_historical_source_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state"
+            audio = _record(
+                "fallback.wav",
+                HASH_A,
+                materialized=False,
+                sha256_verified=False,
+                sha256_source="previous_inventory",
+                tmk_path="fallback.tmk",
+            )
+            tmk = {
+                "path": "fallback.tmk",
+                "kind": "tmk",
+                "extension": "tmk",
+                "size_bytes": len(TMK_BYTES),
+                "materialized": True,
+                "sha256": TMK_HASH,
+                "sha256_verified": True,
+                "sha256_source": "content",
+                "tmk_marker_count": 1,
+                "tmk_last_marker_seconds": 300.0,
+                "tmk_markers_seconds": [300.0],
+            }
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [audio, tmk],
+                    "duplicate_groups": [],
+                    "tmk_duplicate_groups": [],
+                },
+            )
+            transcript = {
+                "sha256": HASH_A,
+                "duration_seconds": 620.0,
+                "segmentation_provenance": audio_library.build_segmentation_provenance(
+                    source_sha256=HASH_A,
+                    source_path="fallback.wav",
+                    duration_seconds=620.0,
+                    tmk_status="tmk_pending_materialization",
+                    tmk_sha256=None,
+                    tmk_markers_seconds=None,
+                    checkpoint_strategy="fixed_duration",
+                    checkpoint_ranges=[(0.0, 300.0), (300.0, 620.0)],
+                    inference_ranges=[(0.0, 300.0), (300.0, 620.0)],
+                    final_ranges=[(0.0, 300.0), (300.0, 620.0)],
+                    overlap_seconds=1.0,
+                ),
+            }
+            atomic_json_write(state / "transcripts" / f"{HASH_A}.json", transcript)
+            plan = AudioLibrary(root, Mock(), state_dir=state).reconcile_tmk(
+                relative_path="fallback.wav"
+            )
+            self.assertEqual(plan["status"], "promoted_fallback")
+            rewritten = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(rewritten["source_sha256"], HASH_A)
+            self.assertEqual(
+                rewritten["source_sha256_status"],
+                "historical_verified_not_current_materialization",
+            )
+            self.assertFalse(
+                rewritten["segmentation_provenance"]["source"][
+                    "current_content_verified"
+                ]
+            )
+
+            rewritten["sha256"] = HASH_B
+            atomic_json_write(state / "transcripts" / f"{HASH_A}.json", rewritten)
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                AudioLibrary(root, Mock(), state_dir=state).reconcile_tmk(
+                    relative_path="fallback.wav"
+                )
+
     def test_legacy_sha_checkpoint_can_resume_after_provenance_schema_upgrade(
         self,
     ) -> None:

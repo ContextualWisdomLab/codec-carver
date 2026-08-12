@@ -6567,6 +6567,24 @@ class AudioLibrary:
                                 ),
                             )
                         )
+                    source_sha256_status = (
+                        "current_content_verified"
+                        if record_sha_is_verified(record)
+                        else "historical_verified_not_current_materialization"
+                    )
+                    result["source_sha256"] = sha256
+                    result["source_sha256_status"] = source_sha256_status
+                    result.setdefault("segmentation_provenance", {}).setdefault(
+                        "source", {}
+                    ).update(
+                        {
+                            "sha256": sha256,
+                            "sha256_status": source_sha256_status,
+                            "current_content_verified": record_sha_is_verified(
+                                record
+                            ),
+                        }
+                    )
                     result.update(
                         preserved_filename_description_fields(cached_transcript, result)
                     )
@@ -6730,6 +6748,25 @@ class AudioLibrary:
                     tmk_status="verified",
                     tmk_sha256=tmk_sha256,
                     tmk_markers_seconds=markers_seconds,
+                )
+                source_sha256 = validate_sha256(audio_record.get("sha256"))
+                source_sha256_status = (
+                    "current_content_verified"
+                    if record_sha_is_verified(audio_record)
+                    else "historical_verified_not_current_materialization"
+                )
+                transcript["source_sha256"] = source_sha256
+                transcript["source_sha256_status"] = source_sha256_status
+                transcript.setdefault("segmentation_provenance", {}).setdefault(
+                    "source", {}
+                ).update(
+                    {
+                        "sha256": source_sha256,
+                        "sha256_status": source_sha256_status,
+                        "current_content_verified": record_sha_is_verified(
+                            audio_record
+                        ),
+                    }
                 )
                 atomic_json_write(transcript_path, transcript)
                 changed_transcripts += 1
@@ -7400,12 +7437,21 @@ class AudioLibrary:
                     # record even when a mocked/legacy adapter returned an old
                     # result without provenance.
                     provenance_source = provenance.setdefault("source", {})
+                    source_sha256_status = (
+                        "current_content_verified"
+                        if record_sha_is_verified(record)
+                        else "historical_verified_not_current_materialization"
+                    )
                     provenance_source.update(
                         {
                             "path": record["path"],
                             "sha256": sha256,
+                            "sha256_status": source_sha256_status,
+                            "current_content_verified": record_sha_is_verified(record),
                         }
                     )
+                    result["source_sha256"] = sha256
+                    result["source_sha256_status"] = source_sha256_status
                     if stage_read_mode is not None:
                         provenance_source["stage_read_mode"] = stage_read_mode
                     provenance_tmk = provenance.setdefault("tmk", {})
@@ -7561,6 +7607,15 @@ class AudioLibrary:
                 "tmk_path": tmk_path,
                 "tmk_sha256": tmk_record["sha256"],
             }
+        # A late TMK may arrive after iCloud evicts the audio again. Bind the
+        # reconciliation to the transcript's previously verified SHA rather
+        # than silently trusting a stale inventory hint or a changed sidecar.
+        sha256 = validate_transcript_record_identity(audio_record, transcript)
+        source_sha256_status = (
+            "current_content_verified"
+            if record_sha_is_verified(audio_record)
+            else "historical_verified_not_current_materialization"
+        )
         duration = transcript.get("duration_seconds")
         if not isinstance(duration, (int, float)) or not math.isfinite(float(duration)):
             duration = audio_duration_seconds(self.root / selected_path)
@@ -7573,6 +7628,8 @@ class AudioLibrary:
             duration_seconds=float(duration),
         )
         plan.update({"audio_path": selected_path, "tmk_path": tmk_path})
+        transcript["source_sha256"] = sha256
+        transcript["source_sha256_status"] = source_sha256_status
         transcript["tmk_status"] = "verified"
         transcript["tmk_sha256"] = tmk_record["sha256"]
         transcript["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
@@ -7583,6 +7640,13 @@ class AudioLibrary:
         transcript["tmk_reconciliation"] = plan
         provenance = transcript.get("segmentation_provenance")
         if isinstance(provenance, dict):
+            provenance.setdefault("source", {}).update(
+                {
+                    "sha256": sha256,
+                    "sha256_status": source_sha256_status,
+                    "current_content_verified": record_sha_is_verified(audio_record),
+                }
+            )
             provenance.setdefault("tmk", {}).update(
                 {
                     "status": "verified",
