@@ -63,6 +63,8 @@ static ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "m4a", "mp3", "flac", "aac", "opus", "ogg", "wma"];
 const IO_BUFFER_BYTES: usize = 1024 * 1024;
 const MAX_TMK_CAPTURE_BYTES: usize = 1024 * 1024;
+#[cfg(any(target_os = "macos", test))]
+const MAX_UNKNOWN_PROVIDER_DIRECT_READ_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileRecord {
@@ -120,6 +122,8 @@ pub struct InventoryManifest {
     pub total_audio_bytes: u64,
     pub files: Vec<FileRecord>,
     pub duplicate_groups: Vec<DuplicateGroup>,
+    #[serde(default)]
+    pub tmk_duplicate_groups: Vec<DuplicateGroup>,
     pub errors: Vec<String>,
 }
 
@@ -147,6 +151,12 @@ pub enum StageReadMode {
 #[cfg(any(target_os = "macos", test))]
 fn provider_allows_direct_read(provider_report: Option<bool>) -> bool {
     matches!(provider_report, Some(true))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn should_try_direct_read(provider_report: Option<bool>, expected_size: u64) -> bool {
+    provider_allows_direct_read(provider_report)
+        || (provider_report.is_none() && expected_size <= MAX_UNKNOWN_PROVIDER_DIRECT_READ_BYTES)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -249,7 +259,8 @@ pub fn inventory(root: &Path, threads: Option<usize>) -> Result<InventoryManifes
     correlate_tmk(&mut files);
     files.sort_by(|left, right| left.path.cmp(&right.path));
 
-    let duplicate_groups = find_duplicate_groups(&files);
+    let duplicate_groups = find_duplicate_groups(&files, FileKind::Audio);
+    let tmk_duplicate_groups = find_duplicate_groups(&files, FileKind::Tmk);
     let earliest_recording_at = files
         .iter()
         .filter(|record| record.kind == FileKind::Audio)
@@ -287,6 +298,7 @@ pub fn inventory(root: &Path, threads: Option<usize>) -> Result<InventoryManifes
         total_audio_bytes,
         files,
         duplicate_groups,
+        tmk_duplicate_groups,
         errors,
     })
 }
@@ -1105,7 +1117,7 @@ fn copy_and_hash_staged_source_with_provider_report(
         // iCloud path which can fetch genuinely remote bytes.
         let provider_report =
             provider_report_override.or_else(|| provider_reports_downloaded(source));
-        let direct_allowed = provider_allows_direct_read(provider_report);
+        let direct_allowed = should_try_direct_read(provider_report, expected_size);
         if direct_allowed {
             let mut direct_capture = capture.as_ref().map(|_| Vec::new());
             let direct_result = open_regular_beneath(root, relative_path).and_then(|input| {
@@ -1438,9 +1450,9 @@ fn infer_location(filename: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-fn find_duplicate_groups(files: &[FileRecord]) -> Vec<DuplicateGroup> {
+fn find_duplicate_groups(files: &[FileRecord], kind: FileKind) -> Vec<DuplicateGroup> {
     let mut by_hash: BTreeMap<&str, Vec<&FileRecord>> = BTreeMap::new();
-    for record in files.iter().filter(|record| record.kind == FileKind::Audio) {
+    for record in files.iter().filter(|record| record.kind == kind) {
         if let Some(hash) = record.sha256.as_deref() {
             by_hash.entry(hash).or_default().push(record);
         }
@@ -2558,6 +2570,7 @@ mod tests {
         assert_eq!(manifest.tmk_file_count, 1);
         assert_eq!(manifest.total_audio_bytes, 5 + 5 + 11);
         assert_eq!(manifest.duplicate_groups.len(), 1);
+        assert!(manifest.tmk_duplicate_groups.is_empty());
         assert_eq!(
             manifest.duplicate_groups[0].canonical_path,
             "FOLDER01/240102_0304.wav"
@@ -3001,7 +3014,7 @@ mod tests {
         ];
         files[0].tmk_path = Some("deep/path/240101_0000.tmk".to_string());
         files[0].location = Some("강남로 12".to_string());
-        let groups = find_duplicate_groups(&files);
+        let groups = find_duplicate_groups(&files, FileKind::Audio);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].canonical_path, "240101_0000.wav");
         assert_eq!(groups[0].duplicate_paths.len(), 2);
@@ -3010,6 +3023,49 @@ mod tests {
             Some("2024-01-01T00:00:00+09:00")
         );
         assert_ne!(canonical_cmp(&files[0], &files[1]), Ordering::Equal);
+    }
+
+    #[test]
+    fn duplicate_selection_groups_tmk_files_without_cross_kind_collisions() {
+        let hash = "b".repeat(64);
+        let files = vec![
+            record(
+                "FOLDER01/240101_0000(1).tmk",
+                FileKind::Tmk,
+                Some(&hash),
+                Some("2024-01-01T00:00:00+09:00"),
+            ),
+            record(
+                "FOLDER01/240101_0000.tmk",
+                FileKind::Tmk,
+                Some(&hash),
+                Some("2024-01-01T00:00:00+09:00"),
+            ),
+            record(
+                "FOLDER01/240101_0000.wav",
+                FileKind::Audio,
+                Some(&hash),
+                Some("2024-01-01T00:00:00+09:00"),
+            ),
+        ];
+        let groups = find_duplicate_groups(&files, FileKind::Tmk);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].canonical_path, "FOLDER01/240101_0000.tmk");
+        assert_eq!(groups[0].duplicate_paths, ["FOLDER01/240101_0000(1).tmk"]);
+    }
+
+    #[test]
+    fn unknown_provider_direct_read_is_bounded_to_small_sidecars() {
+        assert!(should_try_direct_read(Some(true), 1));
+        assert!(should_try_direct_read(
+            None,
+            MAX_UNKNOWN_PROVIDER_DIRECT_READ_BYTES
+        ));
+        assert!(!should_try_direct_read(
+            None,
+            MAX_UNKNOWN_PROVIDER_DIRECT_READ_BYTES + 1
+        ));
+        assert!(!should_try_direct_read(Some(false), 1));
     }
 
     #[test]

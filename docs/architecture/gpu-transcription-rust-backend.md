@@ -337,7 +337,11 @@ model/revision, and review time in private state.
 
 `rust-core/codec-carver-core` owns bounded-buffer SHA-256, parallel scans,
 macOS dataless detection, filename/creation-time evidence, TMK decoding,
-duplicate grouping, and guarded filesystem changes. A single-file `inspect`
+kind-separated audio/TMK duplicate grouping, and guarded filesystem changes.
+The inventory keeps `duplicate_groups` for audio and `tmk_duplicate_groups` for
+TMK sidecars separate; only current, content-verified bytes may enter either
+group, so a stale File Provider SHA hint remains evidence but never authorizes
+quarantine. A single-file `inspect`
 command supports local single-file inspection. The `materialize` command
 validates one regular, non-symlink library child and queues Foundation's native
 iCloud download without waiting. The `stage` command first probes the source
@@ -345,7 +349,9 @@ through the component-by-component `openat`/`O_NOFOLLOW` path without
 canonicalizing the File Provider file itself. A complete read is copied to
 local scratch and hashed in one pass even when the provider's dataless bit is
 stale; otherwise Foundation materialization and `NSFileCoordinator` provide the
-coordinated path. The stage JSON returns the scratch path, source record, and
+coordinated path. If File Provider status is unknown, only a bounded 8 MiB
+sidecar may attempt the direct-read path; long audio remains coordinated and
+checkpointed. The stage JSON returns the scratch path, source record, and
 the read mode used. The `evict` command releases local iCloud blocks with Foundation
 rather than a shell utility. A changed known hash stops transcription. Mutation
 execution opens and locks the library root, reopens and hashes each source

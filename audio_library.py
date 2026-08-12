@@ -6492,19 +6492,15 @@ class AudioLibrary:
                         if record.get("tmk_path")
                         else "not_present"
                     )
-                    result = (
-                        transcriber.transcribe(
-                            staged_audio,
-                            tmk_markers_seconds=markers_seconds,
-                            source_sha256=sha256,
-                            source_path=record["path"],
-                            tmk_status=tmk_status,
-                            tmk_sha256=(
-                                tmk_record.get("sha256") if verified_tmk else None
-                            ),
-                        )
-                        if markers_seconds
-                        else transcriber.transcribe(staged_audio)
+                    result = transcriber.transcribe(
+                        staged_audio,
+                        tmk_markers_seconds=markers_seconds,
+                        source_sha256=sha256,
+                        source_path=record["path"],
+                        tmk_status=tmk_status,
+                        tmk_sha256=(
+                            tmk_record.get("sha256") if verified_tmk else None
+                        ),
                     )
                     result.update(
                         {
@@ -6571,6 +6567,24 @@ class AudioLibrary:
                                 ),
                             )
                         )
+                    source_sha256_status = (
+                        "current_content_verified"
+                        if record_sha_is_verified(record)
+                        else "historical_verified_not_current_materialization"
+                    )
+                    result["source_sha256"] = sha256
+                    result["source_sha256_status"] = source_sha256_status
+                    result.setdefault("segmentation_provenance", {}).setdefault(
+                        "source", {}
+                    ).update(
+                        {
+                            "sha256": sha256,
+                            "sha256_status": source_sha256_status,
+                            "current_content_verified": record_sha_is_verified(
+                                record
+                            ),
+                        }
+                    )
                     result.update(
                         preserved_filename_description_fields(cached_transcript, result)
                     )
@@ -6734,6 +6748,25 @@ class AudioLibrary:
                     tmk_status="verified",
                     tmk_sha256=tmk_sha256,
                     tmk_markers_seconds=markers_seconds,
+                )
+                source_sha256 = validate_sha256(audio_record.get("sha256"))
+                source_sha256_status = (
+                    "current_content_verified"
+                    if record_sha_is_verified(audio_record)
+                    else "historical_verified_not_current_materialization"
+                )
+                transcript["source_sha256"] = source_sha256
+                transcript["source_sha256_status"] = source_sha256_status
+                transcript.setdefault("segmentation_provenance", {}).setdefault(
+                    "source", {}
+                ).update(
+                    {
+                        "sha256": source_sha256,
+                        "sha256_status": source_sha256_status,
+                        "current_content_verified": record_sha_is_verified(
+                            audio_record
+                        ),
+                    }
                 )
                 atomic_json_write(transcript_path, transcript)
                 changed_transcripts += 1
@@ -7150,6 +7183,17 @@ class AudioLibrary:
                     checkpoint_path: Path | None = None
                     checkpoint_mode: str | None = None
                     duration_hint: float | None = None
+                    transcribe_kwargs = {
+                        "tmk_markers_seconds": markers_seconds,
+                        "source_sha256": sha256,
+                        "source_path": record["path"],
+                        "tmk_status": tmk_status,
+                        "tmk_sha256": (
+                            tmk_record.get("sha256")
+                            if not tmk_needs_metadata
+                            else None
+                        ),
+                    }
                     if markers_seconds:
                         checkpoint_mode = "tmk_markers"
                         duration_hint = audio_duration_seconds(audio_input)
@@ -7299,22 +7343,13 @@ class AudioLibrary:
                                     ),
                                 )
 
-                        result = transcriber.transcribe(
-                            audio_input,
-                            tmk_markers_seconds=markers_seconds,
-                            source_sha256=sha256,
-                            source_path=record["path"],
-                            tmk_status=tmk_status,
-                            tmk_sha256=(
-                                tmk_record.get("sha256")
-                                if not tmk_needs_metadata
-                                else None
-                            ),
-                            completed_chunks=completed_checkpoint_chunks,
-                            chunk_progress=checkpoint_chunk,
+                        transcribe_kwargs.update(
+                            {
+                                "completed_chunks": completed_checkpoint_chunks,
+                                "chunk_progress": checkpoint_chunk,
+                            }
                         )
-                    else:
-                        result = transcriber.transcribe(audio_input)
+                    result = transcriber.transcribe(audio_input, **transcribe_kwargs)
                     resumed_transcription_chunks += int(
                         result.get("resumed_transcription_chunks", 0)
                     )
@@ -7402,12 +7437,21 @@ class AudioLibrary:
                     # record even when a mocked/legacy adapter returned an old
                     # result without provenance.
                     provenance_source = provenance.setdefault("source", {})
+                    source_sha256_status = (
+                        "current_content_verified"
+                        if record_sha_is_verified(record)
+                        else "historical_verified_not_current_materialization"
+                    )
                     provenance_source.update(
                         {
                             "path": record["path"],
                             "sha256": sha256,
+                            "sha256_status": source_sha256_status,
+                            "current_content_verified": record_sha_is_verified(record),
                         }
                     )
+                    result["source_sha256"] = sha256
+                    result["source_sha256_status"] = source_sha256_status
                     if stage_read_mode is not None:
                         provenance_source["stage_read_mode"] = stage_read_mode
                     provenance_tmk = provenance.setdefault("tmk", {})
@@ -7563,6 +7607,15 @@ class AudioLibrary:
                 "tmk_path": tmk_path,
                 "tmk_sha256": tmk_record["sha256"],
             }
+        # A late TMK may arrive after iCloud evicts the audio again. Bind the
+        # reconciliation to the transcript's previously verified SHA rather
+        # than silently trusting a stale inventory hint or a changed sidecar.
+        sha256 = validate_transcript_record_identity(audio_record, transcript)
+        source_sha256_status = (
+            "current_content_verified"
+            if record_sha_is_verified(audio_record)
+            else "historical_verified_not_current_materialization"
+        )
         duration = transcript.get("duration_seconds")
         if not isinstance(duration, (int, float)) or not math.isfinite(float(duration)):
             duration = audio_duration_seconds(self.root / selected_path)
@@ -7575,6 +7628,8 @@ class AudioLibrary:
             duration_seconds=float(duration),
         )
         plan.update({"audio_path": selected_path, "tmk_path": tmk_path})
+        transcript["source_sha256"] = sha256
+        transcript["source_sha256_status"] = source_sha256_status
         transcript["tmk_status"] = "verified"
         transcript["tmk_sha256"] = tmk_record["sha256"]
         transcript["tmk_marker_count"] = tmk_record.get("tmk_marker_count")
@@ -7585,6 +7640,13 @@ class AudioLibrary:
         transcript["tmk_reconciliation"] = plan
         provenance = transcript.get("segmentation_provenance")
         if isinstance(provenance, dict):
+            provenance.setdefault("source", {}).update(
+                {
+                    "sha256": sha256,
+                    "sha256_status": source_sha256_status,
+                    "current_content_verified": record_sha_is_verified(audio_record),
+                }
+            )
             provenance.setdefault("tmk", {}).update(
                 {
                     "status": "verified",
@@ -7615,6 +7677,15 @@ class AudioLibrary:
                 tmk_status="verified",
                 tmk_sha256=tmk_record["sha256"],
                 tmk_markers_seconds=tmk_record.get("tmk_markers_seconds"),
+            )
+        provenance = transcript.get("segmentation_provenance")
+        if isinstance(provenance, dict):
+            provenance.setdefault("source", {}).update(
+                {
+                    "sha256": sha256,
+                    "sha256_status": source_sha256_status,
+                    "current_content_verified": record_sha_is_verified(audio_record),
+                }
             )
         atomic_json_write(transcript_path, transcript)
         return plan
@@ -8142,6 +8213,33 @@ class AudioLibrary:
             missing.append(record["path"])
             if record.get("tmk_path"):
                 missing.append(record["tmk_path"])
+
+        selected_tmk_paths = {
+            record.get("tmk_path")
+            for record in records_by_path.values()
+            if record.get("kind") == "audio"
+            and record.get("path") in selected_paths
+            and record.get("tmk_path")
+        }
+        for group in manifest.get("tmk_duplicate_groups", []):
+            for duplicate in group["duplicate_paths"]:
+                if selected_paths and duplicate not in selected_tmk_paths:
+                    continue
+                if duplicate in moved_tmk:
+                    continue
+                record = records_by_path[duplicate]
+                if not ready(record):
+                    missing.append(duplicate)
+                    continue
+                operations.append(
+                    mutation(
+                        "quarantine",
+                        duplicate,
+                        quarantine_path(group["sha256"], duplicate),
+                        group["sha256"],
+                    )
+                )
+                moved_tmk.add(duplicate)
 
         for group in manifest["duplicate_groups"]:
             for duplicate in group["duplicate_paths"]:
@@ -8841,6 +8939,33 @@ class AudioLibrary:
                     raise ValueError(
                         f"duplicate group {index} is not bound to matching inventory records"
                     )
+        tmk_duplicate_groups = manifest.get("tmk_duplicate_groups", [])
+        if not isinstance(tmk_duplicate_groups, list):
+            raise ValueError("inventory tmk_duplicate_groups must be a list")
+        for index, group in enumerate(tmk_duplicate_groups):
+            if not isinstance(group, dict):
+                raise ValueError(f"TMK duplicate group {index} must be an object")
+            sha256 = validate_sha256(
+                group.get("sha256"), label=f"TMK duplicate group SHA-256 {index}"
+            )
+            duplicate_paths = group.get("duplicate_paths")
+            if not isinstance(duplicate_paths, list):
+                raise ValueError(f"TMK duplicate group {index} paths must be a list")
+            paths = [group.get("canonical_path"), *duplicate_paths]
+            for value in paths:
+                normalized = validate_relative_path(
+                    self.root, value, label=f"TMK duplicate group path {index}"
+                )
+                record = records_by_path.get(normalized)
+                if (
+                    record is None
+                    or record.get("kind") != "tmk"
+                    or record.get("sha256") != sha256
+                ):
+                    raise ValueError(
+                        "TMK duplicate group "
+                        f"{index} is not bound to matching inventory records"
+                    )
         return manifest
 
 
@@ -8983,41 +9108,55 @@ def rebuild_manifest_summary(manifest: dict[str, Any]) -> None:
     audio_records = [
         record for record in manifest["files"] if record["kind"] == "audio"
     ]
-    by_hash: dict[str, list[dict[str, Any]]] = {}
-    for record in audio_records:
-        if record.get("sha256") and record_sha_is_verified(record):
-            by_hash.setdefault(record["sha256"], []).append(record)
-    groups = []
-    for sha256, records in sorted(by_hash.items()):
-        if len(records) < 2:
-            continue
-        records.sort(
-            key=lambda record: (
-                record.get("recorded_at") or "9999",
-                bool(COPY_SUFFIX_RE.search(Path(record["path"]).stem)),
-                not bool(record.get("tmk_path")),
-                not bool(record.get("location")),
-                len(Path(record["path"]).parts),
-                record["path"],
+
+    def duplicate_groups_for(
+        records: list[dict[str, Any]], *, audio: bool
+    ) -> list[dict[str, Any]]:
+        """Group verified content by kind while preserving deterministic canonicals."""
+
+        by_hash: dict[str, list[dict[str, Any]]] = {}
+        for record in records:
+            if record.get("sha256") and record_sha_is_verified(record):
+                by_hash.setdefault(record["sha256"], []).append(record)
+        groups = []
+        for sha256, matching in sorted(by_hash.items()):
+            if len(matching) < 2:
+                continue
+            matching.sort(
+                key=lambda record: (
+                    record.get("recorded_at") or "9999",
+                    bool(COPY_SUFFIX_RE.search(Path(record["path"]).stem)),
+                    not bool(record.get("tmk_path")) if audio else False,
+                    not bool(record.get("location")) if audio else False,
+                    len(Path(record["path"]).parts),
+                    record["path"],
+                )
             )
-        )
-        groups.append(
-            {
-                "sha256": sha256,
-                "size_bytes": records[0]["size_bytes"],
-                "canonical_path": records[0]["path"],
-                "duplicate_paths": [record["path"] for record in records[1:]],
-                "earliest_recorded_at": min(
-                    (
-                        record["recorded_at"]
-                        for record in records
-                        if record.get("recorded_at")
+            groups.append(
+                {
+                    "sha256": sha256,
+                    "size_bytes": matching[0]["size_bytes"],
+                    "canonical_path": matching[0]["path"],
+                    "duplicate_paths": [
+                        record["path"] for record in matching[1:]
+                    ],
+                    "earliest_recorded_at": min(
+                        (
+                            record["recorded_at"]
+                            for record in matching
+                            if record.get("recorded_at")
+                        ),
+                        default=None,
                     ),
-                    default=None,
-                ),
-            }
-        )
-    manifest["duplicate_groups"] = groups
+                }
+            )
+        return groups
+
+    manifest["duplicate_groups"] = duplicate_groups_for(audio_records, audio=True)
+    manifest["tmk_duplicate_groups"] = duplicate_groups_for(
+        [record for record in manifest["files"] if record["kind"] == "tmk"],
+        audio=False,
+    )
     manifest["dataless_file_count"] = sum(
         not record.get("materialized", False) for record in manifest["files"]
     )

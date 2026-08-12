@@ -347,6 +347,8 @@ it reads the tiny TMK files concurrently, checkpoints each SHA-256 and the full
 ordered marker vector, and backfills any existing transcript sidecars. The
 transcript provenance stores the verified primary `tmk_sha256` alongside its
 path and marker vector; unresolved or stale TMK identity is recorded as null.
+When File Provider status is unknown, only small TMK sidecars use the bounded
+direct-read probe; long audio remains on the coordinated, checkpointed path.
 Verified
 TMK offsets split long MLX recordings into bounded, one-second-overlap decode
 ranges while the same pinned Whisper model remains resident; midpoint ownership
@@ -418,7 +420,9 @@ Every rescan archives the previous inventory by its SHA-256. If iCloud evicts a
 previously hashed recording, same-path/same-size evidence and transcript
 sidecars restore its full hash only as an explicitly unverified identity hint.
 It cannot form an exact-duplicate group or a new rename/quarantine operation
-until Rust hashes current bytes. An executed mutation journal can restore
+until Rust hashes current bytes. Audio and TMK duplicate groups are tracked
+separately, so a same-SHA TMK sidecar never collides with an audio record. An
+executed mutation journal can restore
 identity continuity after a move, but remains unverified until current bytes are
 opened and hashed again. Materialized files are rehashed before any transcript
 cache hit or new mutation plan, then copied and hashed into private scratch

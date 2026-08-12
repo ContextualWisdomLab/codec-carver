@@ -4168,6 +4168,86 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertEqual(promoted["status"], "promoted_fallback")
         self.assertEqual(promoted["affected_chunk_indices"], [])
 
+    def test_audio_library_late_tmk_binds_historical_source_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state"
+            audio = _record(
+                "fallback.wav",
+                HASH_A,
+                materialized=False,
+                sha256_verified=False,
+                sha256_source="previous_inventory",
+                tmk_path="fallback.tmk",
+            )
+            tmk = {
+                "path": "fallback.tmk",
+                "kind": "tmk",
+                "extension": "tmk",
+                "size_bytes": len(TMK_BYTES),
+                "materialized": True,
+                "sha256": TMK_HASH,
+                "sha256_verified": True,
+                "sha256_source": "content",
+                "tmk_marker_count": 1,
+                "tmk_last_marker_seconds": 300.0,
+                "tmk_markers_seconds": [300.0],
+            }
+            atomic_json_write(
+                state / "inventory.json",
+                {
+                    "schema_version": 1,
+                    "root": str(root),
+                    "files": [audio, tmk],
+                    "duplicate_groups": [],
+                    "tmk_duplicate_groups": [],
+                },
+            )
+            transcript = {
+                "sha256": HASH_A,
+                "duration_seconds": 620.0,
+                "segmentation_provenance": audio_library.build_segmentation_provenance(
+                    source_sha256=HASH_A,
+                    source_path="fallback.wav",
+                    duration_seconds=620.0,
+                    tmk_status="tmk_pending_materialization",
+                    tmk_sha256=None,
+                    tmk_markers_seconds=None,
+                    checkpoint_strategy="fixed_duration",
+                    checkpoint_ranges=[(0.0, 300.0), (300.0, 620.0)],
+                    inference_ranges=[(0.0, 300.0), (300.0, 620.0)],
+                    final_ranges=[(0.0, 300.0), (300.0, 620.0)],
+                    overlap_seconds=1.0,
+                ),
+            }
+            atomic_json_write(state / "transcripts" / f"{HASH_A}.json", transcript)
+            plan = AudioLibrary(root, Mock(), state_dir=state).reconcile_tmk(
+                relative_path="fallback.wav"
+            )
+            self.assertEqual(plan["status"], "promoted_fallback")
+            rewritten = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(rewritten["source_sha256"], HASH_A)
+            self.assertEqual(
+                rewritten["source_sha256_status"],
+                "historical_verified_not_current_materialization",
+            )
+            self.assertFalse(
+                rewritten["segmentation_provenance"]["source"][
+                    "current_content_verified"
+                ]
+            )
+
+            rewritten["sha256"] = HASH_B
+            atomic_json_write(state / "transcripts" / f"{HASH_A}.json", rewritten)
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                AudioLibrary(root, Mock(), state_dir=state).reconcile_tmk(
+                    relative_path="fallback.wav"
+                )
+
     def test_legacy_sha_checkpoint_can_resume_after_provenance_schema_upgrade(
         self,
     ) -> None:
@@ -5512,6 +5592,51 @@ class AudioLibraryTests(unittest.TestCase):
                     selected_audio_paths=["canonical.wav"],
                 )
 
+    def test_selected_plan_quarantines_verified_tmk_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = _manifest(root)
+            manifest["duplicate_groups"] = []
+            for record in manifest["files"]:
+                if record["kind"] == "tmk":
+                    record.update(
+                        {
+                            "materialized": True,
+                            "sha256_verified": True,
+                            "sha256_source": "content",
+                        }
+                    )
+            manifest["tmk_duplicate_groups"] = [
+                {
+                    "sha256": TMK_HASH,
+                    "size_bytes": 20,
+                    "canonical_path": "canonical.tmk",
+                    "duplicate_paths": ["copies/duplicate.tmk"],
+                    "earliest_recorded_at": "2024-01-02T03:04:00+09:00",
+                }
+            ]
+            library = AudioLibrary(root, Mock())
+            with patch.object(library, "_record_ready_for_mutation", return_value=True):
+                operations, deferred = library._build_mutation_operations(
+                    manifest,
+                    allow_missing_transcripts=False,
+                    defer_unready=True,
+                    verify_sources=False,
+                    selected_audio_paths=["copies/duplicate.wav"],
+                )
+            self.assertEqual(
+                operations,
+                [
+                    mutation(
+                        "quarantine",
+                        "copies/duplicate.tmk",
+                        quarantine_path(TMK_HASH, "copies/duplicate.tmk"),
+                        TMK_HASH,
+                    )
+                ],
+            )
+            self.assertEqual(deferred, [])
+
     def test_plan_requires_transcripts_unless_override_is_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5826,7 +5951,19 @@ class AudioLibraryTests(unittest.TestCase):
                 (state / "transcripts" / f"{HASH_A}.json").read_text(encoding="utf-8")
             )
             self.assertEqual(transcript["tmk_sha256"], TMK_HASH)
-            self.assertEqual(fake.transcribe.call_args_list[1].kwargs, {})
+            self.assertEqual(
+                fake.transcribe.call_args_list[1].kwargs["source_sha256"], HASH_B
+            )
+            self.assertEqual(
+                fake.transcribe.call_args_list[1].kwargs["source_path"], "second.wav"
+            )
+            self.assertEqual(
+                fake.transcribe.call_args_list[1].kwargs["tmk_status"],
+                "not_present",
+            )
+            self.assertIsNone(
+                fake.transcribe.call_args_list[1].kwargs["tmk_markers_seconds"]
+            )
 
     def test_transcribe_honors_cache_and_max_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5883,6 +6020,52 @@ class AudioLibraryTests(unittest.TestCase):
                 summary = library.transcribe(max_files=1)
             self.assertEqual(summary["cached"], 1)
             fake.transcribe.assert_not_called()
+
+    def test_transcribe_preserves_pending_tmk_provenance_without_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".codec-carver"
+            manifest = _manifest(root)
+            # The sidecar has a linked TMK path but no current-byte proof or
+            # parsed marker vector; it must remain explicitly pending.
+            manifest["files"][3].update(
+                {
+                    "sha256": TMK_HASH,
+                    "sha256_verified": False,
+                    "sha256_source": "previous_inventory",
+                    "materialized": False,
+                    "tmk_markers_seconds": None,
+                }
+            )
+            atomic_json_write(state / "inventory.json", manifest)
+            (root / "canonical.wav").write_bytes(b"one")
+            backend = Mock()
+            backend.inspect.return_value = manifest["files"][0]
+            library = AudioLibrary(root, backend)
+            _configure_private_stage(library, backend, {"canonical.wav": HASH_A})
+            fake = Mock(accelerator="mlx", model="model")
+            fake.transcribe.return_value = {
+                "text": "대기 중인 TMK",
+                "segments": [],
+                "language": "ko",
+            }
+            with patch("audio_library.GpuTranscriber", return_value=fake):
+                summary = library.transcribe(max_files=1)
+            self.assertEqual(summary["completed"], 1)
+            kwargs = fake.transcribe.call_args.kwargs
+            self.assertEqual(kwargs["source_sha256"], HASH_A)
+            self.assertEqual(kwargs["source_path"], "canonical.wav")
+            self.assertEqual(kwargs["tmk_status"], "tmk_pending_materialization")
+            self.assertIsNone(kwargs["tmk_markers_seconds"])
+            transcript = json.loads(
+                (state / "transcripts" / f"{HASH_A}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                transcript["segmentation_provenance"]["tmk"]["status"],
+                "tmk_pending_materialization",
+            )
 
     def test_hydrate_tmk_metadata_parallel_checkpoint_and_empty_resume(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6439,7 +6622,7 @@ class AudioLibraryTests(unittest.TestCase):
             backend.stage.side_effect = stage
             fake = Mock(accelerator="mlx", model="model")
 
-            def transcribe(_audio_path):
+            def transcribe(_audio_path, **_kwargs):
                 self.assertTrue(second_started.is_set())
                 if not release_second.is_set():
                     release_second.set()
@@ -6598,7 +6781,7 @@ class AudioLibraryTests(unittest.TestCase):
             backend.evict.side_effect = evict
             fake = Mock(accelerator="mlx", model="model")
 
-            def transcribe(_audio_path):
+            def transcribe(_audio_path, **_kwargs):
                 release_second.set()
                 return {"text": "overlap", "segments": [], "language": "ko"}
 
@@ -7024,7 +7207,16 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(transcript["tmk_error"], "dataless")
             self.assertIsNone(transcript["tmk_sha256"])
             self.assertIsNone(transcript["tmk_markers_seconds"])
-            self.assertEqual(fake.transcribe.call_args.kwargs, {})
+            self.assertEqual(
+                fake.transcribe.call_args.kwargs["source_sha256"], HASH_A
+            )
+            self.assertEqual(
+                fake.transcribe.call_args.kwargs["tmk_status"],
+                "tmk_pending_materialization",
+            )
+            self.assertIsNone(
+                fake.transcribe.call_args.kwargs["tmk_markers_seconds"]
+            )
 
     def test_stream_transcribe_uses_verified_copy_tmk_as_chunk_hint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7395,7 +7587,15 @@ class AudioLibraryTests(unittest.TestCase):
             self.assertEqual(summary["completed"], 1)
             duration.assert_not_called()
             transcriber.transcribe.assert_called_once()
-            self.assertEqual(transcriber.transcribe.call_args.kwargs, {})
+            self.assertEqual(
+                transcriber.transcribe.call_args.kwargs["source_sha256"], HASH_A
+            )
+            self.assertEqual(
+                transcriber.transcribe.call_args.kwargs["source_path"], "cuda.wav"
+            )
+            self.assertEqual(
+                transcriber.transcribe.call_args.kwargs["tmk_status"], "not_present"
+            )
 
     def test_stream_transcribe_uses_cached_hash_and_isolates_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
