@@ -1493,6 +1493,18 @@ class GpuTranscriber:
                 automatic_ranges = chunk_ranges
             inference_chunk_ranges = list(chunk_ranges)
 
+            def is_control_token_only(value: str) -> bool:
+                """Reject MOSS timestamp/speaker control output, not numeric speech."""
+
+                if not value or not re.search(
+                    r"\[(?:\d+(?:\.\d+)?|S\d+)\]", value
+                ):
+                    return False
+                residual = re.sub(
+                    r"\[(?:\d+(?:\.\d+)?|S\d+)\]", "", value
+                ).strip(" []")
+                return bool(re.fullmatch(r"(?:S?\d+(?:\.\d+)?)*", residual))
+
             def normalize_joint_segments(
                 raw_segments: Any,
                 *,
@@ -1526,12 +1538,7 @@ class GpuTranscriber:
                     if chunk_index is not None:
                         speaker = f"C{chunk_index + 1:03d}_{speaker}"
                     segment_text = str(raw_segment.get("text", "")).strip()
-                    control_free_text = re.sub(
-                        r"\[(?:\d+(?:\.\d+)?|S\d+)\]", "", segment_text
-                    ).strip(" []")
-                    if segment_text and re.fullmatch(
-                        r"(?:S?\d+(?:\.\d+)?)*", control_free_text
-                    ):
+                    if is_control_token_only(segment_text):
                         continue
                     segment_text = re.sub(r"^\[S\d+\]\s*", "", segment_text).strip()
                     normalized = normalize_segment(
@@ -1545,12 +1552,7 @@ class GpuTranscriber:
                     if normalized["text"]:
                         normalized_segments.append(normalized)
                 fallback_text = fallback_text.strip()
-                control_free_text = re.sub(
-                    r"\[(?:\d+(?:\.\d+)?|S\d+)\]", "", fallback_text
-                ).strip(" []")
-                if fallback_text and re.fullmatch(
-                    r"(?:S?\d+(?:\.\d+)?)*", control_free_text
-                ):
+                if is_control_token_only(fallback_text):
                     fallback_text = ""
                 if not normalized_segments and fallback_text:
                     speaker = "S00"

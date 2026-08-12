@@ -3492,6 +3492,18 @@ class GpuTranscriberTests(unittest.TestCase):
                 ],
             )
             control_only = transcriber.transcribe(Path("meeting.wav"))
+            joint_model.generate.return_value = types.SimpleNamespace(
+                text="1024604",
+                segments=[
+                    {
+                        "start": 0.0,
+                        "end": 1.0,
+                        "text": "1024604",
+                        "speaker_id": "S01",
+                    }
+                ],
+            )
+            numeric = transcriber.transcribe(Path("meeting.wav"))
 
         self.assertEqual(result["text"], "안녕하세요 반갑습니다")
         self.assertEqual(
@@ -3509,12 +3521,13 @@ class GpuTranscriberTests(unittest.TestCase):
         self.assertEqual(unresolved["segments"][0]["speaker_id"], "S00")
         self.assertEqual(control_only["segments"], [])
         self.assertEqual(control_only["speaker_diarization_status"], "not_applicable")
+        self.assertEqual(numeric["segments"][0]["text"], "1024604")
         self.assertEqual(
             audio_library.speaker_transcript_text(unresolved),
             "[S00] 구조화되지 않은 발화\n",
         )
         mlx_audio_utils.load_model.assert_called_once_with(pinned[2])
-        self.assertEqual(joint_model.generate.call_count, 3)
+        self.assertEqual(joint_model.generate.call_count, 4)
 
     def test_joint_speaker_chunking_is_bounded_and_prefers_tmk_boundary(self) -> None:
         self.assertEqual(
