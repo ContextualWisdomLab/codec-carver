@@ -1538,6 +1538,10 @@ class GpuTranscriber:
                     if normalized["text"]:
                         normalized_segments.append(normalized)
                 fallback_text = fallback_text.strip()
+                if re.fullmatch(
+                    r"(?:\[(?:\d+(?:\.\d+)?|S\d+)\])+", fallback_text
+                ):
+                    fallback_text = ""
                 if not normalized_segments and fallback_text:
                     speaker = "S00"
                     if chunk_index is not None:
