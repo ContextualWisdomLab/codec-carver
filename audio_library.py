@@ -10,6 +10,7 @@ invokes Ollama and refuses a CPU fallback when GPU transcription is requested.
 from __future__ import annotations
 
 import argparse
+import gc
 import errno
 import hashlib
 import inspect
@@ -1649,6 +1650,19 @@ class GpuTranscriber:
                                 "text": chunk_text,
                             }
                         )
+                    # MOSS allocates the audio features and KV cache on MLX's
+                    # pooled GPU allocator.  Long recordings otherwise retain
+                    # each completed chunk until the process is killed by
+                    # unified-memory pressure, even though only Python
+                    # segments are carried forward.
+                    del raw
+                    gc.collect()
+                    try:
+                        import mlx.core as mx  # type: ignore[import-not-found]
+
+                        mx.clear_cache()
+                    except (ImportError, AttributeError):
+                        pass
                 segments.sort(key=lambda segment: (segment["start"], segment["end"]))
                 text = " ".join(chunk_texts)
             else:

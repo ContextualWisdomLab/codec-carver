@@ -3513,6 +3513,59 @@ class GpuTranscriberTests(unittest.TestCase):
         )
         self.assertEqual(audio_library.mlx_speaker_chunk_ranges([300.0], 600.0), [])
 
+    def test_joint_speaker_chunks_release_mlx_resources_after_each_checkpoint(self) -> None:
+        package, core, _ = self._mlx_modules()
+        core.clear_cache = Mock()
+        joint_model = Mock()
+        joint_model.generate.side_effect = [
+            types.SimpleNamespace(
+                text="첫째",
+                segments=[
+                    {"start": 0.0, "end": 1.0, "text": "첫째", "speaker_id": "S01"}
+                ],
+            ),
+            types.SimpleNamespace(
+                text="둘째",
+                segments=[
+                    {"start": 2.0, "end": 3.0, "text": "둘째", "speaker_id": "S01"}
+                ],
+            ),
+            types.SimpleNamespace(
+                text="셋째",
+                segments=[
+                    {"start": 2.0, "end": 3.0, "text": "셋째", "speaker_id": "S01"}
+                ],
+            ),
+        ]
+        transcriber = object.__new__(GpuTranscriber)
+        transcriber.config = TranscriptionConfig(
+            accelerator="mlx", speaker_diarization=True
+        )
+        transcriber.accelerator = "mlx"
+        transcriber.model = audio_library.DEFAULT_MLX_SPEAKER_MODEL
+        transcriber.model_revision = audio_library.DEFAULT_MLX_SPEAKER_MODEL_REVISION
+        transcriber.model_path = Path("/models") / transcriber.model_revision
+        transcriber._mlx_speaker_model = joint_model
+        transcriber._cuda_model = None
+        progress = Mock()
+        with (
+            patch.dict(
+                sys.modules, {"mlx": package, "mlx.core": core}
+            ),
+            patch("audio_library.audio_duration_seconds", return_value=620.0),
+            patch(
+                "audio_library.decode_audio_for_mlx",
+                side_effect=[object(), object(), object()],
+            ),
+            patch("audio_library.gc.collect") as collect,
+        ):
+            result = transcriber.transcribe(Path("long.wav"), chunk_progress=progress)
+
+        self.assertEqual(result["transcription_chunks"], 3)
+        self.assertEqual(progress.call_count, 3)
+        self.assertEqual(collect.call_count, 3)
+        self.assertEqual(core.clear_cache.call_count, 3)
+
     def test_speaker_transcript_groups_consecutive_turns_in_one_file(self) -> None:
         self.assertEqual(
             audio_library.speaker_transcript_text(
