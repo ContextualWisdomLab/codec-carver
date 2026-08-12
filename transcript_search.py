@@ -241,8 +241,11 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
+            # ⚡ BOLT OPTIMIZATION:
+            # The & operator inherently returns a new set, so we can avoid an initial
+            # O(N) defensive copy. This prevents redundant memory allocation.
             candidates = (
-                set(postings) if candidates is None else candidates & postings
+                postings if candidates is None else candidates & postings
             )
             if not candidates:
                 return []
