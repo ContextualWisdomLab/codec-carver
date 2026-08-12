@@ -32,6 +32,29 @@ if _HAS_FASTAPI:
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class TestSaasWeb(unittest.TestCase):
+    @patch("saas_web.get_configured_api_keys", return_value=["valid-key"])
+    def test_auth_middleware_non_ascii_header(self, mock_get_keys):
+        # Create a mock Request with a non-ASCII header
+        from starlette.requests import Request
+        scope = {
+            'type': 'http',
+            'method': 'GET',
+            'path': '/api/jobs',
+            'headers': [(b'x-api-key', 'non-ascii\u2022'.encode('utf-8'))],
+        }
+        request = Request(scope)
+
+        import asyncio
+        import saas_web
+
+        async def call_next(req):
+            from starlette.responses import JSONResponse
+            return JSONResponse(content={"status": "ok"})
+
+        loop = asyncio.get_event_loop()
+        response = loop.run_until_complete(saas_web.require_api_key(request, call_next))
+        self.assertEqual(response.status_code, 401)
+
     def test_get_ui(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
