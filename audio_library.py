@@ -7678,6 +7678,15 @@ class AudioLibrary:
                 tmk_sha256=tmk_record["sha256"],
                 tmk_markers_seconds=tmk_record.get("tmk_markers_seconds"),
             )
+        provenance = transcript.get("segmentation_provenance")
+        if isinstance(provenance, dict):
+            provenance.setdefault("source", {}).update(
+                {
+                    "sha256": sha256,
+                    "sha256_status": source_sha256_status,
+                    "current_content_verified": record_sha_is_verified(audio_record),
+                }
+            )
         atomic_json_write(transcript_path, transcript)
         return plan
 
