@@ -1,3 +1,7 @@
+## 2024-08-04 - 폼 컨테이너 클릭 시 파일 입력창 활성화
+**Learning:** 작은 파일 입력 버튼은 클릭하기 어렵습니다. 폼 컨테이너 전체를 드롭존으로 확장하고, 프로그램적으로 숨겨진 파일 입력의 `.click()` 메서드를 호출하되 자식 대화형 요소(입력, 버튼, 라벨)의 클릭을 무시하면 사용성이 향상됩니다.
+**Action:** 폼의 사용 편의성을 높이기 위해 전체 드롭존 영역에 클릭 이벤트 리스너를 추가하여 숨겨진 파일 선택 대화상자를 프로그램 방식으로 호출하세요.
+
 ## 2024-07-15 - Dynamic Size formatting and Total Size Validation
 **Learning:** Hardcoding human-readable sizes (like '5 GiB') in validation error messages is error-prone when the underlying constant changes. Moreover, failing to validate total upload size against backend limits (e.g., MAX_UPLOAD_BYTES) in batch file uploads frustrates users who wait for a large upload to finish only to get a server-side 413 Payload Too Large error.
 **Action:** Always format backend byte limit constants dynamically (e.g., `formatBinaryBytes(MAX_UPLOAD_BYTES)`) on the client side to display accurate error messages. For multiple file inputs, ensure both the file count and the combined file size are validated against backend limits, giving immediate inline feedback via `setCustomValidity` and `aria-invalid`.

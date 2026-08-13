@@ -46,6 +46,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('aria-describedby="file_help file_size_preview"', html)
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
+        self.assertIn("['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)", html)
 
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
