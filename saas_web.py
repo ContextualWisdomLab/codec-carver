@@ -192,6 +192,7 @@ HTML_TEMPLATE = """
         </form>
         <script>
             const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
+            window.addEventListener('DOMContentLoaded', () => {
             function formatBinaryBytes(value) {
                 const units = ['B', 'KiB', 'MiB', 'GiB'];
                 let size = value;
@@ -218,7 +219,7 @@ HTML_TEMPLATE = """
                 }
             });
 
-            function updateFileSizePreview(input) {
+            window.updateFileSizePreview = function(input) {
                 const file = input.files[0];
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
@@ -238,7 +239,7 @@ HTML_TEMPLATE = """
                     return;
                 }
                 preview.innerText = 'Selected file size: ' + text;
-            }
+            };
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
                 const val = parseInt(this.value, 10);
@@ -316,7 +317,7 @@ HTML_TEMPLATE = """
                 }, 10);
             });
 
-            function updateBatchFilePreview(input) {
+            window.updateBatchFilePreview = function(input) {
                 const preview = document.getElementById('batch_files_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
@@ -350,7 +351,7 @@ HTML_TEMPLATE = """
                     return;
                 }
                 preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
-            }
+            };
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
                 const btn = document.getElementById('batch-submit-btn');
@@ -390,7 +391,7 @@ HTML_TEMPLATE = """
             let files = dt.files;
             if (files.length) {
                 fileInput.files = files;
-                updateFileSizePreview(fileInput);
+                window.updateFileSizePreview(fileInput);
             }
         }, false);
         if (batchDropZone) {
@@ -399,22 +400,23 @@ HTML_TEMPLATE = """
                 let files = dt.files;
                 if (files.length) {
                     batchFileInput.files = files;
-                    updateBatchFilePreview(batchFileInput);
+                    window.updateBatchFilePreview(batchFileInput);
                 }
             }, false);
         }
         dropZone.addEventListener('click', (e) => {
-            if (!['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) {
+            if (!e.target.closest('input, button, label')) {
                 fileInput.click();
             }
         });
         if (batchDropZone) {
             batchDropZone.addEventListener('click', (e) => {
-                if (!['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) {
+                if (!e.target.closest('input, button, label')) {
                     batchFileInput.click();
                 }
             });
         }
+            });
         </script>
     </div>
     <div class="box" id="batch-drop-zone" style="margin-top: 20px;">
