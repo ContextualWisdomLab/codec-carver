@@ -1,3 +1,6 @@
+## 2024-08-14 - 드롭 존 클릭 영역 활성화 시의 상호작용 제어 학습
+**Learning:** 파일 업로드 폼을 감싸는 전체 드롭 존(box)을 클릭 가능하도록 확장할 때, 폼 내부의 INPUT, BUTTON, LABEL 등 원래의 상호작용 가능한 하위 요소에 대한 클릭까지 모두 부모 래퍼의 이벤트로 처리하면 의도치 않은 중복 동작이나 UI 오작동이 발생함을 확인.
+**Action:** 상호작용하는 드롭 존 이벤트를 추가할 시, `!['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)` 와 같은 명시적인 예외 처리를 도입하여 원래의 폼 기능을 해치지 않고 UX를 개선한다.
 ## 2024-07-15 - Dynamic Size formatting and Total Size Validation
 **Learning:** Hardcoding human-readable sizes (like '5 GiB') in validation error messages is error-prone when the underlying constant changes. Moreover, failing to validate total upload size against backend limits (e.g., MAX_UPLOAD_BYTES) in batch file uploads frustrates users who wait for a large upload to finish only to get a server-side 413 Payload Too Large error.
 **Action:** Always format backend byte limit constants dynamically (e.g., `formatBinaryBytes(MAX_UPLOAD_BYTES)`) on the client side to display accurate error messages. For multiple file inputs, ensure both the file count and the combined file size are validated against backend limits, giving immediate inline feedback via `setCustomValidity` and `aria-invalid`.

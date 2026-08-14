@@ -148,7 +148,7 @@ HTML_TEMPLATE = """
     <title>Codec Carver SaaS</title>
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
-        .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+        .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; cursor: pointer; }
         button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
         button:hover:not(:disabled) { background-color: #004085; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
@@ -402,6 +402,18 @@ HTML_TEMPLATE = """
                     updateBatchFilePreview(batchFileInput);
                 }
             }, false);
+        }
+        dropZone.addEventListener('click', (e) => {
+            if (!['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) {
+                fileInput.click();
+            }
+        });
+        if (batchDropZone) {
+            batchDropZone.addEventListener('click', (e) => {
+                if (!['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) {
+                    batchFileInput.click();
+                }
+            });
         }
         </script>
     </div>
