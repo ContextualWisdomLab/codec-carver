@@ -89,46 +89,6 @@ class TestRecordAndUsage(UsageStoreTestCase):
         self.assertEqual(reopened.usage("key-a", JAN)["conversions"], 1)
 
 
-class TestRecordIfQuotaAllows(UsageStoreTestCase):
-    """record_if_quota_allows() atomically checks and records."""
-
-    def test_allows_and_records_under_limits(self):
-        result = self.store.record_if_quota_allows(
-            "key-a", input_bytes=10, output_bytes=10, now=JAN,
-            max_conversions=2, max_bytes=100
-        )
-        self.assertTrue(result)
-        usage = self.store.usage("key-a", JAN)
-        self.assertEqual(usage["conversions"], 1)
-        self.assertEqual(usage["input_bytes"], 10)
-
-    def test_denies_and_does_not_record_over_conversion_limit(self):
-        self.store.record("key-a", input_bytes=10, output_bytes=10, now=JAN)
-        result = self.store.record_if_quota_allows(
-            "key-a", input_bytes=10, output_bytes=10, now=JAN,
-            max_conversions=1, max_bytes=100
-        )
-        self.assertFalse(result)
-        usage = self.store.usage("key-a", JAN)
-        self.assertEqual(usage["conversions"], 1)
-
-    def test_denies_and_does_not_record_over_byte_limit(self):
-        self.store.record("key-a", input_bytes=50, output_bytes=50, now=JAN)
-        result = self.store.record_if_quota_allows(
-            "key-a", input_bytes=10, output_bytes=10, now=JAN,
-            max_conversions=5, max_bytes=100
-        )
-        self.assertFalse(result)
-        usage = self.store.usage("key-a", JAN)
-        self.assertEqual(usage["conversions"], 1)
-        self.assertEqual(usage["input_bytes"], 50)
-
-    def test_negative_bytes_raises_valueerror(self):
-        with self.assertRaises(ValueError):
-            self.store.record_if_quota_allows(
-                "key-a", input_bytes=-10, output_bytes=10, now=JAN
-            )
-
 class TestQuota(UsageStoreTestCase):
     """check_quota() allows under the limit and denies at the boundary."""
 

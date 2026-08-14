@@ -14,6 +14,3 @@
 
 ### Changed
 - ⚡ Bolt: SQLite 데이터베이스 초기화 시 `PRAGMA journal_mode=WAL`을 한 번만 실행하도록 수정하여 단기 커넥션에서의 성능을 최적화했습니다.
-
-### Fixed
-- 🛡️ Sentinel: `check_quota`와 `record` 사이의 TOCTOU(Time-Of-Check-Time-Of-Use) 레이스 컨디션을 수정하기 위해, 원자적으로 쿼터를 확인하고 기록하는 `record_if_quota_allows` 메서드를 추가했습니다.

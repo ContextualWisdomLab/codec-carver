@@ -167,53 +167,6 @@ class UsageStore:
                     (api_key, period, input_bytes, output_bytes),
                 )
 
-    def record_if_quota_allows(
-        self,
-        api_key: str,
-        *,
-        input_bytes: int,
-        output_bytes: int,
-        now: datetime,
-        max_conversions: int | None = None,
-        max_bytes: int | None = None
-    ) -> bool:
-        """Record usage only if quota allows, atomically.
-
-        Returns True if usage was recorded, False if quota exceeded.
-        """
-        if input_bytes < 0 or output_bytes < 0:
-            raise ValueError("input_bytes and output_bytes must be non-negative")
-
-        period = _period(now)
-        with self._lock, closing(self._connect()) as conn:
-            with conn:
-                row = conn.execute(
-                    "SELECT conversions, input_bytes, output_bytes FROM usage "
-                    "WHERE api_key = ? AND period = ?",
-                    (api_key, period),
-                ).fetchone()
-
-                conversions, input_bytes_total, output_bytes_total = row if row else (0, 0, 0)
-
-                if max_conversions is not None and conversions >= max_conversions:
-                    return False
-                total_bytes = input_bytes_total + output_bytes_total
-                if max_bytes is not None and total_bytes >= max_bytes:
-                    return False
-
-                conn.execute(
-                    """
-                    INSERT INTO usage (api_key, period, conversions, input_bytes, output_bytes)
-                    VALUES (?, ?, 1, ?, ?)
-                    ON CONFLICT (api_key, period) DO UPDATE SET
-                        conversions = conversions + 1,
-                        input_bytes = input_bytes + excluded.input_bytes,
-                        output_bytes = output_bytes + excluded.output_bytes
-                    """,
-                    (api_key, period, input_bytes, output_bytes),
-                )
-                return True
-
     def usage(self, api_key: str, now: datetime) -> dict:
         """Return ``api_key``'s usage totals for the period containing ``now``.
 
