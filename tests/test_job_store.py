@@ -5,12 +5,37 @@ import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from job_store import DuplicateJobError, JobStore
 
 T0 = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
 T1 = T0 + timedelta(minutes=5)
 T2 = T0 + timedelta(minutes=10)
+
+
+class TestWalInitialization(unittest.TestCase):
+    """Initialization must fail closed when SQLite cannot enable WAL."""
+
+    @patch("job_store.sqlite3.connect")
+    def test_rejects_non_wal_mode(self, connect):
+        conn = connect.return_value
+        conn.execute.return_value.fetchone.return_value = ("delete",)
+
+        with self.assertRaisesRegex(RuntimeError, "WAL mode"):
+            JobStore("/tmp/jobs.db")
+
+        conn.close.assert_called_once()
+
+    @patch("job_store.sqlite3.connect")
+    def test_rejects_missing_journal_mode_result(self, connect):
+        conn = connect.return_value
+        conn.execute.return_value.fetchone.return_value = None
+
+        with self.assertRaisesRegex(RuntimeError, "WAL mode"):
+            JobStore("/tmp/jobs.db")
+
+        conn.close.assert_called_once()
 
 
 class JobStoreTestCase(unittest.TestCase):

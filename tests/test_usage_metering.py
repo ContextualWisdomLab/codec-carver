@@ -9,12 +9,39 @@ import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from usage_metering import QuotaExceededError, UsageStore
 
 JAN = datetime(2026, 1, 15, 12, 0, 0)
 JAN_LATER = datetime(2026, 1, 28, 23, 59, 59)
 FEB = datetime(2026, 2, 1, 0, 0, 0)
+
+
+class TestWalInitialization(unittest.TestCase):
+    """Initialization must fail closed when SQLite cannot enable WAL."""
+
+    @patch("usage_metering.sqlite3.connect")
+    def test_rejects_non_wal_mode(self, connect):
+        conn = connect.return_value
+        conn.execute.return_value.fetchone.return_value = ("delete",)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "usage.db"
+            with self.assertRaisesRegex(RuntimeError, "WAL mode"):
+                UsageStore(path)
+
+        conn.close.assert_called_once()
+
+    @patch("usage_metering.sqlite3.connect")
+    def test_rejects_missing_journal_mode_result(self, connect):
+        conn = connect.return_value
+        conn.execute.return_value.fetchone.return_value = None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "usage.db"
+            with self.assertRaisesRegex(RuntimeError, "WAL mode"):
+                UsageStore(path)
+
+        conn.close.assert_called_once()
 
 
 class UsageStoreTestCase(unittest.TestCase):

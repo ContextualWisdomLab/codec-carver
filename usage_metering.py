@@ -108,6 +108,7 @@ class UsageStore:
             ValueError: If the parent directory of ``db_path`` does not exist
                 or ``db_path`` points at a directory, so misconfiguration
                 surfaces as a clear error instead of an opaque sqlite failure.
+            RuntimeError: If SQLite cannot enable the required WAL mode.
         """
         path = Path(db_path)
         if path.is_dir():
@@ -120,11 +121,16 @@ class UsageStore:
         self._db_path = path
         self._lock = threading.Lock()
         with closing(self._connect()) as conn:
+            mode_row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            if not mode_row or str(mode_row[0]).lower() != "wal":
+                raise RuntimeError("SQLite WAL mode is required for UsageStore")
             with conn:
-                conn.executescript("PRAGMA journal_mode=WAL;\n" + _SCHEMA)
+                conn.execute(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
-        """Open a new short-lived connection with WAL mode enabled.
+        """Open a new short-lived connection.
+
+        The database-level journal mode is verified once during initialization.
 
         Returns:
             A fresh :class:`sqlite3.Connection` to the store's database.
