@@ -655,14 +655,10 @@ def _run_media_tool(
 ) -> "subprocess.CompletedProcess[str]":
     """Run an ffmpeg/ffprobe command, mapping missing binaries clearly.
 
-    ffmpeg/ffprobe echo the source file's metadata tags into their output
-    (ffmpeg to stderr at the default info loglevel, ffprobe into its JSON), and
-    those tags are attacker-influenceable, legacy-encoded bytes (Latin-1 ID3v1,
-    Shift-JIS, ...) that are not valid UTF-8. ``errors="replace"`` keeps that
-    untrusted output boundary from raising ``UnicodeDecodeError`` inside
-    ``subprocess.run``; the ASCII structure the parsers rely on (ffprobe JSON
-    delimiters, silencedetect numeric fields) is preserved and only undecodable
-    tag bytes become U+FFFD.
+    ffmpeg/ffprobe echo source-file metadata into their output. Those
+    attacker-influenceable legacy-encoded bytes may not be valid UTF-8.
+    Replacement decoding preserves the ASCII parser structure while preventing
+    an untrusted metadata byte from raising ``UnicodeDecodeError``.
     """
 
     try:
