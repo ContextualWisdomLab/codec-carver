@@ -64,3 +64,7 @@
 **취약점:** `saas_web.py`의 `require_api_key` 미들웨어에서 `hmac.compare_digest()`가 비-ASCII 문자열(예: 한글)을 비교할 때 처리되지 않은 `TypeError`를 발생시켜 잠재적인 DoS(500 서버 오류)를 일으킬 수 있는 문제를 발견했습니다.
 **학습:** `hmac.compare_digest()`는 비-ASCII 문자가 포함된 문자열 비교를 지원하지 않습니다. 악의적인 클라이언트가 `x-api-key` 헤더에 비-ASCII 문자를 주입하여 의도적으로 서버 오류를 유발할 수 있습니다.
 **예방:** `hmac.compare_digest()`에 인자를 전달하기 전에 항상 `encode('utf-8')`을 사용하여 두 문자열을 명시적으로 바이트(bytes)로 인코딩해야 합니다.
+## 2026-08-14 - [Sentinel: Insecure Default Authentication]
+**취약점:** `saas_web.py`의 `require_api_key` 미들웨어에서 API 키(`CODEC_CARVER_API_KEYS`)가 구성되지 않은 경우 인증을 완전히 건너뛰는 기본적으로 허용(open-by-default)되는 취약점이 발견되었습니다. 이는 인증되지 않은 사용자가 리소스를 소모하게 만들 수 있습니다.
+**학습:** 보안 기능은 선택 사항(opt-in)이어서는 안 됩니다. 환경 변수가 없거나 잘못 구성된 경우 기본적으로 애플리케이션은 가장 안전한 상태(fail-secure)인 모든 요청 거부로 돌아가야 합니다.
+**예방:** 미들웨어는 키 구성 여부에 관계없이 `GET /`를 제외한 모든 엔드포인트에서 항상 인증을 요구하도록 설정(secure-by-default)되어야 하며, 키가 설정되지 않은 경우에도 401 오류를 반환해야 합니다.

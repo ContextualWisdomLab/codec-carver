@@ -24,7 +24,11 @@ from media_shrinker import ConversionResult
 from job_store import JobStore
 
 if _HAS_FASTAPI:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-api-key": "test-key"})
+    # We will patch os.environ directly to have a default key for the whole file
+    import os
+    os.environ["CODEC_CARVER_API_KEYS"] = "test-key"
+
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
@@ -631,15 +635,15 @@ class TestApiKeyAuth(unittest.TestCase):
             headers=headers or {},
         )
 
-    def test_no_env_var_leaves_endpoints_open(self):
+    def test_no_env_var_blocks_endpoints(self):
         with patch.dict(os.environ):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
             response = self._post_shrink()
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 401)
         self.assertEqual(
             response.json(),
-            {"error": "Invalid target_bytes value. Must be greater than 0."},
+            {"error": "Server is not configured with API keys; authentication is required."},
         )
 
     def test_missing_header_rejected_when_keys_configured(self):
@@ -711,14 +715,14 @@ class TestApiKeyAuth(unittest.TestCase):
 
         self.assertEqual(rejected.status_code, 401)
 
-    def test_only_empty_entries_leave_endpoints_open(self):
+    def test_only_empty_entries_blocks_endpoints(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " , ,"}):
             response = self._post_shrink()
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 401)
         self.assertEqual(
             response.json(),
-            {"error": "Invalid target_bytes value. Must be greater than 0."},
+            {"error": "Server is not configured with API keys; authentication is required."},
         )
 
     def test_get_configured_api_keys_parsing(self):

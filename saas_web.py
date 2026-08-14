@@ -100,28 +100,33 @@ def get_configured_api_keys():
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    """Enforce opt-in API-key authentication on all endpoints except GET /.
+    """Enforce API-key authentication on all endpoints except GET /.
 
-    When one or more keys are configured via CODEC_CARVER_API_KEYS, every
-    request other than GET / (the upload UI page) must carry an X-API-Key
-    header matching a configured key; comparison uses hmac.compare_digest to
-    stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    Every request other than GET / (the upload UI page) must carry an X-API-Key
+    header matching a configured key in CODEC_CARVER_API_KEYS. Comparison uses
+    hmac.compare_digest to stay constant-time. Requests failing the check, or
+    when no keys are configured, receive a 401 JSON error without echoing any
+    key material.
     """
 
+    if request.method == "GET" and request.url.path == "/":
+        return await call_next(request)
+
     configured_keys = get_configured_api_keys()
-    if configured_keys and not (request.method == "GET" and request.url.path == "/"):
-        provided_key = request.headers.get("x-api-key", "")
-        provided_key_bytes = provided_key.encode("utf-8")
-        if not any(
-            hmac.compare_digest(provided_key_bytes, key.encode("utf-8"))
-            for key in configured_keys
-        ):
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Invalid or missing API key"},
-            )
+    if not configured_keys:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Server is not configured with API keys; authentication is required."},
+        )
+
+    provided_key = request.headers.get("x-api-key", "")
+    if not any(
+        hmac.compare_digest(provided_key.encode("utf-8"), key.encode("utf-8")) for key in configured_keys
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid or missing API key"},
+        )
     return await call_next(request)
 
 
