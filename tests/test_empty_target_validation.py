@@ -49,7 +49,7 @@ class EmptyTargetValidationTests(unittest.TestCase):
         """Assert one handler clears stale state before numeric validation."""
 
         empty_marker = "if (this.value === '') {"
-        invalid_marker = "if (isNaN(val) || val <= 0) {"
+        invalid_marker = "if (Number.isNaN(val) || val <= 0) {"
         self.assertIn(empty_marker, handler)
         self.assertIn("preview.innerText = '';", handler)
         self.assertIn("this.setCustomValidity('');", handler)
