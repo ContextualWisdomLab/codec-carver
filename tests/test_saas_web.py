@@ -2,6 +2,9 @@ import asyncio
 import io
 import json
 import os
+
+# Configure global API key for the test suite to pass default auth
+os.environ["CODEC_CARVER_API_KEYS"] = "test-key"
 import tempfile
 import unittest
 import zipfile
@@ -26,21 +29,21 @@ from job_store import JobStore
 
 if _HAS_FASTAPI:
     client = TestClient(app)
+    client.headers.update({"x-api-key": "test-key"})
 
 
 @unittest.skipUnless(
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class TestSaasWeb(unittest.TestCase):
-    @patch("saas_web.get_configured_api_keys", return_value=["valid-key"])
-    def test_auth_middleware_non_ascii_header(self, mock_get_keys):
-        # Create a mock Request with a non-ASCII header
+    @patch("saas_web.get_configured_api_keys", return_value=[])
+    def test_auth_middleware_secure_default(self, mock_get_keys):
         from starlette.requests import Request
         scope = {
             'type': 'http',
-            'method': 'GET',
+            'method': 'POST',
             'path': '/api/jobs',
-            'headers': [(b'x-api-key', 'non-ascii\u2022'.encode('utf-8'))],
+            'headers': [],
         }
         request = Request(scope)
 
@@ -51,8 +54,29 @@ class TestSaasWeb(unittest.TestCase):
             from starlette.responses import JSONResponse
             return JSONResponse(content={"status": "ok"})
 
-        loop = asyncio.get_event_loop()
-        response = loop.run_until_complete(saas_web.require_api_key(request, call_next))
+        response = asyncio.run(saas_web.require_api_key(request, call_next))
+        self.assertEqual(response.status_code, 401)
+
+    @patch("saas_web.get_configured_api_keys", return_value=["valid-key"])
+    def test_auth_middleware_non_ascii_header(self, mock_get_keys):
+        # Create a mock Request with a non-ASCII header
+        from starlette.requests import Request
+        scope = {
+            'type': 'http',
+            'method': 'GET',
+            'path': '/api/jobs',
+            'headers': [(b'x-api-key', 'non-ascii•'.encode('utf-8'))],
+        }
+        request = Request(scope)
+
+        import asyncio
+        import saas_web
+
+        async def call_next(req):
+            from starlette.responses import JSONResponse
+            return JSONResponse(content={"status": "ok"})
+
+        response = asyncio.run(saas_web.require_api_key(request, call_next))
         self.assertEqual(response.status_code, 401)
 
     def test_get_ui(self):
@@ -399,6 +423,8 @@ class TestSaasWeb(unittest.TestCase):
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class TestShrinkBatch(unittest.TestCase):
+
+
     """Tests for the POST /shrink-batch multi-file endpoint."""
 
     @staticmethod
@@ -711,15 +737,15 @@ class TestApiKeyAuth(unittest.TestCase):
             headers=headers or {},
         )
 
-    def test_no_env_var_leaves_endpoints_open(self):
+    def test_no_env_var_blocks_endpoints(self):
         with patch.dict(os.environ):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
             response = self._post_shrink()
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 401)
         self.assertEqual(
             response.json(),
-            {"error": "Invalid target_bytes value. Must be greater than 0."},
+            {"error": "API key authentication required but no keys configured"},
         )
 
     def test_missing_header_rejected_when_keys_configured(self):
@@ -793,14 +819,14 @@ class TestApiKeyAuth(unittest.TestCase):
 
         self.assertEqual(rejected.status_code, 401)
 
-    def test_only_empty_entries_leave_endpoints_open(self):
+    def test_only_empty_entries_blocks_endpoints(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " , ,"}):
             response = self._post_shrink()
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 401)
         self.assertEqual(
             response.json(),
-            {"error": "Invalid target_bytes value. Must be greater than 0."},
+            {"error": "API key authentication required but no keys configured"},
         )
 
     def test_get_configured_api_keys_parsing(self):
@@ -815,6 +841,8 @@ class TestApiKeyAuth(unittest.TestCase):
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class MultiSegmentZipTests(unittest.TestCase):
+
+
     """Long recordings split into multiple segments must all be returned (as a zip)."""
 
     @patch("saas_web.media_shrinker.convert_file")
@@ -851,7 +879,7 @@ class MultiSegmentZipTests(unittest.TestCase):
 @unittest.skipUnless(
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
-class JobModelTests(unittest.TestCase):
+class JobModelTests(unittest.IsolatedAsyncioTestCase):
     """Async job API: submit -> status -> result, plus all error paths."""
 
     def setUp(self) -> None:
@@ -1205,6 +1233,8 @@ class JobModelTests(unittest.TestCase):
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class UploadValidationTests(unittest.TestCase):
+
+
     """Input hardening surfaced by the SAST review: target bound + content type."""
 
     def test_shrink_rejects_oversized_target_bytes(self):

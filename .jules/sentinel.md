@@ -65,7 +65,8 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
-## 2024-08-12 - API 키 비교 시 비 ASCII 문자열로 인한 500 서버 에러 해결
-**취약점:** `hmac.compare_digest`는 비 ASCII 문자가 포함된 문자열 비교 시 `TypeError`를 발생시켜 DoS(Denial of Service) 공격에 취약함.
-**학습:** 파이썬의 `hmac.compare_digest`는 유니코드 문자열을 비교할 때 비 ASCII 문자를 지원하지 않음. 악의적인 사용자가 헤더에 비 ASCII 문자를 포함시키면 서버 에러가 발생함.
-**예방:** 항상 `encode("utf-8")`을 사용하여 인자들을 바이트로 변환한 후 비교해야 함.
+
+## 2026-08-12 - 보안 기본값 인증 수정 및 비 ASCII 에러 수정
+**취약점:** `CODEC_CARVER_API_KEYS`가 설정되지 않았을 때 인증 우회가 가능하며, 비 ASCII 입력 시 DoS 취약점이 발생함.
+**학습:** Secure by default 원칙을 준수하고, `hmac.compare_digest` 사용 전 입력값을 바이트로 인코딩해야 함.
+**예방:** 설정된 키가 없으면 기본적으로 401을 반환하고, 모든 문자열 비교 전에 `utf-8`로 인코딩함.
