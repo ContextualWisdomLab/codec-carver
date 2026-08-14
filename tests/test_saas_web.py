@@ -707,6 +707,29 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
 
+    def test_non_ascii_key_handled_safely(self):
+        # We must bypass the TestClient for this test because TestClient/httpx natively
+        # rejects non-ASCII headers. We want to ensure the middleware itself doesn't crash.
+        import starlette.requests
+        from saas_web import require_api_key
+        import asyncio
+
+        async def mock_call_next(request):
+            return "SUCCESS"
+
+        scope = {
+            'type': 'http',
+            'method': 'GET',
+            'path': '/api/foo',
+            'headers': [(b'x-api-key', 'non-ascii🎉'.encode('utf-8'))]
+        }
+        request = starlette.requests.Request(scope)
+
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = asyncio.run(require_api_key(request, mock_call_next))
+
+        self.assertEqual(response.status_code, 401)
+
     def test_wrong_key_rejected(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
             response = self._post_shrink(headers={"X-API-Key": "wrong-key"})
