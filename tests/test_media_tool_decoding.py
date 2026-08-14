@@ -48,8 +48,8 @@ class MediaToolDecodingTests(unittest.TestCase):
         )
 
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("value", completed.stdout)
-        self.assertIn("warning", completed.stderr)
+        self.assertEqual(completed.stdout, "value\ufffd")
+        self.assertEqual(completed.stderr, "warning\ufffd")
 
     def test_probe_media_parses_json_with_legacy_encoded_tag(self) -> None:
         """A bad metadata byte cannot prevent parsing valid ffprobe structure."""
