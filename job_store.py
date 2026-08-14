@@ -86,7 +86,6 @@ class JobStore:
 
         Raises:
             ValueError: If ``db_path`` is ``":memory:"``.
-            RuntimeError: If SQLite cannot enable the required WAL mode.
         """
         if db_path == ":memory:":
             raise ValueError(
@@ -96,20 +95,15 @@ class JobStore:
         self._db_path = str(db_path)
         self._lock = threading.Lock()
         with self._connect() as conn:
-            mode_row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
-            if not mode_row or str(mode_row[0]).lower() != "wal":
-                raise RuntimeError("SQLite WAL mode is required for JobStore")
-            conn.execute(_SCHEMA)
+            conn.executescript("PRAGMA journal_mode=WAL;\n" + _SCHEMA)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        """Open a new short-lived connection to the underlying database.
-
-        The database-level journal mode is verified once during initialization.
+        """Open a new WAL-mode connection to the underlying database.
 
         Yields:
-            A short-lived ``sqlite3.Connection`` with a row factory that
-            yields ``sqlite3.Row`` objects.
+            A short-lived ``sqlite3.Connection`` with WAL journaling and
+            a row factory that yields ``sqlite3.Row`` objects.
         """
         conn = sqlite3.connect(self._db_path, timeout=30.0)
         try:

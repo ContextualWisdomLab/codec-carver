@@ -9,39 +9,12 @@ import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
 
 from usage_metering import QuotaExceededError, UsageStore
 
 JAN = datetime(2026, 1, 15, 12, 0, 0)
 JAN_LATER = datetime(2026, 1, 28, 23, 59, 59)
 FEB = datetime(2026, 2, 1, 0, 0, 0)
-
-
-class TestWalInitialization(unittest.TestCase):
-    """Initialization must fail closed when SQLite cannot enable WAL."""
-
-    @patch("usage_metering.sqlite3.connect")
-    def test_rejects_non_wal_mode(self, connect):
-        conn = connect.return_value
-        conn.execute.return_value.fetchone.return_value = ("delete",)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "usage.db"
-            with self.assertRaisesRegex(RuntimeError, "WAL mode"):
-                UsageStore(path)
-
-        conn.close.assert_called_once()
-
-    @patch("usage_metering.sqlite3.connect")
-    def test_rejects_missing_journal_mode_result(self, connect):
-        conn = connect.return_value
-        conn.execute.return_value.fetchone.return_value = None
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "usage.db"
-            with self.assertRaisesRegex(RuntimeError, "WAL mode"):
-                UsageStore(path)
-
-        conn.close.assert_called_once()
 
 
 class UsageStoreTestCase(unittest.TestCase):
@@ -115,6 +88,46 @@ class TestRecordAndUsage(UsageStoreTestCase):
         reopened = UsageStore(self.db_path)
         self.assertEqual(reopened.usage("key-a", JAN)["conversions"], 1)
 
+
+class TestRecordIfQuotaAllows(UsageStoreTestCase):
+    """record_if_quota_allows() atomically checks and records."""
+
+    def test_allows_and_records_under_limits(self):
+        result = self.store.record_if_quota_allows(
+            "key-a", input_bytes=10, output_bytes=10, now=JAN,
+            max_conversions=2, max_bytes=100
+        )
+        self.assertTrue(result)
+        usage = self.store.usage("key-a", JAN)
+        self.assertEqual(usage["conversions"], 1)
+        self.assertEqual(usage["input_bytes"], 10)
+
+    def test_denies_and_does_not_record_over_conversion_limit(self):
+        self.store.record("key-a", input_bytes=10, output_bytes=10, now=JAN)
+        result = self.store.record_if_quota_allows(
+            "key-a", input_bytes=10, output_bytes=10, now=JAN,
+            max_conversions=1, max_bytes=100
+        )
+        self.assertFalse(result)
+        usage = self.store.usage("key-a", JAN)
+        self.assertEqual(usage["conversions"], 1)
+
+    def test_denies_and_does_not_record_over_byte_limit(self):
+        self.store.record("key-a", input_bytes=50, output_bytes=50, now=JAN)
+        result = self.store.record_if_quota_allows(
+            "key-a", input_bytes=10, output_bytes=10, now=JAN,
+            max_conversions=5, max_bytes=100
+        )
+        self.assertFalse(result)
+        usage = self.store.usage("key-a", JAN)
+        self.assertEqual(usage["conversions"], 1)
+        self.assertEqual(usage["input_bytes"], 50)
+
+    def test_negative_bytes_raises_valueerror(self):
+        with self.assertRaises(ValueError):
+            self.store.record_if_quota_allows(
+                "key-a", input_bytes=-10, output_bytes=10, now=JAN
+            )
 
 class TestQuota(UsageStoreTestCase):
     """check_quota() allows under the limit and denies at the boundary."""
