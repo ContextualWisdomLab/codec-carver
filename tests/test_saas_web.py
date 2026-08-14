@@ -8,6 +8,7 @@ import zipfile
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from types import SimpleNamespace
+
 try:
     from fastapi import BackgroundTasks
     from fastapi.testclient import TestClient
@@ -31,9 +32,10 @@ if _HAS_FASTAPI:
 
 
 
-@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
 class TestSaasWeb(unittest.TestCase):
-
     def test_get_ui(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -155,7 +157,7 @@ class TestSaasWeb(unittest.TestCase):
                 response = client.post(
                     "/shrink",
                     files={"file": ("input.wav", f, "audio/wav")},
-                    data={"target_bytes": 10000}
+                    data={"target_bytes": 10000},
                 )
 
             self.assertEqual(response.status_code, 200)
@@ -170,6 +172,7 @@ class TestSaasWeb(unittest.TestCase):
         mock_convert_file.return_value = []
 
         import tempfile
+
         with tempfile.TemporaryDirectory() as temp_dir:
             dummy_file_path = Path(temp_dir) / "input.wav"
             dummy_file_path.write_bytes(b"dummy wav data")
@@ -178,15 +181,18 @@ class TestSaasWeb(unittest.TestCase):
                 response = client.post(
                     "/shrink",
                     files={"file": ("input.wav", f, "audio/wav")},
-                    data={"target_bytes": 10000}
+                    data={"target_bytes": 10000},
                 )
 
-            self.assertEqual(response.status_code, 200) # Returns 200 with JSON error dict currently
+            self.assertEqual(
+                response.status_code, 200
+            )  # Returns 200 with JSON error dict currently
             self.assertIn(b"error", response.content)
             self.assertNotIn("details", response.json())
 
     def test_shrink_media_rejects_nonpositive_target_bytes(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as temp_dir:
             dummy_file_path = Path(temp_dir) / "input.wav"
             dummy_file_path.write_bytes(b"dummy wav data")
@@ -227,6 +233,7 @@ class TestSaasWeb(unittest.TestCase):
     @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_media_uses_safe_fallback_filename(self, mock_convert_file):
         import tempfile
+
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "output.flac"
             output.write_bytes(b"audio")
@@ -272,10 +279,15 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response, {"error": "Upload processing failed"})
 
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_exception_does_not_expose_internal_path(self, mock_convert_file):
-        mock_convert_file.side_effect = RuntimeError("/tmp/codec_carver_secret/input.wav")
+    def test_shrink_media_exception_does_not_expose_internal_path(
+        self, mock_convert_file
+    ):
+        mock_convert_file.side_effect = RuntimeError(
+            "/tmp/codec_carver_secret/input.wav"
+        )
 
         import tempfile
+
         with tempfile.TemporaryDirectory() as temp_dir:
             dummy_file_path = Path(temp_dir) / "input.wav"
             dummy_file_path.write_bytes(b"dummy wav data")
@@ -284,7 +296,7 @@ class TestSaasWeb(unittest.TestCase):
                 response = client.post(
                     "/shrink",
                     files={"file": ("input.wav", f, "audio/wav")},
-                    data={"target_bytes": 10000}
+                    data={"target_bytes": 10000},
                 )
 
             self.assertEqual(response.status_code, 200)
@@ -293,12 +305,15 @@ class TestSaasWeb(unittest.TestCase):
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
 
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_failed_result_does_not_expose_internal_path(self, mock_convert_file):
+    def test_shrink_media_failed_result_does_not_expose_internal_path(
+        self, mock_convert_file
+    ):
         mock_result = MagicMock(spec=ConversionResult)
         mock_result.output_path = Path("/tmp/codec_carver_secret/output.flac")
         mock_convert_file.return_value = [mock_result]
 
         import tempfile
+
         with tempfile.TemporaryDirectory() as temp_dir:
             dummy_file_path = Path(temp_dir) / "input.wav"
             dummy_file_path.write_bytes(b"dummy wav data")
@@ -307,14 +322,15 @@ class TestSaasWeb(unittest.TestCase):
                 response = client.post(
                     "/shrink",
                     files={"file": ("input.wav", f, "audio/wav")},
-                    data={"target_bytes": 10000}
+                    data={"target_bytes": 10000},
                 )
 
             self.assertEqual(response.status_code, 200)
             payload = response.json()
-            self.assertEqual(payload, {"error": "Processing failed or no output generated"})
+            self.assertEqual(
+                payload, {"error": "Processing failed or no output generated"}
+            )
             self.assertNotIn("/tmp/codec_carver_secret", response.text)
-
 
     def test_get_ui_includes_target_bytes_validation_feedback(self):
         response = client.get("/")
@@ -342,6 +358,19 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         self.assertEqual(response.body, b'{"error":"Payload Too Large"}')
 
+    def test_request_size_limit_passes_non_request_asgi_messages(self):
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def call_next(request):
+            self.assertEqual(await request._receive(), {"type": "http.disconnect"})
+            return Response(status_code=204)
+
+        request = SimpleNamespace(headers={}, _receive=receive)
+        response = asyncio.run(saas_web.limit_request_size(request, call_next))
+
+        self.assertEqual(response.status_code, 204)
+
     def test_get_ui_includes_preset_buttons(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -352,16 +381,23 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('data-bytes="104857600"', html)
         self.assertIn('data-bytes="524288000"', html)
         self.assertIn('data-bytes="1073741824"', html)
-        self.assertIn("document.getElementById('preset_buttons_container').addEventListener('click'", html)
+        self.assertIn(
+            "document.getElementById('preset_buttons_container').addEventListener('click'",
+            html,
+        )
         self.assertIn('aria-pressed="false"', html)
         self.assertIn('role="group" aria-label="Preset target sizes"', html)
         self.assertNotIn('onclick="setTargetBytes(', html)
-        self.assertIn("const presetValue = Number.parseInt(btn.dataset.bytes, 10);", html)
+        self.assertIn(
+            "const presetValue = Number.parseInt(btn.dataset.bytes, 10);", html
+        )
         self.assertIn("!e.isTrusted && presetValue === val", html)
         self.assertNotIn("btn.dataset.bytes === this.value", html)
 
 
-@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
 class TestShrinkBatch(unittest.TestCase):
     """Tests for the POST /shrink-batch multi-file endpoint."""
 
@@ -382,7 +418,9 @@ class TestShrinkBatch(unittest.TestCase):
         return archive.namelist(), manifest, archive
 
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_batch_two_files_returns_zip_with_outputs_and_manifest(self, mock_convert_file):
+    def test_shrink_batch_two_files_returns_zip_with_outputs_and_manifest(
+        self, mock_convert_file
+    ):
         mock_convert_file.side_effect = self._fake_convert
 
         response = client.post(
@@ -448,11 +486,15 @@ class TestShrinkBatch(unittest.TestCase):
             ("files", (f"f{i}.wav", b"x", "audio/wav"))
             for i in range(saas_web.MAX_BATCH_FILES + 1)
         ]
-        response = client.post("/shrink-batch", files=uploads, data={"target_bytes": 10000})
+        response = client.post(
+            "/shrink-batch", files=uploads, data={"target_bytes": 10000}
+        )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(
             response.json(),
-            {"error": f"Too many files. Maximum is {saas_web.MAX_BATCH_FILES} files per batch."},
+            {
+                "error": f"Too many files. Maximum is {saas_web.MAX_BATCH_FILES} files per batch."
+            },
         )
 
     def test_shrink_batch_rejects_nonpositive_target_bytes(self):
@@ -481,7 +523,9 @@ class TestShrinkBatch(unittest.TestCase):
         )
 
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_batch_rejects_disallowed_content_type_per_file(self, mock_convert_file):
+    def test_shrink_batch_rejects_disallowed_content_type_per_file(
+        self, mock_convert_file
+    ):
         mock_convert_file.side_effect = self._fake_convert
 
         response = client.post(
@@ -521,7 +565,9 @@ class TestShrinkBatch(unittest.TestCase):
         )
 
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_batch_never_serves_output_outside_workspace(self, mock_convert_file):
+    def test_shrink_batch_never_serves_output_outside_workspace(
+        self, mock_convert_file
+    ):
         with tempfile.TemporaryDirectory() as outside_dir:
             outside_file = Path(outside_dir) / "secret.flac"
             outside_file.write_bytes(b"secret contents")
@@ -584,6 +630,32 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Upload processing failed"})
 
     @patch("saas_web.media_shrinker.convert_file")
+    def test_shrink_batch_uses_safe_fallback_filename_with_backslashes(self, mock_convert_file):
+        mock_convert_file.return_value = []
+
+        response = saas_web.shrink_media_batch(
+            BackgroundTasks(),
+            files=[
+                SimpleNamespace(
+                    filename="..\\..\\windows.ini",
+                    content_type="audio/wav",
+                    file=io.BytesIO(b"dummy"),
+                )
+            ],
+            target_bytes=10000,
+        )
+
+        try:
+            with zipfile.ZipFile(response.path) as archive:
+                manifest = json.loads(archive.read("results.json"))
+            self.assertEqual(manifest["results"][0]["filename"], "windows.ini")
+            self.assertEqual(
+                mock_convert_file.call_args.kwargs["source"].name, "windows.ini"
+            )
+        finally:
+            saas_web.cleanup_temp_dir(Path(response.path).parent)
+
+    @patch("saas_web.media_shrinker.convert_file")
     def test_shrink_batch_uses_safe_fallback_filename(self, mock_convert_file):
         mock_convert_file.return_value = []
 
@@ -599,13 +671,15 @@ class TestShrinkBatch(unittest.TestCase):
             target_bytes=10000,
         )
 
-        archive = zipfile.ZipFile(response.path)
-        manifest = json.loads(archive.read("results.json"))
-        self.assertEqual(manifest["results"][0]["filename"], "upload.tmp")
-        self.assertEqual(
-            mock_convert_file.call_args.kwargs["source"].name, "upload.tmp"
-        )
-        saas_web.cleanup_temp_dir(Path(response.path).parent)
+        try:
+            with zipfile.ZipFile(response.path) as archive:
+                manifest = json.loads(archive.read("results.json"))
+            self.assertEqual(manifest["results"][0]["filename"], "upload.tmp")
+            self.assertEqual(
+                mock_convert_file.call_args.kwargs["source"].name, "upload.tmp"
+            )
+        finally:
+            saas_web.cleanup_temp_dir(Path(response.path).parent)
 
     def test_get_ui_includes_batch_upload_form(self):
         response = client.get("/")
@@ -613,15 +687,17 @@ class TestShrinkBatch(unittest.TestCase):
         html = response.text
         self.assertIn('action="/shrink-batch"', html)
         self.assertIn('id="batch_files"', html)
-        self.assertIn('multiple', html)
+        self.assertIn("multiple", html)
         self.assertIn('accept="audio/*,video/*"', html)
         self.assertIn('aria-describedby="batch_files_help batch_files_preview"', html)
         self.assertIn('onchange="updateBatchFilePreview(this)"', html)
         self.assertIn('id="batch_files_preview"', html)
-        self.assertIn('function updateBatchFilePreview(input)', html)
+        self.assertIn("function updateBatchFilePreview(input)", html)
 
 
-@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
 class TestApiKeyAuth(unittest.TestCase):
     """Tests for the opt-in CODEC_CARVER_API_KEYS authentication middleware."""
 
@@ -689,7 +765,9 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(allowed.status_code, 404)
 
     def test_multiple_comma_separated_keys_all_valid(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "key-one,key-two,key-three"}):
+        with patch.dict(
+            os.environ, {"CODEC_CARVER_API_KEYS": "key-one,key-two,key-three"}
+        ):
             for key in ("key-one", "key-two", "key-three"):
                 response = self._post_shrink(headers={"X-API-Key": key})
                 self.assertEqual(response.status_code, 200, key)
@@ -733,7 +811,9 @@ class TestApiKeyAuth(unittest.TestCase):
             self.assertEqual(saas_web.get_configured_api_keys(), [])
 
 
-@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
 class MultiSegmentZipTests(unittest.TestCase):
     """Long recordings split into multiple segments must all be returned (as a zip)."""
 
@@ -763,9 +843,14 @@ class MultiSegmentZipTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"], "application/zip")
         names = zipfile.ZipFile(_io.BytesIO(response.content)).namelist()
-        self.assertEqual(sorted(names), ["rec.wav.part0001.flac", "rec.wav.part0002.flac"])
+        self.assertEqual(
+            sorted(names), ["rec.wav.part0001.flac", "rec.wav.part0002.flac"]
+        )
 
-@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
 class JobModelTests(unittest.TestCase):
     """Async job API: submit -> status -> result, plus all error paths."""
 
@@ -883,7 +968,9 @@ class JobModelTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.headers["content-type"], "application/zip")
         names = zipfile.ZipFile(io.BytesIO(result.content)).namelist()
-        self.assertEqual(sorted(names), ["in.wav.part0001.flac", "in.wav.part0002.flac"])
+        self.assertEqual(
+            sorted(names), ["in.wav.part0001.flac", "in.wav.part0002.flac"]
+        )
 
     def test_result_outside_workspace_rejected(self):
         # A "done" job whose output escaped its workspace must not be served.
@@ -1109,8 +1196,14 @@ class JobModelTests(unittest.TestCase):
         self.assertFalse(temp_dir.exists())
         self.assertIsNone(saas_web.JOB_STORE.get("c"))
 
+    def test_cleanup_job_tolerates_unknown_job(self):
+        saas_web._cleanup_job("unknown-cleanup-job")
+        self.assertIsNone(saas_web.JOB_STORE.get("unknown-cleanup-job"))
 
-@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
 class UploadValidationTests(unittest.TestCase):
     """Input hardening surfaced by the SAST review: target bound + content type."""
 
@@ -1120,7 +1213,10 @@ class UploadValidationTests(unittest.TestCase):
             files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
             data={"target_bytes": saas_web.MAX_TARGET_BYTES + 1},
         )
-        self.assertEqual(response.json(), {"error": "Invalid target_bytes value. Exceeds the maximum allowed size."})
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid target_bytes value. Exceeds the maximum allowed size."},
+        )
 
     def test_shrink_rejects_non_media_content_type(self):
         response = client.post(
@@ -1128,7 +1224,10 @@ class UploadValidationTests(unittest.TestCase):
             files={"file": ("shell.php", io.BytesIO(b"<?php ?>"), "application/x-php")},
             data={"target_bytes": 10000},
         )
-        self.assertEqual(response.json(), {"error": "Unsupported content type; upload an audio or video file."})
+        self.assertEqual(
+            response.json(),
+            {"error": "Unsupported content type; upload an audio or video file."},
+        )
 
     def test_submit_rejects_non_media_content_type(self):
         response = client.post(
@@ -1147,5 +1246,5 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
