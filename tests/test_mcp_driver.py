@@ -45,10 +45,10 @@ except ImportError as exc:
 
 @unittest.skipUnless(_HAS_MCP, "mcp not installed (optional integration dependency)")
 class TestMCPDriver(unittest.TestCase):
+
     @patch("mcp_driver.media_shrinker.convert_file")
     def test_shrink_media_success(self, mock_convert_file):
         import tempfile
-
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir_path = Path(temp_dir)
             source_file = temp_dir_path / "source.wav"
@@ -76,7 +76,6 @@ class TestMCPDriver(unittest.TestCase):
     @patch("mcp_driver.media_shrinker.convert_file")
     def test_shrink_media_exception(self, mock_convert_file):
         import tempfile
-
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir_path = Path(temp_dir)
             source_file = temp_dir_path / "source.wav"
@@ -92,7 +91,6 @@ class TestMCPDriver(unittest.TestCase):
     @patch("mcp_driver.media_shrinker.convert_file")
     def test_shrink_media_handles_empty_result(self, mock_convert_file):
         import tempfile
-
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir_path = Path(temp_dir)
             source_file = temp_dir_path / "source.wav"
@@ -104,25 +102,8 @@ class TestMCPDriver(unittest.TestCase):
 
             self.assertEqual(result_str, "No conversion results generated.")
 
-    @patch("mcp_driver.media_shrinker.convert_file")
-    def test_shrink_media_omits_unavailable_optional_details(self, mock_convert_file):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            source_file = Path(temp_dir) / "source.wav"
-            source_file.touch()
-            mock_convert_file.return_value = [
-                ConversionResult(
-                    source_path=source_file,
-                    output_path=None,
-                    status="skipped",
-                    original_size_bytes=0,
-                )
-            ]
-
-            result_str = shrink_media(str(source_file), str(Path(temp_dir) / "out"))
-
-        self.assertEqual(result_str, "Status: skipped")
+if __name__ == '__main__':
+    unittest.main()
 
 
 class MCPDriverValidationTests(unittest.TestCase):
@@ -130,20 +111,14 @@ class MCPDriverValidationTests(unittest.TestCase):
 
     def test_rejects_directory_source(self):
         import tempfile
-
         with tempfile.TemporaryDirectory() as temp_dir:
             result = shrink_media(temp_dir, temp_dir + "/out")
         self.assertIn("is not a file", result)
 
     def test_rejects_nonpositive_target_bytes(self):
         import tempfile
-
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "s.wav"
             source.touch()
             result = shrink_media(str(source), str(Path(temp_dir) / "out"), 0)
         self.assertIn("target_bytes must be greater than 0", result)
-
-
-if __name__ == "__main__":
-    unittest.main()

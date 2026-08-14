@@ -1,8 +1,3 @@
-## 2026-07-25 - [Cross-platform upload basename normalization]
-**Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
-**Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
-**Prevention:** Normalize client path separators before extracting a basename, retain the existing empty/`.`/`..` fallback, and test the persisted source name and manifest metadata. Treat the normalization as cross-platform consistency and defense in depth, not as evidence of a demonstrated Zip Slip exploit.
-
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
 **Learning:** Python's `Path.with_name` plus a suffix string to make a temp file opens a race condition because it's predictable and the permissions default to system `umask` which might expose secret `0600` data. Additionally, interpolating variables directly into FFmpeg filtergraph strings allows arbitrary filter injection.
@@ -65,10 +60,6 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
-## 2024-08-10 - hmac.compare_digest()의 비-ASCII 문자열 비교로 인한 500 서버 오류 취약점 수정
-**취약점:** `saas_web.py`의 `require_api_key` 미들웨어에서 `hmac.compare_digest()`가 비-ASCII 문자열(예: 한글)을 비교할 때 처리되지 않은 `TypeError`를 발생시켜 잠재적인 DoS(500 서버 오류)를 일으킬 수 있는 문제를 발견했습니다.
-**학습:** `hmac.compare_digest()`는 비-ASCII 문자가 포함된 문자열 비교를 지원하지 않습니다. 악의적인 클라이언트가 `x-api-key` 헤더에 비-ASCII 문자를 주입하여 의도적으로 서버 오류를 유발할 수 있습니다.
-**예방:** `hmac.compare_digest()`에 인자를 전달하기 전에 항상 `encode('utf-8')`을 사용하여 두 문자열을 명시적으로 바이트(bytes)로 인코딩해야 합니다.
 ## 2026-08-14 - [Sentinel: Insecure Default Authentication]
 **취약점:** `saas_web.py`의 `require_api_key` 미들웨어에서 API 키(`CODEC_CARVER_API_KEYS`)가 구성되지 않은 경우 인증을 완전히 건너뛰는 기본적으로 허용(open-by-default)되는 취약점이 발견되었습니다. 이는 인증되지 않은 사용자가 리소스를 소모하게 만들 수 있습니다.
 **학습:** 보안 기능은 선택 사항(opt-in)이어서는 안 됩니다. 환경 변수가 없거나 잘못 구성된 경우 기본적으로 애플리케이션은 가장 안전한 상태(fail-secure)인 모든 요청 거부로 돌아가야 합니다.
