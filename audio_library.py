@@ -9587,7 +9587,9 @@ def materialization_progress_line(
 def build_parser() -> argparse.ArgumentParser:
     """Create the command-line adapter around the Python API."""
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser.add_argument("root", type=Path)
     parser.add_argument(
         "--state-dir",
