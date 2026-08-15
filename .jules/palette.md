@@ -1,3 +1,9 @@
+## 2024-05-18 - [파일 업로드 UX 개선]
+**Learning:** 파일 입력 요소(input type="file")의 크기가 작거나 클릭 영역이 명확하지 않을 때, 사용자들은 주변의 넓은 영역(예: 드래그 앤 드롭 영역 전체)을 클릭하려는 경향이 있습니다. 이를 인지하지 못하고 파일 선택 창이 열리지 않으면 답답함을 느낄 수 있습니다.
+**Action:** 파일 업로드를 위한 컨테이너가 있다면(예: .box), 전체 컨테이너에 클릭 이벤트를 연결하여 숨겨진 파일 input의 click 이벤트를 프로그램적으로 트리거하도록 구현합니다. 이 때 `cursor: pointer` 스타일을 해당 컨테이너에 명시적으로 주어 사용자에게 클릭 가능함을 인지시킵니다. 컨테이너 내의 다른 상호작용 요소(버튼, 입력 필드 등)를 클릭할 때 충돌이 발생하지 않도록, `e.target.closest('input, button, label')`를 사용하여 내부 요소 클릭을 안전하게 무시합니다.
+## 2024-05-18 - [파일 업로드 UX 개선]
+**Learning:** 파일 입력 요소(input type="file")의 크기가 작거나 클릭 영역이 명확하지 않을 때, 사용자들은 주변의 넓은 영역(예: 드래그 앤 드롭 영역 전체)을 클릭하려는 경향이 있습니다. 이를 인지하지 못하고 파일 선택 창이 열리지 않으면 답답함을 느낄 수 있습니다.
+**Action:** 파일 업로드를 위한 컨테이너가 있다면(예: .box), 전체 컨테이너에 `cursor: pointer` 스타일을 추가하고 클릭 이벤트를 연결하여 숨겨진 파일 input의 click 이벤트를 프로그램적으로 트리거하도록 구현합니다. 단, 컨테이너 내의 다른 상호작용 요소(버튼, 입력 필드 등)를 클릭할 때는 파일 선택 창이 열리지 않도록 예외 처리해야 합니다.
 ## 2024-07-15 - Dynamic Size formatting and Total Size Validation
 **Learning:** Hardcoding human-readable sizes (like '5 GiB') in validation error messages is error-prone when the underlying constant changes. Moreover, failing to validate total upload size against backend limits (e.g., MAX_UPLOAD_BYTES) in batch file uploads frustrates users who wait for a large upload to finish only to get a server-side 413 Payload Too Large error.
 **Action:** Always format backend byte limit constants dynamically (e.g., `formatBinaryBytes(MAX_UPLOAD_BYTES)`) on the client side to display accurate error messages. For multiple file inputs, ensure both the file count and the combined file size are validated against backend limits, giving immediate inline feedback via `setCustomValidity` and `aria-invalid`.

@@ -149,6 +149,7 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
         .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+        #drop-zone, #batch-drop-zone { cursor: pointer; }
         button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
         button:hover:not(:disabled) { background-color: #004085; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
@@ -403,6 +404,18 @@ HTML_TEMPLATE = """
                 }
             }, false);
         }
+
+        [
+            {zone: dropZone, input: fileInput},
+            {zone: batchDropZone, input: batchFileInput}
+        ].forEach(({zone, input}) => {
+            if (zone && input) {
+                zone.addEventListener('click', (e) => {
+                    if (e.target.closest('input, button, label')) return;
+                    input.click();
+                });
+            }
+        });
         </script>
     </div>
     <div class="box" id="batch-drop-zone" style="margin-top: 20px;">

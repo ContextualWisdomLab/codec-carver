@@ -1,10 +1,4 @@
-**Severity**: High
-
-**Vulnerability**: Argument Injection via relative paths starting with a hyphen in command-line utilities.
-
-**Impact**: Command-line utilities (like `ffprobe` and `ffmpeg` filters) interpret user input (like a file path) starting with a hyphen (e.g., `-version.wav`) as options when passed as a relative path. This could lead to a command injection when parsing maliciously crafted filenames.
-Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
-
-**Fix**: The file paths passed to `subprocess.run` inside `media_shrinker.py` are resolved into absolute paths using `.resolve()`. However, to prevent Strix CI scanners from falsely reporting command injection on `subprocess.run`, `str()` path wrapping is being replaced with python's `f-string`. Replaced `str(path.resolve())` with `f"{path.resolve()}"`.
-
-**Verification**: Ran tests to ensure regressions weren't introduced by using python's `coverage`. 100% test coverage reported.
+💡 What: 드래그 앤 드롭 영역 전체를 클릭하여 파일 선택창을 열 수 있도록 개선했습니다. (전체 .box 영역에 `cursor: pointer` 스타일 추가 및 클릭 이벤트 연결).
+🎯 Why: 기존에는 파일 입력 버튼 크기가 작아 사용자가 주변의 넓은 영역을 클릭하려는 경향이 있었습니다. 넓은 영역을 클릭해도 파일 업로드가 가능하게 하여 사용성을 개선했습니다.
+📸 Before/After: 드래그 앤 드롭 영역 클릭 시 파일 입력 창이 열리도록 동작이 개선되었습니다.
+♿ Accessibility: 영역 내의 기존 상호작용 요소(버튼, 텍스트 입력 필드, 레이블 등)를 클릭할 때는 충돌이 발생하지 않도록 `e.target.closest('input, button, label')`를 사용하여 내부 요소 클릭을 안전하게 예외 처리했습니다.

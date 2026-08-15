@@ -52,6 +52,8 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.text
 
+        self.assertIn("#drop-zone, #batch-drop-zone { cursor: pointer; }", html)
+        self.assertIn("e.target.closest('input, button, label')", html)
         self.assertIn("const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;", html)
         self.assertIn("['B', 'KiB', 'MiB', 'GiB']", html)
         self.assertIn("const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);", html)
