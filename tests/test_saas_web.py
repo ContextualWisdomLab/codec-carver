@@ -1222,6 +1222,25 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
+    @patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "test-key"})
+    def test_unicode_api_key_dos(self):
+        from starlette.requests import Request
+        import asyncio
+        async def mock_call_next(request):
+            return "SUCCESS"
+        scope = {
+            'type': 'http',
+            'method': 'POST',
+            'path': '/shrink',
+            'headers': [(b'x-api-key', 'test-key😀'.encode('utf-8'))],
+        }
+        req = Request(scope)
+        try:
+            res = asyncio.run(saas_web.require_api_key(req, mock_call_next))
+            self.assertEqual(res.status_code, 401)
+        except Exception as e:
+            self.fail(f"Middleware crashed with exception: {e}")
+
 
 if __name__ == "__main__":
     unittest.main()
