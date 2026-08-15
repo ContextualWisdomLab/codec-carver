@@ -67,3 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2024-06-25 - 불필요한 O(N) 집합 복사 제거 (Avoid O(N) set copy in loop)
+**학습:** 비트 단위 AND 연산자(`&`)를 사용하여 루프 내에서 집합 교집합을 수행할 때, 초기 후보 집합에 대해 방어적 복사본(예: `candidates = set(postings)`)을 생성할 필요가 없습니다. `&` 연산자는 본질적으로 새로운 집합을 반환하므로, 초기의 O(N) 복사는 불필요한 성능 저하를 유발합니다.
+**실행:** 집합 교집합을 누적하는 루프에서 초기 할당 시 원본 집합을 그대로 할당하고, 방어적 복사본 생성을 피해야 합니다.
