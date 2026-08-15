@@ -1,6 +1,5 @@
 [run]
 source =
-    audio_library
     chapters
     diarize
     job_store
