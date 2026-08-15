@@ -486,7 +486,7 @@ def _persist_upload(file: UploadFile) -> tuple[Path, Path, Path, Path]:
         input_dir.mkdir()
         output_dir.mkdir()
 
-        safe_filename = Path(str(file.filename).replace("\\", "/")).name
+        safe_filename = Path((file.filename or "").replace("\\", "/")).name
         if not safe_filename or safe_filename in (".", ".."):
             safe_filename = "upload.tmp"
 
@@ -619,7 +619,7 @@ def shrink_media_batch(
     try:
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
             for index, upload in enumerate(files):
-                safe_filename = Path(str(upload.filename or "").replace("\\", "/")).name
+                safe_filename = Path((upload.filename or "").replace("\\", "/")).name
                 if not safe_filename or safe_filename in (".", ".."):
                     safe_filename = "upload.tmp"
                 entry = {
@@ -797,20 +797,6 @@ def _run_job(
         cleanup_temp_dir(temp_dir_path)
 
 
-def _cleanup_expired_jobs() -> None:
-    """Remove jobs and their temporary workspaces that have been finished for over 24 hours."""
-    from datetime import timedelta
-    store = _get_job_store()
-    now = _now()
-    for job in store.list_jobs():
-        if job["status"] in ("done", "failed"):
-            try:
-                updated_at = datetime.fromisoformat(job["updated_at"])
-                if now - updated_at > timedelta(hours=24):
-                    _cleanup_job(job["id"])
-            except Exception:
-                logger.exception("Failed to parse updated_at for job %s", job["id"])
-
 @app.post("/jobs")
 def submit_job(
     background_tasks: BackgroundTasks,
@@ -818,7 +804,6 @@ def submit_job(
     target_bytes: int = Form(2_000_000_000),
 ):
     """Enqueue a shrink job and return its id for asynchronous status polling."""
-    background_tasks.add_task(_cleanup_expired_jobs)
     error = _validate_request(file, target_bytes)
     if error is not None:
         return JSONResponse(status_code=400, content={"error": error})
@@ -904,4 +889,4 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

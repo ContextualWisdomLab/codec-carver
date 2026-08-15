@@ -1,15 +1,8 @@
-## 2026-08-11 - [Sentinel: Hardcoded Bind to 0.0.0.0 in Development Server]
-**Vulnerability:** Network Exposure (CWE-200) via hardcoded bind address `0.0.0.0`.
-**Learning:** Binding a development server to `0.0.0.0` exposes it to all network interfaces, potentially bypassing firewalls intended to restrict access to localhost only.
-**Prevention:** In production or development environments, services should bind to `127.0.0.1` unless explicitly intended to be publicly accessible. Use environment variables to configure host and port dynamically.
-## 2026-08-10 - [Sentinel: Uncontrolled Resource Consumption in Job Cleanup]
-**Vulnerability:** Resource Exhaustion (CWE-400 / CWE-770) via unretrieved job results.
-**Learning:** When successful jobs only clean up their temporary directories upon result download, an attacker can intentionally create jobs and abandon them to exhaust disk space or inodes over time.
-**Prevention:** Implement an automatic cleanup mechanism (like a background sweep or TTL) for jobs that complete but are never retrieved.
-## 2026-07-28 - [Sentinel: Windows Path Traversal in Uploads]
-**Vulnerability:** Path Traversal (CWE-22) via Windows path separators in filenames.
-**Learning:** Python`s `Path(file.filename).name` on POSIX systems does not recognize `\` as a directory separator, allowing attackers to upload files containing backslashes (e.g., `..\..\etc\passwd`) that escape intended directories.
-**Prevention:** Explicitly sanitize filenames by replacing all backslashes with forward slashes (`filename.replace("\\", "/")`) before applying `Path().name`.
+## 2026-07-25 - [Cross-platform upload basename normalization]
+**Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
+**Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
+**Prevention:** Normalize client path separators before extracting a basename, retain the existing empty/`.`/`..` fallback, and test the persisted source name and manifest metadata. Treat the normalization as cross-platform consistency and defense in depth, not as evidence of a demonstrated Zip Slip exploit.
+
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
 **Learning:** Python's `Path.with_name` plus a suffix string to make a temp file opens a race condition because it's predictable and the permissions default to system `umask` which might expose secret `0600` data. Additionally, interpolating variables directly into FFmpeg filtergraph strings allows arbitrary filter injection.
