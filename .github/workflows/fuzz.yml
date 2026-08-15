@@ -56,6 +56,8 @@ jobs:
   # CI cost stays low. Each target runs independently in the matrix.
   fuzz:
     runs-on: ubuntu-latest
+    # LibFuzzer's max_total_time does not bound Python instrumentation/setup.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
