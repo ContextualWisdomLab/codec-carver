@@ -85,38 +85,54 @@ async def limit_request_size(request: Request, call_next):
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
 class APIKeyRegistry:
-    """Thread-safe credential registry for API keys."""
+    """Keep runtime API keys in process memory behind a thread-safe boundary.
 
-    def __init__(self):
-        self._keys = []
+    The environment variable is bootstrap transport only. Creating a registry
+    consumes and removes that variable so request handling and later environment
+    changes cannot silently rotate credentials.
+    """
+
+    def __init__(self) -> None:
+        """Create a registry and consume any one-time environment bootstrap."""
+
+        self._keys: tuple[str, ...] = ()
         self._lock = threading.Lock()
-        self._bootstrap_from_env()
+        self._bootstrap_from_environment()
 
-    def _bootstrap_from_env(self):
-        raw = os.environ.get("CODEC_CARVER_API_KEYS")
-        if raw is not None:
-            self.set_keys([key.strip() for key in raw.split(",") if key.strip()])
-            os.environ.pop("CODEC_CARVER_API_KEYS", None)
+    def _bootstrap_from_environment(self) -> None:
+        """Load comma-separated keys once, then remove the transport variable."""
 
-    def set_keys(self, keys: list[str]):
-        """Update the registered API keys."""
+        raw_keys = os.environ.pop("CODEC_CARVER_API_KEYS", None)
+        if raw_keys is not None:
+            self.set_keys(raw_keys.split(","))
+
+    def set_keys(self, keys: list[str]) -> None:
+        """Atomically replace keys after trimming whitespace and empty entries.
+
+        Args:
+            keys: Candidate plaintext keys supplied by trusted bootstrap or
+                credential-management code.
+        """
+
+        normalized_keys = tuple(
+            key.strip() for key in keys if key.strip()
+        )
         with self._lock:
-            self._keys = list(keys)
+            self._keys = normalized_keys
 
     def get_keys(self) -> list[str]:
-        """Return the currently registered API keys."""
+        """Return a snapshot of registered keys without exposing mutable state."""
+
         with self._lock:
             return list(self._keys)
+
 
 API_KEY_REGISTRY = APIKeyRegistry()
 
 
-def get_configured_api_keys():
-    """Return the currently registered API keys.
+def get_configured_api_keys() -> list[str]:
+    """Return the current in-memory API-key snapshot used by middleware."""
 
-    Keys are read from the in-process registry at request time, allowing
-    zero-downtime key rotation via registry updates.
-    """
     return API_KEY_REGISTRY.get_keys()
 
 
@@ -124,19 +140,21 @@ def get_configured_api_keys():
 async def require_api_key(request: Request, call_next):
     """Enforce opt-in API-key authentication on all endpoints except GET /.
 
-    When one or more keys are configured via CODEC_CARVER_API_KEYS, every
-    request other than GET / (the upload UI page) must carry an X-API-Key
-    header matching a configured key; comparison uses hmac.compare_digest to
-    stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    When one or more keys are present in the in-memory credential registry,
+    every request other than GET / (the upload UI page) must carry an X-API-Key
+    header matching a configured key. Byte-oriented hmac.compare_digest keeps
+    comparison constant-time and prevents non-ASCII header values from raising
+    TypeError. Failed requests receive a 401 response without echoing key
+    material; an empty registry preserves the open default.
     """
 
     configured_keys = get_configured_api_keys()
     if configured_keys and not (request.method == "GET" and request.url.path == "/"):
         provided_key = request.headers.get("x-api-key", "")
+        provided_key_bytes = provided_key.encode("utf-8")
         if not any(
-            hmac.compare_digest(provided_key.encode("utf-8"), key.encode("utf-8")) for key in configured_keys
+            hmac.compare_digest(provided_key_bytes, key.encode("utf-8"))
+            for key in configured_keys
         ):
             return JSONResponse(
                 status_code=401,
@@ -508,7 +526,7 @@ def _persist_upload(file: UploadFile) -> tuple[Path, Path, Path, Path]:
         input_dir.mkdir()
         output_dir.mkdir()
 
-        safe_filename = Path(file.filename).name
+        safe_filename = Path((file.filename or "").replace("\\", "/")).name
         if not safe_filename or safe_filename in (".", ".."):
             safe_filename = "upload.tmp"
 
@@ -641,7 +659,7 @@ def shrink_media_batch(
     try:
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
             for index, upload in enumerate(files):
-                safe_filename = Path(upload.filename or "").name
+                safe_filename = Path((upload.filename or "").replace("\\", "/")).name
                 if not safe_filename or safe_filename in (".", ".."):
                     safe_filename = "upload.tmp"
                 entry = {
