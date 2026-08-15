@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -83,38 +84,77 @@ async def limit_request_size(request: Request, call_next):
     except RequestTooLarge:
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
-def get_configured_api_keys():
-    """Return the API keys configured via the CODEC_CARVER_API_KEYS env var.
+class APIKeyRegistry:
+    """Keep runtime API keys in process memory behind a thread-safe boundary.
 
-    The variable holds a comma-separated list of keys. Whitespace around each
-    key is stripped and empty entries are ignored. Keys are read from the
-    environment at request time (not import time) so tests can patch the
-    environment easily and key rotation needs no server restart. Returns an
-    empty list when the variable is unset or contains no usable keys, which
-    leaves the service open (today's default behaviour).
+    The environment variable is bootstrap transport only. Creating a registry
+    consumes and removes that variable so request handling and later environment
+    changes cannot silently rotate credentials.
     """
 
-    raw = os.environ.get("CODEC_CARVER_API_KEYS", "")
-    return [key.strip() for key in raw.split(",") if key.strip()]
+    def __init__(self) -> None:
+        """Create a registry and consume any one-time environment bootstrap."""
+
+        self._keys: tuple[str, ...] = ()
+        self._lock = threading.Lock()
+        self._bootstrap_from_environment()
+
+    def _bootstrap_from_environment(self) -> None:
+        """Load comma-separated keys once, then remove the transport variable."""
+
+        raw_keys = os.environ.pop("CODEC_CARVER_API_KEYS", None)
+        if raw_keys is not None:
+            self.set_keys(raw_keys.split(","))
+
+    def set_keys(self, keys: list[str]) -> None:
+        """Atomically replace keys after trimming whitespace and empty entries.
+
+        Args:
+            keys: Candidate plaintext keys supplied by trusted bootstrap or
+                credential-management code.
+        """
+
+        normalized_keys = tuple(
+            key.strip() for key in keys if key.strip()
+        )
+        with self._lock:
+            self._keys = normalized_keys
+
+    def get_keys(self) -> list[str]:
+        """Return a snapshot of registered keys without exposing mutable state."""
+
+        with self._lock:
+            return list(self._keys)
+
+
+API_KEY_REGISTRY = APIKeyRegistry()
+
+
+def get_configured_api_keys() -> list[str]:
+    """Return the current in-memory API-key snapshot used by middleware."""
+
+    return API_KEY_REGISTRY.get_keys()
 
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
     """Enforce opt-in API-key authentication on all endpoints except GET /.
 
-    When one or more keys are configured via CODEC_CARVER_API_KEYS, every
-    request other than GET / (the upload UI page) must carry an X-API-Key
-    header matching a configured key; comparison uses hmac.compare_digest to
-    stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    When one or more keys are present in the in-memory credential registry,
+    every request other than GET / (the upload UI page) must carry an X-API-Key
+    header matching a configured key. Byte-oriented hmac.compare_digest keeps
+    comparison constant-time and prevents non-ASCII header values from raising
+    TypeError. Failed requests receive a 401 response without echoing key
+    material; an empty registry preserves the open default.
     """
 
     configured_keys = get_configured_api_keys()
     if configured_keys and not (request.method == "GET" and request.url.path == "/"):
         provided_key = request.headers.get("x-api-key", "")
+        provided_key_bytes = provided_key.encode("utf-8")
         if not any(
-            hmac.compare_digest(provided_key, key) for key in configured_keys
+            hmac.compare_digest(provided_key_bytes, key.encode("utf-8"))
+            for key in configured_keys
         ):
             return JSONResponse(
                 status_code=401,
