@@ -13,6 +13,29 @@ permissions:
   contents: read
 
 jobs:
+  # Prove that the one hash lock remains installable in both the product fuzz
+  # interpreter and the central OpenCode evidence interpreter.
+  fuzz-lock-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the exact Atheris wheel
+        run: |
+          python -m pip install --disable-pip-version-check \
+            --require-hashes --only-binary=:all: \
+            -r fuzz/requirements-fuzz.txt
+          python -c "import atheris; print('Atheris import succeeded')"
+          python -m pip check
+
   # Fast property + regression suite (Hypothesis) — keeps the invariants green
   # on every push without the native fuzzing engine.
   property-tests:
@@ -33,6 +56,8 @@ jobs:
   # CI cost stays low. Each target runs independently in the matrix.
   fuzz:
     runs-on: ubuntu-latest
+    # LibFuzzer's max_total_time does not bound Python instrumentation/setup.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -46,10 +71,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          # Atheris supports CPython 3.6 - 3.12.
+          # Atheris 3.1 supports CPython 3.11-3.14; this bounded fuzz lane uses 3.12.
           python-version: "3.12"
       - name: Install Atheris
-        run: pip install --require-hashes -r fuzz/requirements-fuzz.txt
+        run: "python -m pip install --require-hashes --only-binary=:all: -r fuzz/requirements-fuzz.txt"
       - name: Select time budget
         id: budget
         run: |
