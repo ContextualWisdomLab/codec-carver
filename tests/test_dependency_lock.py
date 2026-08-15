@@ -104,6 +104,13 @@ class DependencyLockTests(unittest.TestCase):
         self.assertEqual(fuzz_lock, fuzz_input)
         self.assertEqual(hashes, ATHERIS_HASHES)
 
+    def test_fuzz_job_has_an_authoritative_runtime_bound(self) -> None:
+        """The fuzz job must terminate even when instrumentation stalls."""
+
+        job = workflow_job(ROOT / ".github/workflows/fuzz.yml", "fuzz")
+
+        self.assertRegex(job, r"(?m)^    timeout-minutes: 15$")
+
     def test_fuzz_workflow_proves_both_supported_interpreters(self) -> None:
         """CI must install the exact lock on product and central-review Python."""
 
