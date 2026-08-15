@@ -23,6 +23,3 @@ leak-*
 
 # Generated conversion outputs / reports
 under_2gb/
-
-# Rust build outputs
-rust-core/target/
