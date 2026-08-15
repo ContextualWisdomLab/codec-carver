@@ -51,7 +51,7 @@ dev = [
     "python-multipart==0.0.32",
     "aiofiles==25.1.0",
     "httpx==0.28.1",
-    "httpx2==2.5.0",
+    "httpx2==2.10.0",
     "mcp==1.28.1",
 ]
 all = [
