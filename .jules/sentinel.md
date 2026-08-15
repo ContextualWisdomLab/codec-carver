@@ -1,8 +1,3 @@
-## 2026-07-25 - [Cross-platform upload basename normalization]
-**Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
-**Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
-**Prevention:** Normalize client path separators before extracting a basename, retain the existing empty/`.`/`..` fallback, and test the persisted source name and manifest metadata. Treat the normalization as cross-platform consistency and defense in depth, not as evidence of a demonstrated Zip Slip exploit.
-
 ## 2026-05-28 - [Sentinel Fixes: Temp Files & Injection]
 **Vulnerability:** Predictable Temp Files (CWE-377) and Insecure Default Permissions (CWE-276), plus Command Injection via FFmpeg Filtergraph (CWE-20).
 **Learning:** Python's `Path.with_name` plus a suffix string to make a temp file opens a race condition because it's predictable and the permissions default to system `umask` which might expose secret `0600` data. Additionally, interpolating variables directly into FFmpeg filtergraph strings allows arbitrary filter injection.

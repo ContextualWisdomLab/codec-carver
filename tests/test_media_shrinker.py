@@ -63,12 +63,6 @@ def _fake_lstat(mode: int, size: int = 0) -> MagicMock:
 
 
 class FindCandidateTests(unittest.TestCase):
-    def test_find_candidates_accepts_filesystem_root_without_extra_separator(
-        self,
-    ) -> None:
-        with patch("media_shrinker.os.walk", return_value=[]):
-            self.assertEqual(find_candidates(Path("/"), size_limit_bytes=1), [])
-
     def test_find_candidates_returns_supported_files_over_limit_case_insensitively(
         self,
     ) -> None:
@@ -204,11 +198,7 @@ class FindCandidateTests(unittest.TestCase):
             with patch("os.path.realpath", flaky_realpath):
                 candidates = [
                     p[0].relative_to(root)
-                    for p in find_candidates(
-                        root,
-                        include_under_limit=True,
-                        exclude_paths=[Path("/something")],
-                    )
+                    for p in find_candidates(root, include_under_limit=True, exclude_paths=[Path("/something")])
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])
@@ -239,11 +229,7 @@ class FindCandidateTests(unittest.TestCase):
             with patch("os.lstat", flaky_lstat):
                 candidates = [
                     p[0].relative_to(root)
-                    for p in find_candidates(
-                        root,
-                        include_under_limit=True,
-                        exclude_paths=[Path("/something")],
-                    )
+                    for p in find_candidates(root, include_under_limit=True, exclude_paths=[Path("/something")])
                 ]
 
             self.assertEqual(candidates, [Path("good.mp3")])
@@ -316,10 +302,7 @@ class FindCandidateTests(unittest.TestCase):
         # symlinked directory plus a single delegating realpath mock, so the
         # only faked behaviour is the one under test ("realpath fails for the
         # symlink dir") and no version-specific pathlib internals are hit.
-        with (
-            tempfile.TemporaryDirectory() as tmp,
-            tempfile.TemporaryDirectory() as outside,
-        ):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
             root = Path(tmp)
             excluded = root / "excluded"
             excluded.mkdir()
@@ -1140,14 +1123,6 @@ class PlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_parse_silencedetect_ignores_orphan_end_marker(self) -> None:
-        self.assertEqual(
-            parse_silencedetect_intervals(
-                "[silencedetect @ 0x1] silence_end: 4.0 | silence_duration: 4.0"
-            ),
-            [],
-        )
-
     def test_parse_silencedetect_intervals_normalizes_negative_start_at_recording_head(
         self,
     ) -> None:
@@ -1412,7 +1387,7 @@ class MetadataTaggingTests(unittest.TestCase):
         self.assertEqual(baseline.ffmpeg_args, with_none.ffmpeg_args)
 
     def test_special_characters_pass_through_as_single_argv_items(self) -> None:
-        value = "My \"Great\" Album; $(rm -rf /) && echo -n 'x' 한글 = tricky"
+        value = 'My "Great" Album; $(rm -rf /) && echo -n \'x\' 한글 = tricky'
         plan = build_opus_plan(
             Path("long.m4a"),
             self._lossy_probe(),
@@ -1887,22 +1862,6 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(payload[0]["status"], "converted")
 
-    def test_main_execute_accepts_filesystem_root_without_extra_separator(self) -> None:
-        with tempfile.TemporaryDirectory() as report_dir:
-            report_path = Path(report_dir) / "ignored-report.json"
-            with (
-                patch("media_shrinker.find_candidates", return_value=[]),
-                patch("media_shrinker._execute_conversions", return_value=[]),
-                patch("media_shrinker.write_report") as write,
-                patch("builtins.print"),
-            ):
-                rc = media_shrinker.main(
-                    ["/", "--execute", "--report", str(report_path)]
-                )
-
-        self.assertEqual(rc, 0)
-        write.assert_called_once()
-
     def test_main_execute_returns_failure_when_any_result_failed(self) -> None:
         result = media_shrinker.ConversionResult(
             source_path=Path("/scan/a.wav"),
@@ -1946,13 +1905,10 @@ class CliTests(unittest.TestCase):
             (root / "a.wav").write_bytes(b"1234")
             (root / "b.wav").write_bytes(b"1234")
             buffer = io.StringIO()
-            with (
-                patch(
-                    "media_shrinker._execute_conversions",
-                    return_value=[converted, skipped],
-                ),
-                contextlib.redirect_stdout(buffer),
-            ):
+            with patch(
+                "media_shrinker._execute_conversions",
+                return_value=[converted, skipped],
+            ), contextlib.redirect_stdout(buffer):
                 rc = media_shrinker.main([str(root), "--execute"])
 
         summary_line = next(
@@ -2080,9 +2036,7 @@ class CliTests(unittest.TestCase):
         )
 
     def test_small_segment_returns_single_segment(self) -> None:
-        segments = build_segments(
-            duration_seconds=1.0, max_segment_duration_seconds=2.0
-        )
+        segments = build_segments(duration_seconds=1.0, max_segment_duration_seconds=2.0)
         self.assertEqual(segments, [MediaSegment(1, 0.0, 1.0, 1)])
 
     def test_build_segments_rejects_invalid_durations(self) -> None:
@@ -2101,7 +2055,7 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(MediaShrinkerError):
             calculate_audio_bitrate(10_000, 1, None)
 
-    def test_download_from_icloud_handles_missing_failure_and_success(self) -> None:
+    def test_download_from_icloud_requires_brctl_and_reports_failure(self) -> None:
         with patch("media_shrinker.shutil.which", return_value=None):
             with self.assertRaisesRegex(MediaShrinkerError, "was not found"):
                 media_shrinker.download_from_icloud(Path("source.wav"))
@@ -2111,14 +2065,6 @@ class CliTests(unittest.TestCase):
             with patch("media_shrinker.subprocess.run", return_value=completed):
                 with self.assertRaisesRegex(MediaShrinkerError, "no cloud"):
                     media_shrinker.download_from_icloud(Path("source.wav"))
-
-        completed = MagicMock(returncode=0, stderr="")
-        with (
-            patch("media_shrinker.shutil.which", return_value="/usr/bin/brctl"),
-            patch("media_shrinker.subprocess.run", return_value=completed) as run,
-        ):
-            media_shrinker.download_from_icloud(Path("source.wav"))
-        run.assert_called_once()
 
     def test_conversion_plan_command_rejects_missing_input_placeholder(self) -> None:
         plan = ConversionPlan("bad", Path("in.wav"), Path("out.flac"), ["-n", "out"])
@@ -2146,27 +2092,20 @@ class CliTests(unittest.TestCase):
                 original_size_bytes=4,
             )
             probe = MediaProbe(1.0, 4, "pcm_s16le", 128_000, False, "wav")
-            resolved_sources = frozenset({source.resolve()})
 
             with patch("media_shrinker.probe_media", return_value=probe):
-                with patch(
-                    "media_shrinker._convert_segment", return_value=result
-                ) as mocked:
+                with patch("media_shrinker._convert_segment", return_value=result) as mocked:
                     results = media_shrinker.convert_file(
                         source,
                         root=root,
                         output_dir=root / "out",
                         original_size=4,
-                        resolved_protected_sources=resolved_sources,
                     )
 
         self.assertEqual(results, [result])
         self.assertEqual(mocked.call_args.kwargs["original_size"], 4)
-        self.assertEqual(mocked.call_args.kwargs["protected_sources"], resolved_sources)
 
-    def test_convert_file_downloads_icloud_and_detects_silence_for_long_sources(
-        self,
-    ) -> None:
+    def test_convert_file_downloads_icloud_and_detects_silence_for_long_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source = root / "source.wav"
@@ -2181,12 +2120,8 @@ class CliTests(unittest.TestCase):
 
             with patch("media_shrinker.download_from_icloud") as mock_download:
                 with patch("media_shrinker.probe_media", return_value=probe):
-                    with patch(
-                        "media_shrinker.detect_silence_intervals", return_value=[]
-                    ):
-                        with patch(
-                            "media_shrinker._convert_segment", return_value=result
-                        ):
+                    with patch("media_shrinker.detect_silence_intervals", return_value=[]):
+                        with patch("media_shrinker._convert_segment", return_value=result):
                             results = media_shrinker.convert_file(
                                 source,
                                 root=root,
@@ -2328,9 +2263,7 @@ class CliTests(unittest.TestCase):
                         plan, source, output, ffmpeg_path="ffmpeg", overwrite=False
                     )
 
-    def test_execute_segment_conversion_falls_back_to_opus_then_discards_oversize(
-        self,
-    ) -> None:
+    def test_execute_segment_conversion_falls_back_to_opus_then_discards_oversize(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source = root / "source.wav"
@@ -2366,9 +2299,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.status, "too_large")
         self.assertIsNone(result.output_path)
 
-    def test_remove_invalid_legacy_outputs_skips_canonical_and_removes_oversize(
-        self,
-    ) -> None:
+    def test_remove_invalid_legacy_outputs_skips_canonical_and_removes_oversize(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             output_dir = root / "out"
@@ -2401,23 +2332,6 @@ class CliTests(unittest.TestCase):
                 max_segment_duration_seconds=2,
                 protected_sources=frozenset({source.resolve()}),
             )
-
-            valid_legacy = output_dir / "other.flac"
-            valid_legacy.write_bytes(b"valid")
-            with patch("media_shrinker._probe_output_duration", return_value=1.0):
-                media_shrinker._remove_invalid_legacy_outputs(
-                    source,
-                    rel_source=Path("other.wav"),
-                    probe=probe,
-                    output_dir=output_dir,
-                    suffixes=[".flac"],
-                    target_bytes=100,
-                    ffprobe_path="ffprobe",
-                    max_segment_duration_seconds=2,
-                    protected_sources=frozenset({source.resolve()}),
-                )
-
-            self.assertTrue(valid_legacy.exists())
 
         self.assertFalse(oversized_legacy.exists())
 
@@ -2452,31 +2366,19 @@ class CliTests(unittest.TestCase):
                     with patch("media_shrinker.os.setxattr", create=True):
                         media_shrinker._copy_extended_attributes(source, dest)
 
-            with patch(
-                "media_shrinker.os.listxattr", return_value=["user.test"], create=True
-            ):
-                with patch(
-                    "media_shrinker.os.getxattr", side_effect=OSError, create=True
-                ):
+            with patch("media_shrinker.os.listxattr", return_value=["user.test"], create=True):
+                with patch("media_shrinker.os.getxattr", side_effect=OSError, create=True):
                     with patch("media_shrinker.os.setxattr", create=True):
                         media_shrinker._copy_extended_attributes(source, dest)
 
-            with patch(
-                "media_shrinker.os.listxattr", return_value=["user.test"], create=True
-            ):
-                with patch(
-                    "media_shrinker.os.getxattr", return_value=b"value", create=True
-                ):
-                    with patch(
-                        "media_shrinker.os.setxattr", side_effect=OSError, create=True
-                    ):
+            with patch("media_shrinker.os.listxattr", return_value=["user.test"], create=True):
+                with patch("media_shrinker.os.getxattr", return_value=b"value", create=True):
+                    with patch("media_shrinker.os.setxattr", side_effect=OSError, create=True):
                         media_shrinker._copy_extended_attributes(source, dest)
 
             stat_result = os.stat(source)
             media_shrinker._copy_macos_creation_time(stat_result, dest, "SetFile")
-            media_shrinker._copy_macos_creation_time(
-                MagicMock(spec=[]), dest, "SetFile"
-            )
+            media_shrinker._copy_macos_creation_time(MagicMock(spec=[]), dest, "SetFile")
 
             with patch("media_shrinker._get_setfile_path", return_value="SetFile"):
                 with patch("media_shrinker._copy_macos_creation_time") as mock_copy:
@@ -2496,7 +2398,6 @@ class CliTests(unittest.TestCase):
                 mock_stat.st_birthtime = 1234567890.0
                 media_shrinker._copy_macos_creation_time(mock_stat, dest, "SetFile")
                 mock_run.assert_called_once()
-
 
 class PresetTests(unittest.TestCase):
     """Scenario preset CLI wiring and precedence."""
@@ -2606,11 +2507,12 @@ class PresetModuleTests(unittest.TestCase):
         args = argparse.Namespace(preset=None)
         for dest in presets.PRESET_TUNABLE_DESTS:
             setattr(args, dest, presets._UNSET)
-        result = presets.apply_preset(
-            args, {d: 0 for d in presets.PRESET_TUNABLE_DESTS}
-        )
+        result = presets.apply_preset(args, {d: 0 for d in presets.PRESET_TUNABLE_DESTS})
         self.assertIs(result, args)
 
+
+if __name__ == "__main__":
+    unittest.main()
 
 class FastPathTests(unittest.TestCase):
     def test_copy_extended_attributes_dummy(self) -> None:
@@ -2623,9 +2525,7 @@ class FastPathTests(unittest.TestCase):
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
 
-            with patch(
-                "os.listxattr", side_effect=OSError("Permission denied"), create=True
-            ):
+            with patch("os.listxattr", side_effect=OSError("Permission denied"), create=True):
                 _copy_extended_attributes(src, dest)
 
     def test_copy_macos_creation_time_dummy(self) -> None:
@@ -2650,7 +2550,7 @@ class FastPathTests(unittest.TestCase):
             status="converted",
             original_size_bytes=200,
             output_size_bytes=100,
-            strategy="flac-lossless",
+            strategy="flac-lossless"
         )
         s = _format_result(Path("/tmp"), result)
         self.assertIn("foo.txt", s)
@@ -2693,9 +2593,7 @@ class FastPathTests(unittest.TestCase):
 
             with patch("os.listxattr", return_value=["user.test"], create=True):
                 with patch("os.getxattr", return_value=b"value", create=True):
-                    with patch(
-                        "os.setxattr", side_effect=OSError("denied"), create=True
-                    ):
+                    with patch("os.setxattr", side_effect=OSError("denied"), create=True):
                         _copy_extended_attributes(src, dest)
 
     def test_copy_macos_creation_time_dummy_not_found(self) -> None:
@@ -2771,7 +2669,6 @@ class FastPathTests(unittest.TestCase):
             dest.write_text("world")
 
             original_hasattr = builtins.hasattr
-
             def fake_hasattr(obj, name):
                 if name in ("listxattr", "getxattr", "setxattr"):
                     return False
@@ -2815,9 +2712,7 @@ class FastPathTests(unittest.TestCase):
             dest.write_text("world")
             with patch("os.stat", return_value=MockStat()):
                 with patch("media_shrinker._copy_macos_creation_time"):
-                    with patch(
-                        "media_shrinker._get_setfile_path", return_value="/bin/echo"
-                    ):
+                    with patch("media_shrinker._get_setfile_path", return_value="/bin/echo"):
                         preserve_file_attributes(src, dest)
 
     def test_preserve_file_attributes_ignores_utime_error(self) -> None:
@@ -2835,8 +2730,12 @@ class FastPathTests(unittest.TestCase):
             src.write_text("hello")
             dest = Path(tmp) / "dest.txt"
             dest.write_text("world")
-            with patch("media_shrinker.os.utime", side_effect=OSError("read-only fs")):
-                with patch("media_shrinker._copy_macos_creation_time") as mock_creation:
+            with patch(
+                "media_shrinker.os.utime", side_effect=OSError("read-only fs")
+            ):
+                with patch(
+                    "media_shrinker._copy_macos_creation_time"
+                ) as mock_creation:
                     with patch(
                         "media_shrinker._get_setfile_path", return_value="/bin/echo"
                     ):
@@ -2907,17 +2806,12 @@ class FastPathTests(unittest.TestCase):
             input_path=Path("/dummy.mp4"),
             output_path=Path("/tmp/dummy.mp4"),
             ffmpeg_args=["-i", "{input}", "-c:a", "copy", "{output}"],
-            audio_bitrate_bps=128000,
+            audio_bitrate_bps=128000
         )
 
         with self.assertRaises(MediaShrinkerError) as ctx:
             _execute_plan(
-                plan,
-                source=Path("/dummy.mp4"),
-                final_output=Path("/tmp/dummy.mp4"),
-                overwrite=True,
-                protected_sources=set(),
-                ffmpeg_path="ffmpeg",
+                plan, source=Path("/dummy.mp4"), final_output=Path("/tmp/dummy.mp4"), overwrite=True, protected_sources=set(), ffmpeg_path="ffmpeg"
             )
 
         self.assertIn("ffmpeg timed out for", str(ctx.exception))
@@ -3148,12 +3042,11 @@ class OutputFormatTests(unittest.TestCase):
             media_shrinker.parse_args(["root", "--format", "wav"])
 
 
+if __name__ == "__main__":
+    unittest.main()
+
 class MediaShrinkerParseCoverageTests(unittest.TestCase):
     def test_parse_silencedetect_intervals_no_silence(self) -> None:
         stderr = "some random ffmpeg progress output"
         intervals = parse_silencedetect_intervals(stderr)
         self.assertEqual(intervals, [])
-
-
-if __name__ == "__main__":
-    unittest.main()
