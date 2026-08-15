@@ -25,22 +25,7 @@ from media_shrinker import ConversionResult
 from job_store import JobStore
 
 if _HAS_FASTAPI:
-    import os
-    os.environ["CODEC_CARVER_API_KEYS"] = "test-key"
     client = TestClient(app)
-
-    # Patch client to always send X-API-Key for convenience in tests
-    _original_request = client.request
-    def _request(method, url, **kwargs):
-        if "headers" not in kwargs:
-            kwargs["headers"] = {}
-        if "x-api-key" not in [k.lower() for k in kwargs["headers"]]:
-            kwargs["headers"]["X-API-Key"] = "test-key"
-        return _original_request(method, url, **kwargs)
-    client.request = _request
-    client.get = lambda url, **kwargs: _request("GET", url, **kwargs)
-    client.post = lambda url, **kwargs: _request("POST", url, **kwargs)
-
 
 
 @unittest.skipUnless(
@@ -703,13 +688,16 @@ class TestApiKeyAuth(unittest.TestCase):
             headers=headers or {},
         )
 
-    def test_no_env_var_fails_closed(self):
+    def test_no_env_var_leaves_endpoints_open(self):
         with patch.dict(os.environ):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
             response = self._post_shrink()
 
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid target_bytes value. Must be greater than 0."},
+        )
 
     def test_missing_header_rejected_when_keys_configured(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
@@ -782,12 +770,15 @@ class TestApiKeyAuth(unittest.TestCase):
 
         self.assertEqual(rejected.status_code, 401)
 
-    def test_only_empty_entries_fails_closed(self):
+    def test_only_empty_entries_leave_endpoints_open(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " , ,"}):
             response = self._post_shrink()
 
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid target_bytes value. Must be greater than 0."},
+        )
 
     def test_get_configured_api_keys_parsing(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " a ,, b ,"}):

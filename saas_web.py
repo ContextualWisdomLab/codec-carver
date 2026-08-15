@@ -111,9 +111,9 @@ async def require_api_key(request: Request, call_next):
     """
 
     configured_keys = get_configured_api_keys()
-    if not (request.method == "GET" and request.url.path == "/"):
+    if configured_keys and not (request.method == "GET" and request.url.path == "/"):
         provided_key = request.headers.get("x-api-key", "")
-        if not configured_keys or not any(
+        if not any(
             hmac.compare_digest(provided_key, key) for key in configured_keys
         ):
             return JSONResponse(

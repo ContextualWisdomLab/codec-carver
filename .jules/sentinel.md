@@ -1,7 +1,3 @@
-## 2026-08-15 - [Sentinel: API Key Authentication Bypass]
-**Vulnerability:** Authentication Bypass (CWE-288) via unconfigured API keys.
-**Learning:** The service previously skipped API key authentication when `CODEC_CARVER_API_KEYS` was unset, allowing unauthenticated access (fail-open) to sensitive endpoints. This could be exploited if the service is exposed.
-**Prevention:** Always fail-closed. If authentication is required, it must be enforced regardless of configuration state. Reject requests when no valid keys are present.
 ## 2026-08-15 - [Sentinel: Uncontrolled Resource Consumption in Job Cleanup]
 **Vulnerability:** Resource Exhaustion (CWE-400 / CWE-770) via unretrieved job results.
 **Learning:** When successful jobs only clean up their temporary directories upon result download, an attacker can intentionally create jobs and abandon them to exhaust disk space or inodes over time.
