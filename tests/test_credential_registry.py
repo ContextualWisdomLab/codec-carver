@@ -60,25 +60,29 @@ class TestImportAndVerify(CredentialRegistryTestCase):
         """A meeting-upload client with the issued key is accepted; a guess is not."""
 
         self.registry.import_plaintext_keys(["meeting-upload-key"], now=T0, source="test")
-        self.assertTrue(self.registry.verify_api_key("meeting-upload-key", now=T0))
-        self.assertFalse(self.registry.verify_api_key("guessed-key", now=T0))
-        self.assertFalse(self.registry.verify_api_key("", now=T0))
+        credential_id = self.registry.verify_api_key("meeting-upload-key", now=T0)
+        self.assertIsNotNone(credential_id)
+        self.assertEqual(
+            credential_id, self.registry.list_public_records()[0]["credential_id"]
+        )
+        self.assertIsNone(self.registry.verify_api_key("guessed-key", now=T0))
+        self.assertIsNone(self.registry.verify_api_key("", now=T0))
 
     def test_non_ascii_key_round_trips(self) -> None:
         """UTF-8 keys used by non-English operators verify on the same code path."""
 
         key = "업로드-키-αβγ"
         self.registry.import_plaintext_keys([key], now=T0, source="test")
-        self.assertTrue(self.registry.verify_api_key(key, now=T0))
-        self.assertFalse(self.registry.verify_api_key("업로드-키-αβγ\u0000", now=T0))
+        self.assertIsNotNone(self.registry.verify_api_key(key, now=T0))
+        self.assertIsNone(self.registry.verify_api_key("업로드-키-αβγ\u0000", now=T0))
 
     def test_hostile_header_types_and_overlong_values_are_false(self) -> None:
         """A hostile X-API-Key must 401, never raise into the web worker."""
 
         self.registry.import_plaintext_keys(["stable-key"], now=T0, source="test")
-        self.assertFalse(self.registry.verify_api_key(None, now=T0))
-        self.assertFalse(self.registry.verify_api_key(b"stable-key", now=T0))
-        self.assertFalse(self.registry.verify_api_key("x" * (MAX_KEY_BYTES + 1), now=T0))
+        self.assertIsNone(self.registry.verify_api_key(None, now=T0))
+        self.assertIsNone(self.registry.verify_api_key(b"stable-key", now=T0))
+        self.assertIsNone(self.registry.verify_api_key("x" * (MAX_KEY_BYTES + 1), now=T0))
 
     def test_verify_compares_every_active_digest(self) -> None:
         """No first-match short-circuit: every stored digest is visited."""
@@ -95,7 +99,7 @@ class TestImportAndVerify(CredentialRegistryTestCase):
             return real(left, right)
 
         with patch("credential_registry.hmac.compare_digest", side_effect=counting_compare):
-            self.assertTrue(self.registry.verify_api_key("alpha-key", now=T0))
+            self.assertIsNotNone(self.registry.verify_api_key("alpha-key", now=T0))
 
         self.assertEqual(len(calls), 3)
 
@@ -123,8 +127,8 @@ class TestImportAndVerify(CredentialRegistryTestCase):
         self.registry.revoke("drop-later", now=T1)
         third = self.registry.bootstrap_from_transport(raw, now=T2, source="env")
         self.assertEqual(third, 0)
-        self.assertFalse(self.registry.verify_api_key("drop-later", now=T2))
-        self.assertTrue(self.registry.verify_api_key("keep-key", now=T2))
+        self.assertIsNone(self.registry.verify_api_key("drop-later", now=T2))
+        self.assertIsNotNone(self.registry.verify_api_key("keep-key", now=T2))
 
 
 class TestValidation(CredentialRegistryTestCase):
@@ -165,13 +169,13 @@ class TestRotationExpiryAndRevoke(CredentialRegistryTestCase):
 
         self.registry.import_plaintext_keys(["current-key"], now=T0, source="test")
         self.registry.rotate("current-key", "next-key", now=T1)
-        self.assertTrue(self.registry.verify_api_key("current-key", now=T1))
-        self.assertTrue(self.registry.verify_api_key("next-key", now=T1))
+        self.assertIsNotNone(self.registry.verify_api_key("current-key", now=T1))
+        self.assertIsNotNone(self.registry.verify_api_key("next-key", now=T1))
         states = {row["lifecycle_state"] for row in self.registry.list_public_records()}
         self.assertEqual(states, {"rotated", "active"})
         self.registry.revoke("current-key", now=T2)
-        self.assertFalse(self.registry.verify_api_key("current-key", now=T2))
-        self.assertTrue(self.registry.verify_api_key("next-key", now=T2))
+        self.assertIsNone(self.registry.verify_api_key("current-key", now=T2))
+        self.assertIsNotNone(self.registry.verify_api_key("next-key", now=T2))
 
     def test_expired_key_does_not_verify(self) -> None:
         """A time-bounded contractor key stops working after expires_at."""
@@ -182,8 +186,8 @@ class TestRotationExpiryAndRevoke(CredentialRegistryTestCase):
             source="test",
             expires_at=T1,
         )
-        self.assertTrue(self.registry.verify_api_key("contractor-key", now=T0))
-        self.assertFalse(self.registry.verify_api_key("contractor-key", now=T2))
+        self.assertIsNotNone(self.registry.verify_api_key("contractor-key", now=T0))
+        self.assertIsNone(self.registry.verify_api_key("contractor-key", now=T2))
         self.assertFalse(self.registry.has_active_credentials(now=T2))
 
 
@@ -225,7 +229,7 @@ class TestConcurrencyAndStorageRules(CredentialRegistryTestCase):
             """Verify the live key from a worker thread."""
 
             for _ in range(40):
-                if not self.registry.verify_api_key("live-key", now=T0):
+                if self.registry.verify_api_key("live-key", now=T0) is None:
                     errors.append("live-key rejected")
 
         workers = [threading.Thread(target=hammer) for _ in range(4)]
@@ -235,7 +239,7 @@ class TestConcurrencyAndStorageRules(CredentialRegistryTestCase):
         for worker in workers:
             worker.join()
         self.assertEqual(errors, [])
-        self.assertTrue(self.registry.verify_api_key("next-live-key", now=T1))
+        self.assertIsNotNone(self.registry.verify_api_key("next-live-key", now=T1))
 
     def test_schema_uses_two_word_tables_and_rejects_memory(self) -> None:
         """Org naming: api_credentials / credential_events / runtime_policies."""
@@ -291,7 +295,7 @@ class TestConcurrencyAndStorageRules(CredentialRegistryTestCase):
             now=T0,
             db_path=self.db_path,
         )
-        self.assertTrue(populated.verify_api_key("prod-key", now=T0))
+        self.assertIsNotNone(populated.verify_api_key("prod-key", now=T0))
         full = [f"issued-key-{index:02d}" for index in range(MAX_CREDENTIAL_COUNT)]
         capped_path = os.path.join(self._tmp.name, "capped.db")
         capped = CredentialRegistry(capped_path)

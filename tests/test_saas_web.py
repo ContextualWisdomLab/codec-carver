@@ -862,6 +862,16 @@ class TestApiKeyAuth(unittest.TestCase):
         saas_web.bootstrap_credentials_from_environ()
         self.assertIs(saas_web.get_credential_registry(), self.registry)
 
+    def test_lifespan_invokes_named_bootstrap(self):
+        self._load("secret-key")
+
+        async def _run() -> None:
+            async with saas_web._app_lifespan(saas_web.app):
+                pass
+
+        asyncio.run(_run())
+        self.assertIs(saas_web.get_credential_registry(), self.registry)
+
     def test_startup_hook_skips_blank_transport(self):
         saas_web.configure_credential_registry(None)
         with patch.dict(os.environ):
@@ -881,7 +891,7 @@ class TestApiKeyAuth(unittest.TestCase):
             saas_web.bootstrap_credentials_from_environ()
         registry = saas_web.get_credential_registry()
         self.assertIsNotNone(registry)
-        self.assertTrue(registry.verify_api_key("startup-key", now=self.now))
+        self.assertIsNotNone(registry.verify_api_key("startup-key", now=self.now))
 
 
 @unittest.skipUnless(

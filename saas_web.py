@@ -7,7 +7,8 @@ import shutil
 import tempfile
 import uuid
 import zipfile
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
@@ -154,7 +155,6 @@ def get_configured_api_keys() -> list[str]:
     ]
 
 
-@app.on_event("startup")
 def bootstrap_credentials_from_environ() -> None:
     """Load ``CODEC_CARVER_API_KEYS`` into the registry at process start.
 
@@ -178,6 +178,17 @@ def bootstrap_credentials_from_environ() -> None:
     )
 
 
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Copy bootstrap transport into the registry once per process."""
+
+    bootstrap_credentials_from_environ()
+    yield
+
+
+app.router.lifespan_context = _app_lifespan
+
+
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
     """Enforce registry authentication on all endpoints except GET /.
@@ -197,9 +208,9 @@ async def require_api_key(request: Request, call_next):
         and not (request.method == "GET" and request.url.path == "/")
     ):
         provided_key = request.headers.get("x-api-key", "")
-        if len(provided_key.encode("utf-8")) > MAX_KEY_BYTES or not registry.verify_api_key(
+        if len(provided_key.encode("utf-8")) > MAX_KEY_BYTES or registry.verify_api_key(
             provided_key, now=now
-        ):
+        ) is None:
             return JSONResponse(
                 status_code=401,
                 content={"error": "Invalid or missing API key"},

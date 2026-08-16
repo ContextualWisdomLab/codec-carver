@@ -14,7 +14,8 @@ Operators should:
 2. Start the SaaS process so `bootstrap_credentials_from_environ` copies
    those keys into `api_credentials` once.
 3. Send `X-API-Key` on every upload, job, and download request. `GET /`
-   stays open so a browser can load the form.
+   stays open so a browser can load the form. A successful verify returns
+   `credential_id` — store that on usage rows, never the plaintext key.
 4. For a public bind (`0.0.0.0`), import keys first or the listen policy
    fails closed. Local empty-registry work requires explicit loopback
    development mode on `127.0.0.1`.

@@ -451,38 +451,46 @@ class CredentialRegistry:
             usable.append(row["key_digest"])
         return usable
 
-    def verify_api_key(self, provided: object, *, now: datetime) -> bool:
-        """Return True when ``provided`` matches a usable stored digest.
+    def verify_api_key(self, provided: object, *, now: datetime) -> str | None:
+        """Return the matching ``credential_id``, or ``None``.
 
         Comparison always visits every usable digest. Hostile or overlong
-        headers return False instead of raising.
+        headers return ``None`` instead of raising. The identifier is the
+        stable handle usage metering should store instead of plaintext.
 
         Args:
             provided: ``X-API-Key`` value. Non-strings are rejected.
             now: Comparison timestamp used for expiry.
 
         Returns:
-            True when the header matches an unexpired ``active`` or
-            ``rotated`` credential.
+            The matching credential primary key, or ``None``.
         """
 
         if not isinstance(provided, str):
-            return False
+            return None
         raw = provided.encode("utf-8")
         if not raw or len(raw) > MAX_KEY_BYTES:
-            return False
+            return None
         try:
             _reject_control_characters(provided)
         except CredentialValidationError:
-            return False
+            return None
         provided_digest = digest_api_key(provided)
         with self._lock, self._connect() as conn:
-            stored = self._usable_digests(conn, now)
-        matched = False
-        for digest in stored:
-            if hmac.compare_digest(provided_digest, digest):
-                matched = True
-        return matched
+            rows = conn.execute(
+                "SELECT credential_id, key_digest, expires_at "
+                "FROM api_credentials "
+                "WHERE lifecycle_state IN ('active', 'rotated')"
+            ).fetchall()
+        now_text = now.isoformat()
+        matched_id: str | None = None
+        for row in rows:
+            expires_at = row["expires_at"]
+            if expires_at is not None and expires_at <= now_text:
+                continue
+            if hmac.compare_digest(provided_digest, row["key_digest"]):
+                matched_id = row["credential_id"]
+        return matched_id
 
     def has_active_credentials(self, *, now: datetime) -> bool:
         """Return True when at least one usable credential exists.
