@@ -1,10 +1,8 @@
-"""SQLite-backed durable job store for async/worker job tracking.
+"""SQLite-backed durable store for asynchronous conversion jobs.
 
-The async web layer currently tracks jobs in an in-memory dict, which
-loses all state on restart and cannot be shared across processes. This
-module provides :class:`JobStore`, a small stdlib-only persistence layer
-(``sqlite3`` with WAL journaling) that any async or worker process can
-use so jobs survive restarts and are visible across processes.
+``saas_web.py`` persists each upload-and-shrink request here so status
+survives process restart and is visible to a worker. The store is
+stdlib-only (``sqlite3`` with WAL journaling).
 
 Design notes:
 
@@ -15,10 +13,13 @@ Design notes:
 - Callers pass ``now`` (a :class:`datetime.datetime`) explicitly; the
   store never calls ``datetime.now()`` itself, keeping tests
   deterministic.
+- The physical table is ``conversion_jobs``. Single-word legacy
+  ``jobs`` files are copied forward on open. See
+  ``docs/doctoring/conversion-jobs-schema.md``.
 
 Example:
     >>> from datetime import datetime, timezone
-    >>> store = JobStore("/tmp/jobs.db")  # doctest: +SKIP
+    >>> store = JobStore("/tmp/conversion_jobs.db")  # doctest: +SKIP
     >>> store.create("job-1", temp_dir="/tmp/job-1",
     ...              now=datetime.now(timezone.utc))  # doctest: +SKIP
 """
@@ -31,23 +32,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 
-#: Allowed job lifecycle states.
+#: Allowed conversion-job lifecycle states.
 VALID_STATUSES = frozenset({"queued", "processing", "done", "failed"})
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS jobs (
-    id          TEXT PRIMARY KEY,
-    status      TEXT NOT NULL,
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL,
-    output_path TEXT,
-    output_name TEXT,
-    error       TEXT,
-    temp_dir    TEXT
-)
-"""
-
-_COLUMNS = (
+_CONVERSION_JOBS_TABLE = "conversion_jobs"
+_LEGACY_JOBS_TABLE = "jobs"
+_LEGACY_JOBS_COLUMNS = (
     "id",
     "status",
     "created_at",
@@ -58,13 +48,104 @@ _COLUMNS = (
     "temp_dir",
 )
 
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS conversion_jobs (
+    job_id         TEXT PRIMARY KEY,
+    job_status     TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    output_path    TEXT,
+    output_name    TEXT,
+    error_message  TEXT,
+    temp_dir       TEXT
+)
+"""
+
+_COLUMNS = (
+    "job_id",
+    "job_status",
+    "created_at",
+    "updated_at",
+    "output_path",
+    "output_name",
+    "error_message",
+    "temp_dir",
+)
+
+
+def _list_user_tables(conn: sqlite3.Connection) -> set[str]:
+    """Return user table names stored in ``conn``.
+
+    Args:
+        conn: Open SQLite connection.
+
+    Returns:
+        The set of table names from ``sqlite_master``.
+    """
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    return {row[0] for row in rows}
+
+
+def _list_table_columns(conn: sqlite3.Connection, table_name: str) -> tuple[str, ...]:
+    """Return column names for ``table_name`` in declaration order.
+
+    Args:
+        conn: Open SQLite connection.
+        table_name: Table to inspect. Only ``jobs`` or
+            ``conversion_jobs`` are accepted so the PRAGMA cannot be
+            pointed at an attacker-chosen identifier.
+
+    Returns:
+        Column names as declared in the table.
+
+    Raises:
+        ValueError: If ``table_name`` is not one of the store tables.
+    """
+    if table_name not in {_CONVERSION_JOBS_TABLE, _LEGACY_JOBS_TABLE}:
+        raise ValueError(f"refusing to inspect unexpected table {table_name!r}")
+    rows = conn.execute(f"PRAGMA table_info({table_name})")
+    return tuple(row[1] for row in rows)
+
+
+def _migrate_legacy_jobs_table(conn: sqlite3.Connection) -> None:
+    """Copy a one-word ``jobs`` table into ``conversion_jobs`` and drop it.
+
+    Args:
+        conn: Open SQLite connection that already has ``conversion_jobs``.
+
+    Raises:
+        ValueError: If ``jobs`` exists but its columns are not the
+            historical schema this store used to write.
+    """
+    tables = _list_user_tables(conn)
+    if _LEGACY_JOBS_TABLE not in tables:
+        return
+    columns = _list_table_columns(conn, _LEGACY_JOBS_TABLE)
+    if columns != _LEGACY_JOBS_COLUMNS:
+        raise ValueError(
+            "legacy jobs table has unexpected columns "
+            f"{columns!r}; expected {_LEGACY_JOBS_COLUMNS!r}"
+        )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO conversion_jobs (
+            job_id, job_status, created_at, updated_at,
+            output_path, output_name, error_message, temp_dir
+        )
+        SELECT id, status, created_at, updated_at,
+               output_path, output_name, error, temp_dir
+        FROM jobs
+        """
+    )
+    conn.execute("DROP TABLE jobs")
+
 
 class DuplicateJobError(ValueError):
     """Raised by :meth:`JobStore.create` when the job id already exists."""
 
 
 class JobStore:
-    """Durable, thread-safe job store backed by a SQLite database file.
+    """Durable, thread-safe conversion-job store backed by SQLite.
 
     Multiple processes may open independent ``JobStore`` instances on the
     same ``db_path``; SQLite's file locking plus WAL mode keeps their
@@ -79,13 +160,14 @@ class JobStore:
     """
 
     def __init__(self, db_path: str) -> None:
-        """Initialize the store and create the schema if needed.
+        """Initialize the store and create or migrate the schema.
 
         Args:
             db_path: Path to the SQLite database file.
 
         Raises:
-            ValueError: If ``db_path`` is ``":memory:"``.
+            ValueError: If ``db_path`` is ``":memory:"``, or if a legacy
+                ``jobs`` table exists with an unexpected column set.
         """
         if db_path == ":memory:":
             raise ValueError(
@@ -96,6 +178,7 @@ class JobStore:
         self._lock = threading.Lock()
         with self._connect() as conn:
             conn.execute(_SCHEMA)
+            _migrate_legacy_jobs_table(conn)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -132,20 +215,20 @@ class JobStore:
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:
-        """Convert a database row into a plain job dict.
+        """Convert a database row into a plain conversion-job dict.
 
         Args:
-            row: A ``sqlite3.Row`` from the ``jobs`` table.
+            row: A ``sqlite3.Row`` from the ``conversion_jobs`` table.
 
         Returns:
-            A dict with the keys ``id``, ``status``, ``created_at``,
-            ``updated_at``, ``output_path``, ``output_name``, ``error``,
-            and ``temp_dir``.
+            A dict with the keys ``job_id``, ``job_status``,
+            ``created_at``, ``updated_at``, ``output_path``,
+            ``output_name``, ``error_message``, and ``temp_dir``.
         """
         return {key: row[key] for key in _COLUMNS}
 
     def create(self, job_id: str, *, temp_dir: str, now: datetime) -> None:
-        """Insert a new job in the ``queued`` state.
+        """Insert a new conversion job in the ``queued`` state.
 
         Args:
             job_id: Unique identifier for the job.
@@ -162,8 +245,9 @@ class JobStore:
         with self._lock, self._connect() as conn:
             try:
                 conn.execute(
-                    "INSERT INTO jobs (id, status, created_at, updated_at,"
-                    " temp_dir) VALUES (?, 'queued', ?, ?, ?)",
+                    "INSERT INTO conversion_jobs (job_id, job_status,"
+                    " created_at, updated_at, temp_dir)"
+                    " VALUES (?, 'queued', ?, ?, ?)",
                     (job_id, timestamp, timestamp, temp_dir),
                 )
             except sqlite3.IntegrityError as exc:
@@ -179,13 +263,13 @@ class JobStore:
         now: datetime,
         output_path: str | None = None,
         output_name: str | None = None,
-        error: str | None = None,
+        error_message: str | None = None,
     ) -> None:
         """Update a job's status, timestamp, and optional result fields.
 
         Only the fields passed as non-``None`` keyword arguments are
         overwritten; previously stored values for ``output_path``,
-        ``output_name``, and ``error`` are preserved otherwise.
+        ``output_name``, and ``error_message`` are preserved otherwise.
 
         Args:
             job_id: Identifier of the job to update.
@@ -194,7 +278,7 @@ class JobStore:
             now: Timestamp recorded as ``updated_at``.
             output_path: Path of the finished output file, if any.
             output_name: Client-facing download name, if any.
-            error: Human-readable failure message, if any.
+            error_message: Human-readable failure message, if any.
 
         Raises:
             ValueError: If ``status`` is not allowed.
@@ -203,19 +287,19 @@ class JobStore:
         self._validate_status(status)
         with self._lock, self._connect() as conn:
             cursor = conn.execute(
-                "UPDATE jobs SET status = ?, updated_at = ?,"
+                "UPDATE conversion_jobs SET job_status = ?, updated_at = ?,"
                 " output_path = COALESCE(?, output_path),"
                 " output_name = COALESCE(?, output_name),"
-                " error = COALESCE(?, error)"
-                " WHERE id = ?",
+                " error_message = COALESCE(?, error_message)"
+                " WHERE job_id = ?",
                 (status, now.isoformat(), output_path, output_name,
-                 error, job_id),
+                 error_message, job_id),
             )
             if cursor.rowcount == 0:
                 raise KeyError(f"job {job_id!r} does not exist")
 
     def get(self, job_id: str) -> dict | None:
-        """Fetch a single job by id.
+        """Fetch a single conversion job by id.
 
         Args:
             job_id: Identifier of the job to look up.
@@ -226,20 +310,20 @@ class JobStore:
         """
         with self._lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM jobs WHERE id = ?", (job_id,)
+                "SELECT * FROM conversion_jobs WHERE job_id = ?", (job_id,)
             ).fetchone()
         return self._row_to_dict(row) if row is not None else None
 
     def list_jobs(self, status: str | None = None) -> list[dict]:
-        """List jobs, optionally filtered by status.
+        """List conversion jobs, optionally filtered by status.
 
         Args:
             status: If given, only jobs in this state are returned; must
                 be one of the allowed statuses.
 
         Returns:
-            Jobs as dicts, ordered by ``created_at`` then id for a
-            stable listing.
+            Jobs as dicts, ordered by ``created_at`` then ``job_id`` for
+            a stable listing.
 
         Raises:
             ValueError: If ``status`` is given but not allowed.
@@ -247,19 +331,20 @@ class JobStore:
         with self._lock, self._connect() as conn:
             if status is None:
                 rows = conn.execute(
-                    "SELECT * FROM jobs ORDER BY created_at, id"
+                    "SELECT * FROM conversion_jobs"
+                    " ORDER BY created_at, job_id"
                 ).fetchall()
             else:
                 self._validate_status(status)
                 rows = conn.execute(
-                    "SELECT * FROM jobs WHERE status = ?"
-                    " ORDER BY created_at, id",
+                    "SELECT * FROM conversion_jobs WHERE job_status = ?"
+                    " ORDER BY created_at, job_id",
                     (status,),
                 ).fetchall()
         return [self._row_to_dict(row) for row in rows]
 
     def delete(self, job_id: str) -> None:
-        """Remove a job record if it exists.
+        """Remove a conversion-job record if it exists.
 
         Deleting an unknown id is a no-op, so cleanup passes can call
         this without checking existence first.
@@ -268,4 +353,6 @@ class JobStore:
             job_id: Identifier of the job to remove.
         """
         with self._lock, self._connect() as conn:
-            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            conn.execute(
+                "DELETE FROM conversion_jobs WHERE job_id = ?", (job_id,)
+            )
