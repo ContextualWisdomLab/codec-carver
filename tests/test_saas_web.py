@@ -32,6 +32,36 @@ if _HAS_FASTAPI:
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class TestSaasWeb(unittest.TestCase):
+    def test_require_api_key_non_ascii_header(self):
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+        import asyncio
+
+        scope = {
+            'type': 'http',
+            'method': 'POST',
+            'path': '/jobs',
+            'headers': [(b'x-api-key', b'test\xf0\x9f\x98\x80')]  # 'test😀' in utf-8
+        }
+        request = Request(scope)
+
+        async def mock_call_next(req):
+            return JSONResponse(status_code=200, content={"status": "ok"})
+
+        import os
+        import saas_web
+
+        original_keys = os.environ.get("CODEC_CARVER_API_KEYS")
+        os.environ["CODEC_CARVER_API_KEYS"] = "testkey"
+        try:
+            response = asyncio.run(saas_web.require_api_key(request, mock_call_next))
+            self.assertEqual(response.status_code, 401)
+        finally:
+            if original_keys is not None:
+                os.environ["CODEC_CARVER_API_KEYS"] = original_keys
+            else:
+                del os.environ["CODEC_CARVER_API_KEYS"]
+
     def test_get_ui(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
