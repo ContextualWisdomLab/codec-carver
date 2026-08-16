@@ -46,6 +46,10 @@ repo.
 - **API keys:** `credential_registry.py` is the request-time source. Env
   (`CODEC_CARVER_API_KEYS`) is bootstrap transport into `api_credentials`
   only. See [`docs/doctoring/api-credential-registry.md`](docs/doctoring/api-credential-registry.md).
+- **Usage:** `usage_metering.py` bills `credential_id` in `usage_periods`.
+  Env (`CODEC_CARVER_USAGE_DB`, optional monthly caps) is bootstrap
+  transport only. Never persist plaintext API keys. See
+  [`docs/doctoring/usage-credential-binding.md`](docs/doctoring/usage-credential-binding.md).
 
 ### Code exploration
 - There is no `.codegraph/` index in this repo today, so use normal search

@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from credential_registry import CredentialRegistry, digest_api_key
+from usage_metering import UsageStore
 
 try:
     from fastapi import BackgroundTasks
@@ -687,6 +688,7 @@ class TestApiKeyAuth(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.addCleanup(lambda: saas_web.configure_credential_registry(None))
+        self.addCleanup(lambda: saas_web.configure_usage_store(None))
         self.now = datetime(2026, 8, 16, 12, 0, 0, tzinfo=timezone.utc)
         self.db_path = os.path.join(self._tmp.name, "api_credentials.db")
         self.registry = CredentialRegistry(self.db_path)
@@ -836,11 +838,13 @@ class TestApiKeyAuth(unittest.TestCase):
             method="POST",
             url=SimpleNamespace(path="/shrink"),
             headers={"x-api-key": key},
+            state=SimpleNamespace(),
         )
         rejected_request = SimpleNamespace(
             method="POST",
             url=SimpleNamespace(path="/shrink"),
             headers={"x-api-key": "다른-키"},
+            state=SimpleNamespace(),
         )
         allowed = asyncio.run(saas_web.require_api_key(allowed_request, _next))
         rejected = asyncio.run(saas_web.require_api_key(rejected_request, _next))
@@ -848,6 +852,11 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(allowed.status_code, 200)
         self.assertEqual(rejected.status_code, 401)
         self.assertNotIn(key, rejected.body.decode("utf-8"))
+        self.assertEqual(
+            allowed_request.state.credential_id,
+            self.registry.verify_api_key(key, now=self.now),
+        )
+        self.assertFalse(hasattr(rejected_request.state, "credential_id"))
 
         overlong = SimpleNamespace(
             method="POST",
@@ -892,6 +901,181 @@ class TestApiKeyAuth(unittest.TestCase):
         registry = saas_web.get_credential_registry()
         self.assertIsNotNone(registry)
         self.assertIsNotNone(registry.verify_api_key("startup-key", now=self.now))
+
+    def test_meeting_upload_quota_uses_credential_id_not_plaintext(self):
+        """A one-conversion STT plan records the registry id, then returns 429."""
+
+        self._load("meeting-upload-key")
+        usage_path = os.path.join(self._tmp.name, "usage.db")
+        store = UsageStore(usage_path)
+        saas_web.configure_usage_store(store, max_conversions=1)
+        output = Path(self._tmp.name) / "meeting.wav.flac"
+        output.write_bytes(b"flac-bytes")
+        result = MagicMock(spec=ConversionResult)
+        result.output_path = output
+
+        with patch("saas_web.media_shrinker.convert_file", return_value=[result]):
+            first = client.post(
+                "/shrink",
+                files={
+                    "file": (
+                        "meeting.wav",
+                        io.BytesIO(b"ninety-minute-meeting"),
+                        "audio/wav",
+                    )
+                },
+                data={"target_bytes": 10000},
+                headers={"X-API-Key": "meeting-upload-key"},
+            )
+            second = client.post(
+                "/shrink",
+                files={
+                    "file": (
+                        "meeting.wav",
+                        io.BytesIO(b"second-meeting"),
+                        "audio/wav",
+                    )
+                },
+                data={"target_bytes": 10000},
+                headers={"X-API-Key": "meeting-upload-key"},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        batch_blocked = client.post(
+            "/shrink-batch",
+            files=[
+                (
+                    "files",
+                    ("meeting.wav", io.BytesIO(b"batch-meeting"), "audio/wav"),
+                )
+            ],
+            data={"target_bytes": 10000},
+            headers={"X-API-Key": "meeting-upload-key"},
+        )
+        job_blocked = client.post(
+            "/jobs",
+            files={
+                "file": ("meeting.wav", io.BytesIO(b"job-meeting"), "audio/wav")
+            },
+            data={"target_bytes": 10000},
+            headers={"X-API-Key": "meeting-upload-key"},
+        )
+        self.assertEqual(batch_blocked.status_code, 429)
+        self.assertEqual(job_blocked.status_code, 429)
+        self.assertEqual(
+            second.json(), {"error": "Monthly conversion quota exceeded"}
+        )
+        self.assertNotIn("meeting-upload-key", second.text)
+        credential_id = self.registry.verify_api_key(
+            "meeting-upload-key", now=self.now
+        )
+        billed = store.usage(credential_id, datetime.now(timezone.utc))
+        self.assertEqual(billed["conversions"], 1)
+        self.assertGreater(billed["input_bytes"], 0)
+        export = store.all_usage(billed["billing_period"])
+        self.assertIn(credential_id, export)
+        self.assertNotIn("meeting-upload-key", export)
+
+    def test_usage_bootstrap_skips_when_store_configured_or_path_blank(self):
+        """Startup transport does not replace a test store or invent a path."""
+
+        usage_path = os.path.join(self._tmp.name, "usage.db")
+        store = UsageStore(usage_path)
+        saas_web.configure_usage_store(store, max_conversions=3)
+        saas_web.bootstrap_usage_from_environ()
+        self.assertIs(saas_web.get_usage_store(), store)
+        saas_web.configure_usage_store(None)
+        with patch.dict(os.environ):
+            os.environ.pop("CODEC_CARVER_USAGE_DB", None)
+            saas_web.bootstrap_usage_from_environ()
+        self.assertIsNone(saas_web.get_usage_store())
+
+    def test_usage_bootstrap_reads_transport_once(self):
+        """Named startup copies the usage path and monthly caps."""
+
+        usage_path = os.path.join(self._tmp.name, "boot-usage.db")
+        saas_web.configure_usage_store(None)
+        with patch.dict(
+            os.environ,
+            {
+                "CODEC_CARVER_USAGE_DB": usage_path,
+                "CODEC_CARVER_MAX_CONVERSIONS": "12",
+                "CODEC_CARVER_MAX_BYTES": "not-a-number",
+            },
+        ):
+            saas_web.bootstrap_usage_from_environ()
+        self.assertIsNotNone(saas_web.get_usage_store())
+        self.assertEqual(saas_web._usage_max_conversions, 12)
+        self.assertIsNone(saas_web._usage_max_bytes)
+
+    def test_optional_quota_parser_rejects_non_positive(self):
+        """Blank, zero, and garbage transport values mean unlimited."""
+
+        self.assertIsNone(saas_web._parse_optional_positive_int(None))
+        self.assertIsNone(saas_web._parse_optional_positive_int("  "))
+        self.assertIsNone(saas_web._parse_optional_positive_int("0"))
+        self.assertIsNone(saas_web._parse_optional_positive_int("-4"))
+        self.assertEqual(saas_web._parse_optional_positive_int("8"), 8)
+
+    def test_quota_helpers_noop_without_store_or_credential(self):
+        """Local fail-open use is not billed."""
+
+        now = datetime.now(timezone.utc)
+        token = saas_web._request_credential.set("")
+        try:
+            self.assertIsNone(saas_web._current_credential_id())
+            self.assertIsNone(saas_web._quota_rejection(now))
+            saas_web._record_usage(input_bytes=1, output_bytes=1, now=now)
+        finally:
+            saas_web._request_credential.reset(token)
+        saas_web._record_job_usage(None, input_bytes=1, output_bytes=1, now=now)
+
+    def test_quota_rejection_and_job_record_use_credential_id(self):
+        """A spent January plan 429s; async completion still bills the id."""
+
+        self._load("meeting-upload-key")
+        usage_path = os.path.join(self._tmp.name, "quota.db")
+        store = UsageStore(usage_path)
+        saas_web.configure_usage_store(store, max_conversions=1)
+        credential_id = self.registry.verify_api_key(
+            "meeting-upload-key", now=self.now
+        )
+        self.assertIsNone(saas_web._quota_rejection(self.now))
+        token = saas_web._request_credential.set(credential_id)
+        try:
+            self.assertIsNone(saas_web._quota_rejection(self.now))
+            store.record(credential_id, input_bytes=1, output_bytes=1, now=self.now)
+            blocked = saas_web._quota_rejection(self.now)
+            self.assertEqual(blocked.status_code, 429)
+            self.assertIn("Retry-After", blocked.headers)
+        finally:
+            saas_web._request_credential.reset(token)
+        saas_web._record_job_usage(
+            credential_id, input_bytes=10, output_bytes=4, now=self.now
+        )
+        self.assertEqual(store.usage(credential_id, self.now)["input_bytes"], 11)
+
+    def test_lifespan_bootstraps_usage_store_from_transport(self):
+        """Process start copies the usage path once, then ignores later env."""
+
+        usage_path = os.path.join(self._tmp.name, "lifespan-usage.db")
+        saas_web.configure_usage_store(None)
+        with patch.dict(
+            os.environ,
+            {
+                "CODEC_CARVER_USAGE_DB": usage_path,
+                "CODEC_CARVER_MAX_BYTES": "4096",
+            },
+        ):
+
+            async def _run() -> None:
+                async with saas_web._app_lifespan(saas_web.app):
+                    pass
+
+            asyncio.run(_run())
+        self.assertIsNotNone(saas_web.get_usage_store())
+        self.assertEqual(saas_web._usage_max_bytes, 4096)
 
 
 @unittest.skipUnless(

@@ -84,8 +84,10 @@ dependent on the issued key and replaces it (3NF). Events depend on
 
 ## Next action
 
-After this lands, wire `usage_metering` to `credential_id` instead of
-storing plaintext in the single-word `usage` table, and close #329/#373.
+Usage rows now key on `credential_id` in `usage_periods`. See
+[`usage-credential-binding.md`](usage-credential-binding.md). Close
+#329/#373 after #430 and this follow-up both land. Do not restore a
+plaintext `api_key` column.
 
 ## References
 
