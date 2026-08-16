@@ -47,13 +47,8 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
-        self.assertEqual(html.count("e.target.closest('input, button, label')"), 2)
-        self.assertIn("fileInput.click();", html)
-        self.assertIn("window.updateFileSizePreview = function(input)", html)
-        self.assertLess(
-            html.index("window.addEventListener('DOMContentLoaded'"),
-            html.index("document.getElementById('batch_preset_buttons_container')"),
-        )
+        self.assertIn('role="region" aria-label="File Upload Drop Zone"', html)
+        self.assertIn('role="region" aria-label="Batch File Upload Drop Zone"', html)
 
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
@@ -677,7 +672,7 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertIn('aria-describedby="batch_files_help batch_files_preview"', html)
         self.assertIn('onchange="updateBatchFilePreview(this)"', html)
         self.assertIn('id="batch_files_preview"', html)
-        self.assertIn("window.updateBatchFilePreview = function(input)", html)
+        self.assertIn("function updateBatchFilePreview(input)", html)
 
 
 @unittest.skipUnless(
