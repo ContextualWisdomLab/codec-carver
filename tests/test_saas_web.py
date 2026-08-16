@@ -47,6 +47,23 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
+        self.assertEqual(html.count("e.target.closest('input, button, label')"), 2)
+        self.assertIn("fileInput.click();", html)
+        self.assertIn("window.updateFileSizePreview = function(input)", html)
+        self.assertLess(
+            html.index("window.addEventListener('DOMContentLoaded'"),
+            html.index("document.getElementById('batch_preset_buttons_container')"),
+        )
+        self.assertIn(
+            "Click this card or drag an audio or video file here.",
+            html,
+        )
+        self.assertIn(
+            'id="drop-zone" role="region" aria-labelledby="single-upload-heading"',
+            html,
+        )
+        self.assertIn("--cc-color-action: #0056b3;", html)
+
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -669,7 +686,15 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertIn('aria-describedby="batch_files_help batch_files_preview"', html)
         self.assertIn('onchange="updateBatchFilePreview(this)"', html)
         self.assertIn('id="batch_files_preview"', html)
-        self.assertIn("function updateBatchFilePreview(input)", html)
+        self.assertIn("window.updateBatchFilePreview = function(input)", html)
+        self.assertIn(
+            "Click this card or drag several audio or video files here.",
+            html,
+        )
+        self.assertIn(
+            'id="batch-drop-zone" role="region" aria-labelledby="batch-upload-heading"',
+            html,
+        )
 
 
 @unittest.skipUnless(

@@ -147,33 +147,51 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Codec Carver SaaS</title>
     <style>
-        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
-        .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
-        button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover:not(:disabled) { background-color: #004085; }
-        button:disabled { background-color: #6c757d; cursor: not-allowed; }
-        button:focus-visible, input:focus-visible { outline: 2px solid #004085; outline-offset: 2px; }
-        .required-star { color: #dc3545; }
-        .help-text { color: #6c757d; font-size: 0.85em; display: inline-block; margin-top: 4px; }
+        :root {
+            --cc-color-border: #ccc;
+            --cc-color-action: #0056b3;
+            --cc-color-action-hover: #004085;
+            --cc-color-disabled: #6c757d;
+            --cc-color-help: #6c757d;
+            --cc-color-danger: #dc3545;
+            --cc-color-info: #0f6674;
+            --cc-color-success: #1e7e34;
+            --cc-color-surface-hover: #f8f9fa;
+            --cc-color-preset: #e9ecef;
+            --cc-color-preset-text: #495057;
+            --cc-color-preset-border: #ced4da;
+            --cc-color-preset-hover: #dde2e6;
+            --cc-color-ink: #212529;
+            --cc-space-box: 20px;
+            --cc-radius-box: 8px;
+            --cc-radius-control: 4px;
+        }
+        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: var(--cc-space-box); }
+        .box { border: 1px solid var(--cc-color-border); padding: var(--cc-space-box); border-radius: var(--cc-radius-box); cursor: pointer; transition: background-color 0.2s, border-color 0.2s; }
+        button { padding: 10px 20px; background-color: var(--cc-color-action); color: white; border: none; border-radius: var(--cc-radius-control); cursor: pointer; }
+        button:hover:not(:disabled) { background-color: var(--cc-color-action-hover); }
+        button:disabled { background-color: var(--cc-color-disabled); cursor: not-allowed; }
+        button:focus-visible, input:focus-visible { outline: 2px solid var(--cc-color-action-hover); outline-offset: 2px; }
+        .required-star { color: var(--cc-color-danger); }
+        .help-text { color: var(--cc-color-help); font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .spinner { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; margin-right: 8px; }
         @keyframes spinner-border { to { transform: rotate(360deg); } }
-        .box { transition: background-color 0.2s, border-color 0.2s; }
-        .box.dragover { background-color: #f8f9fa; border-color: #0056b3; border-style: dashed; }
+        .box.dragover { background-color: var(--cc-color-surface-hover); border-color: var(--cc-color-action); border-style: dashed; }
         .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
-        .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
-        .preset-btn:hover { background-color: #dde2e6; color: #212529; }
-        .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; font-weight: bold; }
-        input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
+        .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: var(--cc-color-preset); color: var(--cc-color-preset-text); border: 1px solid var(--cc-color-preset-border); border-radius: var(--cc-radius-control); cursor: pointer; }
+        .preset-btn:hover { background-color: var(--cc-color-preset-hover); color: var(--cc-color-ink); }
+        .preset-btn[aria-pressed="true"] { background-color: var(--cc-color-action); color: white; border-color: var(--cc-color-action-hover); font-weight: bold; }
+        input[aria-invalid="true"] { border-color: var(--cc-color-danger); outline: 2px solid var(--cc-color-danger); }
     </style>
 </head>
 <body>
-    <div class="box" id="drop-zone">
-        <h2>Shrink Media File</h2>
+    <div class="box" id="drop-zone" role="region" aria-labelledby="single-upload-heading">
+        <h2 id="single-upload-heading">Shrink Media File</h2>
         <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
             <p>
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="updateFileSizePreview(this)">
-                <br><span id="file_help" class="help-text">Select an audio or video file to shrink, or drag and drop it here.</span>
+                <br><span id="file_help" class="help-text">Click this card or drag an audio or video file here. The file control still works for keyboard and assistive technology.</span>
                 <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>
             <p>
@@ -192,6 +210,7 @@ HTML_TEMPLATE = """
         </form>
         <script>
             const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
+            window.addEventListener('DOMContentLoaded', () => {
             function formatBinaryBytes(value) {
                 const units = ['B', 'KiB', 'MiB', 'GiB'];
                 let size = value;
@@ -218,7 +237,7 @@ HTML_TEMPLATE = """
                 }
             });
 
-            function updateFileSizePreview(input) {
+            window.updateFileSizePreview = function(input) {
                 const file = input.files[0];
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
@@ -238,7 +257,7 @@ HTML_TEMPLATE = """
                     return;
                 }
                 preview.innerText = 'Selected file size: ' + text;
-            }
+            };
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
                 const val = parseInt(this.value, 10);
@@ -316,7 +335,7 @@ HTML_TEMPLATE = """
                 }, 10);
             });
 
-            function updateBatchFilePreview(input) {
+            window.updateBatchFilePreview = function(input) {
                 const preview = document.getElementById('batch_files_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
@@ -350,7 +369,7 @@ HTML_TEMPLATE = """
                     return;
                 }
                 preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
-            }
+            };
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
                 const btn = document.getElementById('batch-submit-btn');
@@ -390,7 +409,7 @@ HTML_TEMPLATE = """
             let files = dt.files;
             if (files.length) {
                 fileInput.files = files;
-                updateFileSizePreview(fileInput);
+                window.updateFileSizePreview(fileInput);
             }
         }, false);
         if (batchDropZone) {
@@ -399,19 +418,32 @@ HTML_TEMPLATE = """
                 let files = dt.files;
                 if (files.length) {
                     batchFileInput.files = files;
-                    updateBatchFilePreview(batchFileInput);
+                    window.updateBatchFilePreview(batchFileInput);
                 }
             }, false);
         }
+        dropZone.addEventListener('click', (e) => {
+            if (!e.target.closest('input, button, label')) {
+                fileInput.click();
+            }
+        });
+        if (batchDropZone) {
+            batchDropZone.addEventListener('click', (e) => {
+                if (!e.target.closest('input, button, label')) {
+                    batchFileInput.click();
+                }
+            });
+        }
+            });
         </script>
     </div>
-    <div class="box" id="batch-drop-zone" style="margin-top: 20px;">
-        <h2>Shrink Multiple Files</h2>
+    <div class="box" id="batch-drop-zone" role="region" aria-labelledby="batch-upload-heading" style="margin-top: 20px;">
+        <h2 id="batch-upload-heading">Shrink Multiple Files</h2>
         <form action="/shrink-batch" method="post" enctype="multipart/form-data" id="shrink-batch-form">
             <p>
                 <label for="batch_files">Media Files (up to 20): <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="batch_files" name="files" accept="audio/*,video/*" multiple aria-describedby="batch_files_help batch_files_preview" required onchange="updateBatchFilePreview(this)">
-                <br><span id="batch_files_help" class="help-text">Select several audio or video files, or drag and drop them here. You get back one zip with every output plus a results.json manifest.</span>
+                <br><span id="batch_files_help" class="help-text">Click this card or drag several audio or video files here. You get back one zip with every output plus a results.json manifest.</span>
                 <br><span id="batch_files_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>
             <p>
