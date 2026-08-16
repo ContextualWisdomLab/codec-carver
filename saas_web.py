@@ -148,7 +148,7 @@ HTML_TEMPLATE = """
     <title>Codec Carver SaaS</title>
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
-        .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+        .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; cursor: pointer; }
         button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
         button:hover:not(:disabled) { background-color: #004085; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
@@ -173,7 +173,7 @@ HTML_TEMPLATE = """
             <p>
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="updateFileSizePreview(this)">
-                <br><span id="file_help" class="help-text">Select an audio or video file to shrink, or drag and drop it here.</span>
+                <br><span id="file_help" class="help-text">Click this area to choose an audio or video file, or drag and drop it here.</span>
                 <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>
             <p>
@@ -192,6 +192,7 @@ HTML_TEMPLATE = """
         </form>
         <script>
             const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
+            window.addEventListener('DOMContentLoaded', () => {
             function formatBinaryBytes(value) {
                 const units = ['B', 'KiB', 'MiB', 'GiB'];
                 let size = value;
@@ -218,7 +219,7 @@ HTML_TEMPLATE = """
                 }
             });
 
-            function updateFileSizePreview(input) {
+            window.updateFileSizePreview = function(input) {
                 const file = input.files[0];
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
@@ -238,7 +239,7 @@ HTML_TEMPLATE = """
                     return;
                 }
                 preview.innerText = 'Selected file size: ' + text;
-            }
+            };
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
                 const val = parseInt(this.value, 10);
@@ -316,7 +317,7 @@ HTML_TEMPLATE = """
                 }, 10);
             });
 
-            function updateBatchFilePreview(input) {
+            window.updateBatchFilePreview = function(input) {
                 const preview = document.getElementById('batch_files_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
@@ -350,7 +351,7 @@ HTML_TEMPLATE = """
                     return;
                 }
                 preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
-            }
+            };
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
                 const btn = document.getElementById('batch-submit-btn');
@@ -390,7 +391,7 @@ HTML_TEMPLATE = """
             let files = dt.files;
             if (files.length) {
                 fileInput.files = files;
-                updateFileSizePreview(fileInput);
+                window.updateFileSizePreview(fileInput);
             }
         }, false);
         if (batchDropZone) {
@@ -399,10 +400,23 @@ HTML_TEMPLATE = """
                 let files = dt.files;
                 if (files.length) {
                     batchFileInput.files = files;
-                    updateBatchFilePreview(batchFileInput);
+                    window.updateBatchFilePreview(batchFileInput);
                 }
             }, false);
         }
+        dropZone.addEventListener('click', (e) => {
+            if (!e.target.closest('input, button, label')) {
+                fileInput.click();
+            }
+        });
+        if (batchDropZone) {
+            batchDropZone.addEventListener('click', (e) => {
+                if (!e.target.closest('input, button, label')) {
+                    batchFileInput.click();
+                }
+            });
+        }
+            });
         </script>
     </div>
     <div class="box" id="batch-drop-zone" style="margin-top: 20px;" role="region" aria-label="Batch File Upload Drop Zone">
@@ -411,7 +425,7 @@ HTML_TEMPLATE = """
             <p>
                 <label for="batch_files">Media Files (up to 20): <span class="required-star" aria-hidden="true">*</span></label><br>
                 <input type="file" id="batch_files" name="files" accept="audio/*,video/*" multiple aria-describedby="batch_files_help batch_files_preview" required onchange="updateBatchFilePreview(this)">
-                <br><span id="batch_files_help" class="help-text">Select several audio or video files, or drag and drop them here. You get back one zip with every output plus a results.json manifest.</span>
+                <br><span id="batch_files_help" class="help-text">Click this area to choose audio or video files, or drag and drop them here. You get back one zip with every output plus a results.json manifest.</span>
                 <br><span id="batch_files_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>
             <p>

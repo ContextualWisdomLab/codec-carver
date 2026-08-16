@@ -1,6 +1,10 @@
-## 2024-08-14 - 드롭 존 스크린 리더 지원을 위한 ARIA 랜드마크 추가
-**Learning:** 파일 업로드 폼을 감싸는 전체 드롭 존(box) 영역이 시각적으로는 구분되어 있으나, 스크린 리더 사용자에게는 명확한 랜드마크로 인식되지 않아 상호작용 의도를 파악하기 어려움.
-**Action:** `role="region" aria-label="File Upload Drop Zone"` 등 명시적인 ARIA 속성을 추가하여 스크린 리더 사용자가 파일 드래그 앤 드롭 영역을 쉽게 식별할 수 있도록 한다.
+## 2026-08-16 - 드롭 존 클릭 계약과 ARIA 랜드마크는 함께 유지
+**Learning:** Palette 랜드마크 전용 재작성은 이미 검증된 드롭 존 클릭 핸들러, `DOMContentLoaded` 바인딩, `closest('input, button, label')` 가드, 실행형 Node DOM 회귀를 세 번 삭제했다. 랜드마크만 남기면 구매자가 빈 영역을 클릭해도 파일 선택기가 열리지 않는다.
+**Action:** `role="region"`과 고유 `aria-label`은 유지하되, 클릭 계약·DOM-ready 경계·중첩 컨트롤 가드·실행 테스트를 지우지 않는다. 랜드마크 개선은 동작하는 상호작용 트리 위에 겹친다.
+
+## 2024-08-14 - 드롭 존 클릭 영역 활성화 시의 상호작용 제어 학습
+**Learning:** 파일 업로드 폼을 감싸는 전체 드롭 존(box)을 클릭 가능하도록 확장할 때, 폼 내부의 INPUT, BUTTON, LABEL 등 원래의 상호작용 가능한 하위 요소에 대한 클릭까지 모두 부모 래퍼의 이벤트로 처리하면 의도치 않은 중복 동작이나 UI 오작동이 발생함을 확인.
+**Action:** 상호작용하는 드롭 존 이벤트를 추가할 시, `e.target.closest('input, button, label')` 가드로 원래의 폼 기능을 해치지 않고 UX를 개선한다. 키보드/보조공학 경로는 네이티브 file input과 label을 유지한다.
 ## 2024-07-15 - Dynamic Size formatting and Total Size Validation
 **Learning:** Hardcoding human-readable sizes (like '5 GiB') in validation error messages is error-prone when the underlying constant changes. Moreover, failing to validate total upload size against backend limits (e.g., MAX_UPLOAD_BYTES) in batch file uploads frustrates users who wait for a large upload to finish only to get a server-side 413 Payload Too Large error.
 **Action:** Always format backend byte limit constants dynamically (e.g., `formatBinaryBytes(MAX_UPLOAD_BYTES)`) on the client side to display accurate error messages. For multiple file inputs, ensure both the file count and the combined file size are validated against backend limits, giving immediate inline feedback via `setCustomValidity` and `aria-invalid`.

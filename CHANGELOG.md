@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 ### Added
+- 단일·일괄 업로드 드롭 존의 빈 공간을 클릭하면 해당 파일 선택기가 열립니다. 네이티브 input/button/label 클릭은 그대로 유지되고, 스크린 리더는 `role="region"`과 고유 `aria-label`로 두 영역을 구분합니다. 근거는 [`docs/doctoring/drop-zone-pointer-activation.md`](docs/doctoring/drop-zone-pointer-activation.md)에 기록했습니다.
 - 다중 파일 업로드 선택 시 즉각적인 파일 개수 피드백 및 제한 초과 경고 메시지 추가
 - 일괄 업로드 폼에 대상 바이트 프리셋 버튼과 총 파일 크기 미리보기를 추가하여 사용성을 개선했습니다.
 - 클라이언트 측 폼 검증 시 하드코딩된 '5 GiB' 텍스트를 동적으로 변환되도록 수정하고 일괄 업로드 폼에 최대 크기(MAX_UPLOAD_BYTES) 검증 피드백을 추가했습니다.
