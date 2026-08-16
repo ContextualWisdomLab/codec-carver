@@ -1,21 +1,88 @@
 """FastAPI upload UI for shrinking one media file through Codec Carver."""
 
 import json
-import hmac
 import logging
 import os
 import shutil
 import tempfile
 import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+
+from credential_registry import (
+    CredentialRegistry,
+    bootstrap_from_mapping,
+)
 from job_store import JobStore
 import media_shrinker
 
-app = FastAPI(title="Codec Carver SaaS")
+
+def _default_credential_registry_path() -> Path:
+    """Return the default SQLite path for hashed API credentials."""
+
+    return Path(tempfile.gettempdir()) / "codec_carver_api_credentials.sqlite3"
+
+
+def _new_credential_registry(db_path: Path | None = None) -> CredentialRegistry:
+    """Construct a registry on ``db_path`` or the process default file."""
+
+    path = db_path if db_path is not None else _default_credential_registry_path()
+    return CredentialRegistry(str(path))
+
+
+CREDENTIAL_REGISTRY = _new_credential_registry()
+
+
+def configure_credential_registry(store: CredentialRegistry) -> None:
+    """Replace the process registry used by request-time authentication.
+
+    Args:
+        store: Registry that request handlers will read. Startup and tests
+            call this after bootstrap; request handlers do not.
+    """
+
+    global CREDENTIAL_REGISTRY
+    CREDENTIAL_REGISTRY = store
+
+
+def get_credential_registry() -> CredentialRegistry:
+    """Return the process credential registry.
+
+    Returns:
+        The registry last installed by :func:`configure_credential_registry`
+        or the default empty file-backed store.
+    """
+
+    return CREDENTIAL_REGISTRY
+
+
+def request_clock() -> datetime:
+    """Return the clock used for credential expiry during a request.
+
+    Tests patch this function. Production uses aware UTC wall time.
+    """
+
+    return datetime.now(timezone.utc)
+
+
+@asynccontextmanager
+async def _app_lifespan(app: FastAPI):
+    """Load bootstrap transport into the registry once, then serve requests."""
+
+    bootstrap_from_mapping(
+        get_credential_registry(),
+        dict(os.environ),
+        now=request_clock(),
+    )
+    yield
+
+
+app = FastAPI(title="Codec Carver SaaS", lifespan=_app_lifespan)
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 10 * 1024 * 1024
 MAX_BATCH_FILES = 20
@@ -83,39 +150,34 @@ async def limit_request_size(request: Request, call_next):
     except RequestTooLarge:
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
-def get_configured_api_keys():
-    """Return the API keys configured via the CODEC_CARVER_API_KEYS env var.
+# Upload UI and liveness stay reachable without a key so a browser can open
+# the form and a load balancer can confirm the process is up.
+_PUBLIC_GET_PATHS = frozenset({"/", "/health"})
 
-    The variable holds a comma-separated list of keys. Whitespace around each
-    key is stripped and empty entries are ignored. Keys are read from the
-    environment at request time (not import time) so tests can patch the
-    environment easily and key rotation needs no server restart. Returns an
-    empty list when the variable is unset or contains no usable keys, which
-    leaves the service open (today's default behaviour).
-    """
 
-    raw = os.environ.get("CODEC_CARVER_API_KEYS", "")
-    return [key.strip() for key in raw.split(",") if key.strip()]
+def _is_public_get(request: Request) -> bool:
+    """Return True when ``request`` is an unauthenticated GET probe or UI page."""
+
+    return request.method == "GET" and request.url.path in _PUBLIC_GET_PATHS
 
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    """Enforce opt-in API-key authentication on all endpoints except GET /.
+    """Enforce opt-in API-key authentication except on public GET probes.
 
-    When one or more keys are configured via CODEC_CARVER_API_KEYS, every
-    request other than GET / (the upload UI page) must carry an X-API-Key
-    header matching a configured key; comparison uses hmac.compare_digest to
-    stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    Request-time authentication reads only :func:`get_credential_registry`.
+    It does not call ``os.getenv`` or parse ``CODEC_CARVER_API_KEYS``. When
+    the registry has at least one verifiable credential, every request other
+    than GET / and GET /health must present a matching ``X-API-Key``.
+    Failures return 401 without echoing key material. An empty registry
+    leaves local development fail-open.
     """
 
-    configured_keys = get_configured_api_keys()
-    if configured_keys and not (request.method == "GET" and request.url.path == "/"):
+    registry = get_credential_registry()
+    now = request_clock()
+    if registry.has_active_credentials(now=now) and not _is_public_get(request):
         provided_key = request.headers.get("x-api-key", "")
-        if not any(
-            hmac.compare_digest(provided_key, key) for key in configured_keys
-        ):
+        if registry.verify(provided_key, now=now) is None:
             return JSONResponse(
                 status_code=401,
                 content={"error": "Invalid or missing API key"},
@@ -510,6 +572,18 @@ async def get_ui():
     """Return the single-page upload form."""
 
     return HTML_TEMPLATE
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    """Return a liveness payload for load balancers and environment start.
+
+    This path stays auth-exempt so a probe can confirm the process is
+    listening without presenting an API key. It does not report job-store
+    or ffmpeg readiness.
+    """
+
+    return {"status": "ok", "service": "codec-carver"}
 
 
 @app.post("/shrink")

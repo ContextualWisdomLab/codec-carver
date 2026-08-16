@@ -23,7 +23,7 @@ python3 -m unittest tests.test_media_shrinker -v
 python3 -m unittest tests.test_job_store.TestCreateAndGet.test_create_get_roundtrip
 
 # Compile check (CI runs this on all four modules)
-python -m py_compile media_shrinker.py saas_web.py mcp_driver.py job_store.py
+python -m py_compile media_shrinker.py saas_web.py mcp_driver.py job_store.py credential_registry.py
 
 # CLI (omit --execute for a dry run that only lists candidates)
 codec-carver /path/to/recordings --execute --output-dir under_2gb
@@ -49,7 +49,8 @@ Four flat top-level modules (declared as `py-modules` in `pyproject.toml`; there
 - **`media_shrinker.py`** — the core engine and CLI, deliberately stdlib-only (external work happens in `ffmpeg`/`ffprobe` subprocesses). The console script `codec-carver` maps to `media_shrinker:main`. Pipeline for a batch run: `find_candidates` scans the root (pruned `os.walk`, excludes the output dir and `--exclude-dir-prefix` dirs) → per file, `convert_file` probes with ffprobe (`probe_media` / `_parse_probe_payload`), detects silence and builds a split plan for long sources (`detect_silence_intervals`, `parse_silencedetect_intervals`, `build_segments`) → each segment gets a `ConversionPlan` (`build_audio_plan` prefers FLAC; `build_opus_plan` is the fallback when a FLAC output exceeds the target size) → `_execute_plan` runs ffmpeg and `preserve_file_attributes` restores permissions/timestamps/xattrs best-effort → `write_report` emits a JSON report. `convert_file(source, root=..., output_dir=..., target_bytes=...)` is the programmatic API that the web and MCP layers call.
 - **`saas_web.py`** — single-file FastAPI upload UI (the `[web]` extra; what the Docker image serves). Streams one upload into a temp workspace, calls `media_shrinker.convert_file`, and returns the first generated output as a download. Middleware enforces a 5 GiB upload cap and security headers. Processing is synchronous per request.
 - **`mcp_driver.py`** — FastMCP server (the `[mcp]` extra) exposing a single `shrink_media` tool that wraps `convert_file`.
-- **`job_store.py`** — stdlib-only SQLite (WAL) durable job store intended for async/worker job tracking. It is tested but not yet wired into `saas_web.py`. Callers pass `now` explicitly; the store never calls `datetime.now()` itself.
+- **`job_store.py`** — stdlib-only SQLite (WAL) durable job store intended for async/worker job tracking. It is tested but not yet wired into `saas_web.py`. Callers pass ``now`` explicitly; the store never calls ``datetime.now()`` itself.
+- **`credential_registry.py`** — stdlib-only SQLite (WAL) hashed API-key registry (`api_credentials`). Request-time auth in `saas_web.py` reads only this store. `CODEC_CARVER_API_KEYS` is bootstrap transport into `bootstrap_from_mapping`, never a request-time `os.getenv`. Callers pass ``now`` for expiry and rotation.
 
 Supporting directories: `fuzz/` holds Atheris harnesses plus seed corpora for the three untrusted-input parsing surfaces (`parse_silencedetect_intervals`, `_parse_probe_payload`, `build_segments`); the same invariants run as Hypothesis property tests in `tests/test_fuzz_properties.py` so they execute in the normal suite. `docs/papers/` holds the fuzzing survey the harness design references.
 

@@ -43,10 +43,11 @@ repo.
   job store, and open PRs adding API-key auth and usage metering), so it *will*
   read runtime secrets/config (API keys, DB creds, endpoints). When you add them,
   source them from the KV, not `os.getenv`.
-- **Known deviation to migrate:** the in-flight API-key auth work reads keys from
-  a `CODEC_CARVER_API_KEYS` environment variable — that is exactly the anti-pattern
-  above. Move it to read from the credential registry (env may still be the
-  bootstrap transport that *populates* the KV, never the runtime source).
+- **API keys:** `saas_web.py` request-time auth reads
+  `credential_registry.CredentialRegistry` only. `CODEC_CARVER_API_KEYS` is
+  bootstrap transport into `bootstrap_from_mapping` at process start (and in
+  tests). Do not add request-time `os.getenv("CODEC_CARVER_API_KEYS")` back.
+  Decision record: `docs/doctoring/api-credential-registry.md`.
 
 ### Code exploration
 - There is no `.codegraph/` index in this repo today, so use normal search

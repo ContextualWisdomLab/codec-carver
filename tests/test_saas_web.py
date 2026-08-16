@@ -5,14 +5,22 @@ import os
 import tempfile
 import unittest
 import zipfile
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from types import SimpleNamespace
 
+from credential_registry import (
+    BOOTSTRAP_ENV_NAME,
+    CredentialRegistry,
+    bootstrap_from_mapping,
+    parse_bootstrap_api_keys,
+)
+
 try:
     from fastapi import BackgroundTasks
     from fastapi.testclient import TestClient
-    from fastapi.responses import Response
+    from fastapi.responses import JSONResponse, Response
 
     import saas_web
     from saas_web import app
@@ -36,6 +44,11 @@ class TestSaasWeb(unittest.TestCase):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
+
+    def test_get_health(self):
+        response = client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok", "service": "codec-carver"})
 
     def test_get_ui_includes_accessible_file_input_helpers(self):
         response = client.get("/")
@@ -676,7 +689,31 @@ class TestShrinkBatch(unittest.TestCase):
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class TestApiKeyAuth(unittest.TestCase):
-    """Tests for the opt-in CODEC_CARVER_API_KEYS authentication middleware."""
+    """Tests for registry-backed API-key authentication middleware."""
+
+    AUTH_NOW = datetime(2026, 8, 16, 12, 0, 0, tzinfo=timezone.utc)
+
+    def setUp(self) -> None:
+        """Keep a handle so each test can restore the process registry."""
+
+        self._previous_registry = saas_web.get_credential_registry()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._restore_registry)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _restore_registry(self) -> None:
+        """Put the process registry back after a test."""
+
+        saas_web.configure_credential_registry(self._previous_registry)
+
+    def _install_keys(self, *keys: str) -> CredentialRegistry:
+        """Install a fresh hashed registry containing ``keys``."""
+
+        store = CredentialRegistry(os.path.join(self._tmp.name, "api_credentials.db"))
+        for key in keys:
+            store.register(key, now=self.AUTH_NOW)
+        saas_web.configure_credential_registry(store)
+        return store
 
     def _post_shrink(self, headers=None):
         """POST a minimal /shrink request and return the response."""
@@ -688,11 +725,11 @@ class TestApiKeyAuth(unittest.TestCase):
             headers=headers or {},
         )
 
-    def test_no_env_var_leaves_endpoints_open(self):
-        with patch.dict(os.environ):
-            os.environ.pop("CODEC_CARVER_API_KEYS", None)
-            response = self._post_shrink()
+    def test_empty_registry_leaves_endpoints_open(self):
+        """Local default stays fail-open until an operator bootstraps keys."""
 
+        self._install_keys()
+        response = self._post_shrink()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json(),
@@ -700,25 +737,28 @@ class TestApiKeyAuth(unittest.TestCase):
         )
 
     def test_missing_header_rejected_when_keys_configured(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = self._post_shrink()
+        """A configured registry rejects anonymous mutating requests."""
 
+        self._install_keys("secret-key")
+        response = self._post_shrink()
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
 
     def test_wrong_key_rejected(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = self._post_shrink(headers={"X-API-Key": "wrong-key"})
+        """A non-matching header is the same 401 as a missing header."""
 
+        self._install_keys("secret-key")
+        response = self._post_shrink(headers={"X-API-Key": "wrong-key"})
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
 
     def test_correct_key_reaches_handler(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = self._post_shrink(headers={"X-API-Key": "secret-key"})
+        """A matching header reaches the handler without leaking the secret."""
 
+        self._install_keys("secret-key")
+        response = self._post_shrink(headers={"X-API-Key": "secret-key"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json(),
@@ -726,66 +766,183 @@ class TestApiKeyAuth(unittest.TestCase):
         )
 
     def test_get_ui_always_open_without_key(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = client.get("/")
+        """The upload form stays reachable so a browser can start a job."""
 
+        self._install_keys("secret-key")
+        response = client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
 
-    def test_job_api_requires_key_when_configured(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = client.get("/jobs/missing")
-            allowed = client.get("/jobs/missing", headers={"X-API-Key": "secret-key"})
+    def test_health_stays_open_without_key(self):
+        """Liveness stays auth-exempt so a probe can confirm the process is up."""
 
+        self._install_keys("secret-key")
+        response = client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok", "service": "codec-carver"})
+
+    def test_job_api_requires_key_when_configured(self):
+        """Job status is not a public probe; it requires a matching key."""
+
+        self._install_keys("secret-key")
+        response = client.get("/jobs/missing")
+        allowed = client.get("/jobs/missing", headers={"X-API-Key": "secret-key"})
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertEqual(allowed.status_code, 404)
 
-    def test_multiple_comma_separated_keys_all_valid(self):
-        with patch.dict(
-            os.environ, {"CODEC_CARVER_API_KEYS": "key-one,key-two,key-three"}
-        ):
-            for key in ("key-one", "key-two", "key-three"):
-                response = self._post_shrink(headers={"X-API-Key": key})
-                self.assertEqual(response.status_code, 200, key)
-            rejected = self._post_shrink(headers={"X-API-Key": "key-four"})
+    def test_multiple_registered_keys_all_valid(self):
+        """Current and next rotation secrets can both authenticate."""
 
+        self._install_keys("key-one", "key-two", "key-three")
+        for key in ("key-one", "key-two", "key-three"):
+            response = self._post_shrink(headers={"X-API-Key": key})
+            self.assertEqual(response.status_code, 200, key)
+        rejected = self._post_shrink(headers={"X-API-Key": "key-four"})
         self.assertEqual(rejected.status_code, 401)
 
-    def test_whitespace_around_keys_is_stripped(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "  key-one , key-two  "}):
-            response = self._post_shrink(headers={"X-API-Key": "key-one"})
-            self.assertEqual(response.status_code, 200)
-            response = self._post_shrink(headers={"X-API-Key": "key-two"})
-            self.assertEqual(response.status_code, 200)
-            rejected = self._post_shrink(headers={"X-API-Key": " key-one "})
+    def test_non_ascii_key_reaches_handler(self):
+        """Middleware verifies UTF-8 secrets without compare_digest TypeError.
 
+        Starlette's TestClient encodes headers as ASCII, so this test calls
+        the middleware with a request-like object instead of httpx.
+        """
+
+        key = "키-α-🔑"
+        self._install_keys(key)
+
+        async def _invoke(presented: str):
+            request = SimpleNamespace(
+                method="POST",
+                url=SimpleNamespace(path="/shrink"),
+                headers={"x-api-key": presented},
+            )
+
+            async def call_next(_request=None):
+                return JSONResponse({"ok": True})
+
+            return await saas_web.require_api_key(request, call_next)
+
+        allowed = asyncio.run(_invoke(key))
+        rejected = asyncio.run(_invoke("키-α"))
+        self.assertEqual(allowed.status_code, 200)
         self.assertEqual(rejected.status_code, 401)
+        self.assertNotIn(key, rejected.body.decode("utf-8"))
 
-    def test_empty_entries_are_ignored(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "key-one,,  ,"}):
-            response = self._post_shrink(headers={"X-API-Key": "key-one"})
-            self.assertEqual(response.status_code, 200)
-            rejected = self._post_shrink(headers={"X-API-Key": ""})
+    def test_request_auth_does_not_read_bootstrap_env(self):
+        """A process-level transport secret is ignored after registry install."""
 
-        self.assertEqual(rejected.status_code, 401)
+        self._install_keys("registry-key")
+        os.environ[BOOTSTRAP_ENV_NAME] = "process-secret"
+        try:
+            allowed = self._post_shrink(headers={"X-API-Key": "registry-key"})
+            ignored = self._post_shrink(headers={"X-API-Key": "process-secret"})
+        finally:
+            os.environ.pop(BOOTSTRAP_ENV_NAME, None)
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(ignored.status_code, 401)
 
-    def test_only_empty_entries_leave_endpoints_open(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " , ,"}):
-            response = self._post_shrink()
+    def test_bootstrap_mapping_then_request(self):
+        """Startup bootstrap from an explicit mapping is the supported path."""
 
+        store = CredentialRegistry(os.path.join(self._tmp.name, "boot.db"))
+        bootstrap_from_mapping(
+            store,
+            {BOOTSTRAP_ENV_NAME: "  key-one , key-two  "},
+            now=self.AUTH_NOW,
+        )
+        saas_web.configure_credential_registry(store)
+        self.assertEqual(
+            self._post_shrink(headers={"X-API-Key": "key-one"}).status_code,
+            200,
+        )
+        self.assertEqual(
+            self._post_shrink(headers={"X-API-Key": "key-two"}).status_code,
+            200,
+        )
+        self.assertEqual(
+            self._post_shrink(headers={"X-API-Key": " key-one "}).status_code,
+            401,
+        )
+
+    def test_empty_bootstrap_mapping_leaves_endpoints_open(self):
+        """Whitespace-only transport does not lock the service."""
+
+        store = CredentialRegistry(os.path.join(self._tmp.name, "empty.db"))
+        bootstrap_from_mapping(store, {BOOTSTRAP_ENV_NAME: " , ,"}, now=self.AUTH_NOW)
+        saas_web.configure_credential_registry(store)
+        response = self._post_shrink()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json(),
             {"error": "Invalid target_bytes value. Must be greater than 0."},
         )
 
-    def test_get_configured_api_keys_parsing(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " a ,, b ,"}):
-            self.assertEqual(saas_web.get_configured_api_keys(), ["a", "b"])
-        with patch.dict(os.environ):
-            os.environ.pop("CODEC_CARVER_API_KEYS", None)
-            self.assertEqual(saas_web.get_configured_api_keys(), [])
+    def test_bootstrap_parser_does_not_need_environ(self):
+        """The transport parser is a pure function of the supplied string."""
+
+        self.assertEqual(parse_bootstrap_api_keys(" a ,, b ,"), ["a", "b"])
+        self.assertEqual(parse_bootstrap_api_keys(""), [])
+
+
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
+class TestCredentialWiring(unittest.TestCase):
+    """Cover the process-level registry helpers used at startup."""
+
+    def test_default_path_and_clock_are_usable(self) -> None:
+        """Operators can locate the default file and the request clock is aware."""
+
+        path = saas_web._default_credential_registry_path()
+        self.assertEqual(path.name, "codec_carver_api_credentials.sqlite3")
+        clock = saas_web.request_clock()
+        self.assertIsNotNone(clock.tzinfo)
+
+    def test_new_registry_accepts_explicit_path(self) -> None:
+        """Tests and startup can point the registry at a dedicated file."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = saas_web._new_credential_registry(Path(tmp) / "custom.db")
+            self.assertFalse(store.has_active_credentials(now=datetime.now(timezone.utc)))
+        default_store = saas_web._new_credential_registry()
+        self.assertIsInstance(default_store, CredentialRegistry)
+
+    def test_public_get_paths(self) -> None:
+        """Only GET / and GET /health skip the credential check."""
+
+        self.assertTrue(
+            saas_web._is_public_get(SimpleNamespace(method="GET", url=SimpleNamespace(path="/health")))
+        )
+        self.assertTrue(
+            saas_web._is_public_get(SimpleNamespace(method="GET", url=SimpleNamespace(path="/")))
+        )
+        self.assertFalse(
+            saas_web._is_public_get(SimpleNamespace(method="POST", url=SimpleNamespace(path="/health")))
+        )
+        self.assertFalse(
+            saas_web._is_public_get(SimpleNamespace(method="GET", url=SimpleNamespace(path="/jobs/x")))
+        )
+
+    def test_lifespan_bootstraps_from_explicit_environ_snapshot(self) -> None:
+        """Lifespan imports transport keys once into the installed registry."""
+
+        previous = saas_web.get_credential_registry()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CredentialRegistry(os.path.join(tmp, "life.db"))
+            saas_web.configure_credential_registry(store)
+            try:
+                async def _run() -> None:
+                    async with saas_web._app_lifespan(saas_web.app):
+                        pass
+
+                with patch.dict(os.environ, {BOOTSTRAP_ENV_NAME: "life-key"}):
+                    asyncio.run(_run())
+                self.assertIsNotNone(
+                    store.verify("life-key", now=datetime.now(timezone.utc))
+                )
+            finally:
+                saas_web.configure_credential_registry(previous)
 
 
 @unittest.skipUnless(
