@@ -61,6 +61,11 @@
 **Learning:** To enhance security in FastAPI applications, missing HTTP response headers could leak referrers or give access to APIs (e.g. geolocation) without explicit intent.
 **Prevention:** Implement an `@app.middleware('http')` function to globally inject defense-in-depth security headers such as `Content-Security-Policy`, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`, `X-XSS-Protection`, `Referrer-Policy` (e.g., `strict-origin-when-cross-origin`), and `Permissions-Policy` (e.g., `geolocation=(), microphone=(), camera=()`).
 
+## 2026-08-16 - [Sentinel: Request-time API key environment reads]
+**Vulnerability:** API keys compared from `os.environ` on every request, with first-match `hmac.compare_digest` on raw strings and fail-open public binds.
+**Learning:** Environment transport is not a verifier store. Hostile Unicode or overlong `X-API-Key` values must stay on a bounded 401 path. Listing APIs that return plaintext recreate the secret.
+**Prevention:** Bootstrap keys once into `credential_registry` (SHA-256 digests, two-word `api_credentials` table). Compare every usable digest without short-circuit. Never echo secrets in errors, repr, or public listings. Fail-closed on `0.0.0.0` unless keys exist.
+
 ## 2026-07-10 - [Sentinel: Media Source Path Traversal]
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
