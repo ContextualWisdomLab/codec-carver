@@ -92,3 +92,12 @@ protection, `require_code_owner_review` in rulesets) are disabled across the Con
 org: there is a single maintainer (solo developer), so a code-owner approval gate can never be
 satisfied. This is ON HOLD until the org has multiple maintainers — do NOT re-enable these
 settings or add CODEOWNERS-based merge gates before then.
+
+## Current loop goal
+
+Ship the upload-card click contract without another landmark-only wipe. Overlay
+`role="region"` and design tokens on the same listeners. Prefer #419 at a
+restored head over a second repair PR once current-head checks are green.
+Next buyer gap after that contract: durable result ownership (`job_store`
+wired into `saas_web`) and a credential-registry read path instead of
+`os.getenv("CODEC_CARVER_API_KEYS")`.

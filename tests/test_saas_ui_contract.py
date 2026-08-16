@@ -8,12 +8,29 @@ import textwrap
 import unittest
 from pathlib import Path
 
-import saas_web
-
 
 SOURCE_TEXT = (Path(__file__).resolve().parents[1] / "saas_web.py").read_text(
     encoding="utf-8"
 )
+PALETTE_TEXT = (Path(__file__).resolve().parents[1] / ".jules" / "palette.md").read_text(
+    encoding="utf-8"
+)
+
+
+def _html_template_from_source(source_text: str) -> str:
+    """Return the embedded SaaS HTML template from saas_web.py source text."""
+    marker = 'HTML_TEMPLATE = """'
+    start = source_text.find(marker)
+    if start < 0:
+        raise AssertionError("HTML_TEMPLATE literal is missing from saas_web.py")
+    start += len(marker)
+    end = source_text.find('"""', start)
+    if end < 0:
+        raise AssertionError("HTML_TEMPLATE literal is not closed")
+    return source_text[start:end]
+
+
+HTML_TEMPLATE = _html_template_from_source(SOURCE_TEXT)
 
 
 class TestSaasUiContract(unittest.TestCase):
@@ -36,6 +53,45 @@ class TestSaasUiContract(unittest.TestCase):
             SOURCE_TEXT.count("e.target.closest('input, button, label')"), 2
         )
 
+    def test_help_text_names_click_or_drag_next_action(self):
+        """Buyers must be told the card itself opens the matching picker."""
+        self.assertIn(
+            "Click this card or drag an audio or video file here.",
+            HTML_TEMPLATE,
+        )
+        self.assertIn(
+            "Click this card or drag several audio or video files here.",
+            HTML_TEMPLATE,
+        )
+
+    def test_drop_zones_are_labelled_regions_on_the_same_tree(self):
+        """Landmarks overlay the clickable cards and do not replace them."""
+        self.assertIn(
+            'id="drop-zone" role="region" aria-labelledby="single-upload-heading"',
+            HTML_TEMPLATE,
+        )
+        self.assertIn(
+            'id="batch-drop-zone" role="region" aria-labelledby="batch-upload-heading"',
+            HTML_TEMPLATE,
+        )
+        self.assertIn('id="single-upload-heading"', HTML_TEMPLATE)
+        self.assertIn('id="batch-upload-heading"', HTML_TEMPLATE)
+        self.assertNotIn('role="button"', HTML_TEMPLATE)
+
+    def test_shared_surfaces_use_named_design_tokens(self):
+        """Repeated upload-card colors resolve through :root custom properties."""
+        self.assertIn("--cc-color-action: #0056b3;", HTML_TEMPLATE)
+        self.assertIn("background-color: var(--cc-color-action);", HTML_TEMPLATE)
+        self.assertIn("cursor: pointer;", HTML_TEMPLATE)
+
+    def test_palette_note_teaches_closest_not_tag_name(self):
+        """Later design rewrites must copy the nested-control guard that shipped."""
+        self.assertIn("e.target.closest('input, button, label')", PALETTE_TEXT)
+        self.assertNotIn(
+            "!['INPUT', 'BUTTON', 'LABEL'].includes(e.target.tagName)",
+            PALETTE_TEXT,
+        )
+
     def test_drop_zone_click_behavior_executes_against_dom_harness(self):
         """Execute the generated script and prove both picker click boundaries."""
         node = shutil.which("node")
@@ -46,7 +102,7 @@ class TestSaasUiContract(unittest.TestCase):
 
         scripts = re.findall(
             r"<script>(.*?)</script>",
-            saas_web.HTML_TEMPLATE,
+            HTML_TEMPLATE,
             flags=re.DOTALL,
         )
         self.assertEqual(len(scripts), 1)

@@ -54,6 +54,15 @@ class TestSaasWeb(unittest.TestCase):
             html.index("window.addEventListener('DOMContentLoaded'"),
             html.index("document.getElementById('batch_preset_buttons_container')"),
         )
+        self.assertIn(
+            "Click this card or drag an audio or video file here.",
+            html,
+        )
+        self.assertIn(
+            'id="drop-zone" role="region" aria-labelledby="single-upload-heading"',
+            html,
+        )
+        self.assertIn("--cc-color-action: #0056b3;", html)
 
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
@@ -678,6 +687,14 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertIn('onchange="updateBatchFilePreview(this)"', html)
         self.assertIn('id="batch_files_preview"', html)
         self.assertIn("window.updateBatchFilePreview = function(input)", html)
+        self.assertIn(
+            "Click this card or drag several audio or video files here.",
+            html,
+        )
+        self.assertIn(
+            'id="batch-drop-zone" role="region" aria-labelledby="batch-upload-heading"',
+            html,
+        )
 
 
 @unittest.skipUnless(
