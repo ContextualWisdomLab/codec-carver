@@ -8,7 +8,11 @@ import textwrap
 import unittest
 from pathlib import Path
 
-import saas_web
+try:
+    import saas_web
+    _HAS_FASTAPI = True
+except ImportError:
+    _HAS_FASTAPI = False
 
 
 SOURCE_TEXT = (Path(__file__).resolve().parents[1] / "saas_web.py").read_text(
@@ -16,6 +20,7 @@ SOURCE_TEXT = (Path(__file__).resolve().parents[1] / "saas_web.py").read_text(
 )
 
 
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed")
 class TestSaasUiContract(unittest.TestCase):
     """Keep DOM registration and nested-control handling safe."""
 
