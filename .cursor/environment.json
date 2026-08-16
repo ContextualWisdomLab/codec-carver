@@ -2,6 +2,13 @@
   "name": "Codec Carver",
   "install": "bash .cursor/install.sh",
   "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "web",
+      "command": "python3 -m uvicorn saas_web:app --host 0.0.0.0 --port 8000",
+      "description": "Codec Carver FastAPI upload UI (saas_web:app) at http://localhost:8000"
+    }
+  ],
   "ports": [
     { "name": "web", "port": 8000 }
   ]
