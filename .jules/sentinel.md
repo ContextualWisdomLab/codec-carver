@@ -65,3 +65,8 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+
+## 2026-08-16 - 단일 파일 업로드 엔드포인트의 경로 탐색 취약점
+**취약점:** `/shrink` 엔드포인트에서 외부 모듈(`media_shrinker`)의 반환 경로(`output_path`)가 임시 작업 디렉토리 내에 존재하는지 검증하지 않아, 해당 모듈이 변조되거나 취약할 경우 시스템 중요 파일(예: `/etc/passwd`)에 대한 경로 탐색 공격(Path Traversal)이 발생하여 파일이 외부에 노출될 수 있었습니다.
+**학습:** `/shrink-batch`와 같이 여러 파일을 처리하는 엔드포인트에는 `is_relative_to(workspace_root)` 검증이 있었으나 단일 처리 엔드포인트에는 누락되어 있었습니다. 외부의 반환값을 신뢰하지 않는 '방어적 심층' 원칙이 코드베이스 전반에 일관되게 적용되어야 함을 확인했습니다.
+**예방:** 동적으로 생성된 경로나 외부 모듈이 반환하는 모든 파일 경로는 다운로드로 서빙하기 전, `resolve()`를 통해 심볼릭 링크를 해석하고 `is_file()` 및 의도된 작업 디렉토리에 대해 `is_relative_to()`를 호출하여 엄격하게 검증해야 합니다.

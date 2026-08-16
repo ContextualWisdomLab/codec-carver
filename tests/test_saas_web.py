@@ -112,12 +112,14 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"error": "Invalid Content-Length"})
 
+    @patch("saas_web._persist_upload")
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_endpoint(self, mock_convert_file):
+    def test_shrink_media_endpoint(self, mock_convert_file, mock_persist_upload):
         # Create a dummy output file for the FileResponse
         import tempfile
 
         with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir).resolve()
             temp_output = Path(temp_dir) / "output.flac"
             temp_output.write_bytes(b"dummy audio data")
 
@@ -129,6 +131,8 @@ class TestSaasWeb(unittest.TestCase):
             # Create a dummy upload file
             dummy_file_path = Path(temp_dir) / "input.wav"
             dummy_file_path.write_bytes(b"dummy wav data")
+
+            mock_persist_upload.return_value = (temp_dir_path, temp_dir_path / "input", temp_dir_path / "output", dummy_file_path)
 
             with open(dummy_file_path, "rb") as f:
                 response = client.post(
@@ -207,16 +211,20 @@ class TestSaasWeb(unittest.TestCase):
 
         self.assertEqual(response, {"error": "Upload processing failed"})
 
+    @patch("saas_web._persist_upload")
     @patch("saas_web.media_shrinker.convert_file")
-    def test_shrink_media_uses_safe_fallback_filename(self, mock_convert_file):
+    def test_shrink_media_uses_safe_fallback_filename(self, mock_convert_file, mock_persist_upload):
         import tempfile
 
         with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir).resolve()
             output = Path(temp_dir) / "output.flac"
             output.write_bytes(b"audio")
             mock_result = MagicMock(spec=ConversionResult)
             mock_result.output_path = output
             mock_convert_file.return_value = [mock_result]
+
+            mock_persist_upload.return_value = (temp_dir_path, temp_dir_path / "input", temp_dir_path / "output", temp_dir_path / "input/upload.tmp")
 
             response = saas_web.shrink_media(
                 BackgroundTasks(),

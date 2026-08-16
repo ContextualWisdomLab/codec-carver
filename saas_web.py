@@ -577,6 +577,9 @@ def shrink_media(
         output_path = _download_path_for_outputs(
             outputs, temp_dir_path, source_path.stem + "_shrunk.zip"
         )
+        output_path = output_path.resolve()
+        if not (output_path.is_file() and output_path.is_relative_to(temp_dir_path.resolve())):
+            raise ValueError("Output path is outside the temporary workspace")
         media_type = (
             "application/zip"
             if output_path.suffix == ".zip"
