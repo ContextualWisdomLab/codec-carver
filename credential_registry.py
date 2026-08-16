@@ -427,6 +427,32 @@ class CredentialRegistry:
             )
             self._record_event(conn, row["credential_id"], "revoked", now, "revoke")
 
+    def _usable_rows(
+        self, conn: sqlite3.Connection, now: datetime
+    ) -> list[sqlite3.Row]:
+        """Return active or rotated rows that have not expired at ``now``.
+
+        Args:
+            conn: Open connection.
+            now: Comparison timestamp.
+
+        Returns:
+            Rows with ``credential_id`` and ``key_digest``.
+        """
+
+        rows = conn.execute(
+            "SELECT credential_id, key_digest, expires_at FROM api_credentials "
+            "WHERE lifecycle_state IN ('active', 'rotated')"
+        ).fetchall()
+        now_text = now.isoformat()
+        usable: list[sqlite3.Row] = []
+        for row in rows:
+            expires_at = row["expires_at"]
+            if expires_at is not None and expires_at <= now_text:
+                continue
+            usable.append(row)
+        return usable
+
     def _usable_digests(self, conn: sqlite3.Connection, now: datetime) -> list[str]:
         """Return digests that may still authenticate at ``now``.
 
@@ -438,18 +464,7 @@ class CredentialRegistry:
             Digests for ``active`` and ``rotated`` rows that have not expired.
         """
 
-        rows = conn.execute(
-            "SELECT key_digest, expires_at FROM api_credentials "
-            "WHERE lifecycle_state IN ('active', 'rotated')"
-        ).fetchall()
-        usable: list[str] = []
-        now_text = now.isoformat()
-        for row in rows:
-            expires_at = row["expires_at"]
-            if expires_at is not None and expires_at <= now_text:
-                continue
-            usable.append(row["key_digest"])
-        return usable
+        return [row["key_digest"] for row in self._usable_rows(conn, now)]
 
     def verify_api_key(self, provided: object, *, now: datetime) -> str | None:
         """Return the matching ``credential_id``, or ``None``.
@@ -477,17 +492,9 @@ class CredentialRegistry:
             return None
         provided_digest = digest_api_key(provided)
         with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                "SELECT credential_id, key_digest, expires_at "
-                "FROM api_credentials "
-                "WHERE lifecycle_state IN ('active', 'rotated')"
-            ).fetchall()
-        now_text = now.isoformat()
+            rows = self._usable_rows(conn, now)
         matched_id: str | None = None
         for row in rows:
-            expires_at = row["expires_at"]
-            if expires_at is not None and expires_at <= now_text:
-                continue
             if hmac.compare_digest(provided_digest, row["key_digest"]):
                 matched_id = row["credential_id"]
         return matched_id
