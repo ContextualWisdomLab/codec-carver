@@ -5,14 +5,17 @@ import os
 import tempfile
 import unittest
 import zipfile
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from types import SimpleNamespace
 
+from credential_registry import CredentialRegistry, digest_api_key
+
 try:
     from fastapi import BackgroundTasks
     from fastapi.testclient import TestClient
-    from fastapi.responses import Response
+    from fastapi.responses import JSONResponse, Response
 
     import saas_web
     from saas_web import app
@@ -676,7 +679,23 @@ class TestShrinkBatch(unittest.TestCase):
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class TestApiKeyAuth(unittest.TestCase):
-    """Tests for the opt-in CODEC_CARVER_API_KEYS authentication middleware."""
+    """Tests for registry-backed API-key authentication middleware."""
+
+    def setUp(self) -> None:
+        """Install an isolated registry and always clear it afterwards."""
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(lambda: saas_web.configure_credential_registry(None))
+        self.now = datetime(2026, 8, 16, 12, 0, 0, tzinfo=timezone.utc)
+        self.db_path = os.path.join(self._tmp.name, "api_credentials.db")
+        self.registry = CredentialRegistry(self.db_path)
+        saas_web.configure_credential_registry(self.registry)
+
+    def _load(self, *keys: str) -> None:
+        """Import plaintext keys through the named bootstrap path."""
+
+        self.registry.import_plaintext_keys(list(keys), now=self.now, source="test")
 
     def _post_shrink(self, headers=None):
         """POST a minimal /shrink request and return the response."""
@@ -689,9 +708,7 @@ class TestApiKeyAuth(unittest.TestCase):
         )
 
     def test_no_env_var_leaves_endpoints_open(self):
-        with patch.dict(os.environ):
-            os.environ.pop("CODEC_CARVER_API_KEYS", None)
-            response = self._post_shrink()
+        response = self._post_shrink()
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -700,24 +717,25 @@ class TestApiKeyAuth(unittest.TestCase):
         )
 
     def test_missing_header_rejected_when_keys_configured(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = self._post_shrink()
+        self._load("secret-key")
+        response = self._post_shrink()
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertNotIn("secret-key", response.text)
 
     def test_wrong_key_rejected(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = self._post_shrink(headers={"X-API-Key": "wrong-key"})
+        self._load("secret-key")
+        response = self._post_shrink(headers={"X-API-Key": "wrong-key"})
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
 
     def test_correct_key_reaches_handler(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = self._post_shrink(headers={"X-API-Key": "secret-key"})
+        self._load("secret-key")
+        response = self._post_shrink(headers={"X-API-Key": "secret-key"})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -726,53 +744,63 @@ class TestApiKeyAuth(unittest.TestCase):
         )
 
     def test_get_ui_always_open_without_key(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = client.get("/")
+        self._load("secret-key")
+        response = client.get("/")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
 
     def test_job_api_requires_key_when_configured(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = client.get("/jobs/missing")
-            allowed = client.get("/jobs/missing", headers={"X-API-Key": "secret-key"})
+        self._load("secret-key")
+        response = client.get("/jobs/missing")
+        allowed = client.get("/jobs/missing", headers={"X-API-Key": "secret-key"})
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertEqual(allowed.status_code, 404)
 
     def test_multiple_comma_separated_keys_all_valid(self):
-        with patch.dict(
-            os.environ, {"CODEC_CARVER_API_KEYS": "key-one,key-two,key-three"}
-        ):
-            for key in ("key-one", "key-two", "key-three"):
-                response = self._post_shrink(headers={"X-API-Key": key})
-                self.assertEqual(response.status_code, 200, key)
-            rejected = self._post_shrink(headers={"X-API-Key": "key-four"})
+        self._load("key-one", "key-two", "key-three")
+        for key in ("key-one", "key-two", "key-three"):
+            response = self._post_shrink(headers={"X-API-Key": key})
+            self.assertEqual(response.status_code, 200, key)
+        rejected = self._post_shrink(headers={"X-API-Key": "key-four"})
 
         self.assertEqual(rejected.status_code, 401)
 
     def test_whitespace_around_keys_is_stripped(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "  key-one , key-two  "}):
-            response = self._post_shrink(headers={"X-API-Key": "key-one"})
-            self.assertEqual(response.status_code, 200)
-            response = self._post_shrink(headers={"X-API-Key": "key-two"})
-            self.assertEqual(response.status_code, 200)
-            rejected = self._post_shrink(headers={"X-API-Key": " key-one "})
+        saas_web.bootstrap_web_credentials(
+            {"CODEC_CARVER_API_KEYS": "  key-one , key-two  "},
+            now=self.now,
+            db_path=self.db_path,
+        )
+        response = self._post_shrink(headers={"X-API-Key": "key-one"})
+        self.assertEqual(response.status_code, 200)
+        response = self._post_shrink(headers={"X-API-Key": "key-two"})
+        self.assertEqual(response.status_code, 200)
+        rejected = self._post_shrink(headers={"X-API-Key": " key-one "})
 
         self.assertEqual(rejected.status_code, 401)
 
     def test_empty_entries_are_ignored(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "key-one,,  ,"}):
-            response = self._post_shrink(headers={"X-API-Key": "key-one"})
-            self.assertEqual(response.status_code, 200)
-            rejected = self._post_shrink(headers={"X-API-Key": ""})
+        saas_web.bootstrap_web_credentials(
+            {"CODEC_CARVER_API_KEYS": "key-one,,  ,"},
+            now=self.now,
+            db_path=self.db_path,
+        )
+        response = self._post_shrink(headers={"X-API-Key": "key-one"})
+        self.assertEqual(response.status_code, 200)
+        rejected = self._post_shrink(headers={"X-API-Key": ""})
 
         self.assertEqual(rejected.status_code, 401)
 
     def test_only_empty_entries_leave_endpoints_open(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " , ,"}):
-            response = self._post_shrink()
+        saas_web.bootstrap_web_credentials(
+            {"CODEC_CARVER_API_KEYS": " , ,"},
+            now=self.now,
+            db_path=self.db_path,
+        )
+        response = self._post_shrink()
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -780,12 +808,80 @@ class TestApiKeyAuth(unittest.TestCase):
             {"error": "Invalid target_bytes value. Must be greater than 0."},
         )
 
-    def test_get_configured_api_keys_parsing(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " a ,, b ,"}):
-            self.assertEqual(saas_web.get_configured_api_keys(), ["a", "b"])
+    def test_get_configured_api_keys_returns_labels_not_secrets(self):
+        self._load("secret-key")
+        labels = saas_web.get_configured_api_keys()
+        self.assertEqual(labels, [digest_api_key("secret-key")[:8]])
+        self.assertNotIn("secret-key", labels)
+        saas_web.configure_credential_registry(None)
+        self.assertEqual(saas_web.get_configured_api_keys(), [])
+
+    def test_request_path_ignores_environment_after_bootstrap(self):
+        self._load("registry-key")
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "env-only-key"}):
+            rejected = self._post_shrink(headers={"X-API-Key": "env-only-key"})
+            allowed = self._post_shrink(headers={"X-API-Key": "registry-key"})
+
+        self.assertEqual(rejected.status_code, 401)
+        self.assertEqual(allowed.status_code, 200)
+
+    def test_non_ascii_header_verifies_and_does_not_echo(self):
+        key = "업로드-키-αβγ"
+        self._load(key)
+
+        async def _next(_request):
+            return JSONResponse({"ok": True})
+
+        allowed_request = SimpleNamespace(
+            method="POST",
+            url=SimpleNamespace(path="/shrink"),
+            headers={"x-api-key": key},
+        )
+        rejected_request = SimpleNamespace(
+            method="POST",
+            url=SimpleNamespace(path="/shrink"),
+            headers={"x-api-key": "다른-키"},
+        )
+        allowed = asyncio.run(saas_web.require_api_key(allowed_request, _next))
+        rejected = asyncio.run(saas_web.require_api_key(rejected_request, _next))
+
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(rejected.status_code, 401)
+        self.assertNotIn(key, rejected.body.decode("utf-8"))
+
+        overlong = SimpleNamespace(
+            method="POST",
+            url=SimpleNamespace(path="/shrink"),
+            headers={"x-api-key": "k" * 300},
+        )
+        blocked = asyncio.run(saas_web.require_api_key(overlong, _next))
+        self.assertEqual(blocked.status_code, 401)
+
+    def test_startup_hook_skips_when_registry_already_configured(self):
+        self._load("secret-key")
+        saas_web.bootstrap_credentials_from_environ()
+        self.assertIs(saas_web.get_credential_registry(), self.registry)
+
+    def test_startup_hook_skips_blank_transport(self):
+        saas_web.configure_credential_registry(None)
         with patch.dict(os.environ):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
-            self.assertEqual(saas_web.get_configured_api_keys(), [])
+            saas_web.bootstrap_credentials_from_environ()
+        self.assertIsNone(saas_web.get_credential_registry())
+
+    def test_startup_hook_imports_transport_keys(self):
+        saas_web.configure_credential_registry(None)
+        with patch.dict(
+            os.environ,
+            {
+                "CODEC_CARVER_API_KEYS": "startup-key",
+                "CODEC_CARVER_CREDENTIAL_DB": self.db_path,
+            },
+        ):
+            saas_web.bootstrap_credentials_from_environ()
+        registry = saas_web.get_credential_registry()
+        self.assertIsNotNone(registry)
+        self.assertTrue(registry.verify_api_key("startup-key", now=self.now))
 
 
 @unittest.skipUnless(
