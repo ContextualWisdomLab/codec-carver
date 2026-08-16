@@ -2,6 +2,7 @@
 source =
     audio_library
     chapters
+    credential_registry
     diarize
     job_store
     mcp_driver

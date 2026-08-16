@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 ### Added
+- API 키는 SQLite `api_credentials` 레지스트리에 검증 재료만 저장하고, `CODEC_CARVER_API_KEYS`는 기동 시 수송만 합니다. 공개 바인드는 키가 없으면 실패합니다. 근거는 [`docs/doctoring/api-credential-registry.md`](docs/doctoring/api-credential-registry.md)에 있습니다.
+- 월별 사용량은 `credential_id`로 `usage_periods`에 기록합니다. 한도 초과 시 429와 `Retry-After`를 보내고 평문 키는 저장하지 않습니다. 근거는 [`docs/doctoring/usage-credential-binding.md`](docs/doctoring/usage-credential-binding.md)에 있습니다.
 - 다중 파일 업로드 선택 시 즉각적인 파일 개수 피드백 및 제한 초과 경고 메시지 추가
 - 일괄 업로드 폼에 대상 바이트 프리셋 버튼과 총 파일 크기 미리보기를 추가하여 사용성을 개선했습니다.
 - 클라이언트 측 폼 검증 시 하드코딩된 '5 GiB' 텍스트를 동적으로 변환되도록 수정하고 일괄 업로드 폼에 최대 크기(MAX_UPLOAD_BYTES) 검증 피드백을 추가했습니다.
