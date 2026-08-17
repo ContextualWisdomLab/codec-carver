@@ -21,14 +21,14 @@ if ! command -v rustup >/dev/null 2>&1; then
 fi
 rustup component add rustfmt
 
-# Match CI: hash-locked runtime deps, then the editable tree without
-# re-resolving from the index, then unpinned-but-marked dev extras.
+# Match CI exactly: install the authenticated hash lock, then link the checked-out
+# editable tree without dependency resolution or index access. requirements-dev.txt
+# remains an opt-in local fuzzing surface until it has its own reviewed hash lock;
+# unattended Cloud Agent bootstrap must not resolve those unhashed requirements.
 python3 -m pip install --user --disable-pip-version-check \
   --require-hashes -r requirements-lock.txt
 python3 -m pip install --user --disable-pip-version-check \
   --no-index --no-deps --no-build-isolation -e .
-python3 -m pip install --user --disable-pip-version-check \
-  -r requirements-dev.txt
 
 # Rust core binary (codec-carver-core) used by the audio-library CLI.
 # A fresh checkout wipes rust-core/target, so (re)build it here.
