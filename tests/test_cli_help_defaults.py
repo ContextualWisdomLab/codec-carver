@@ -35,3 +35,12 @@ def test_transcribe_help_exposes_language_and_diarization_defaults() -> None:
     assert "(default: ko)" in help_text
     assert "--speaker-diarization" in help_text
     assert "(default: True)" in help_text
+
+
+def test_top_level_help_does_not_advertise_missing_optional_values_as_defaults() -> None:
+    """Unset optional values should not be described as a user-meaningful default."""
+
+    help_text = build_parser().format_help()
+
+    assert "--state-dir" in help_text
+    assert "(default: None)" not in help_text
