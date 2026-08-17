@@ -53,10 +53,10 @@ def test_top_level_help_does_not_advertise_suppressed_defaults() -> None:
     parser.add_argument(
         "--test-suppressed-default",
         default=argparse.SUPPRESS,
-        help="test-only option ==SUPPRESS==",
+        help="test-only option",
     )
 
     help_text = parser.format_help()
 
     assert "--test-suppressed-default" in help_text
-    assert "(default: ==SUPPRESS==)" not in help_text
+    assert "==SUPPRESS==" not in help_text
