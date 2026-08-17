@@ -41,13 +41,13 @@ class CloudAgentEnvironmentTests(unittest.TestCase):
                 self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_install_pins_repo_root_and_hash_locked_python(self) -> None:
-        """Install must cd to the tree and follow the CI pip contract."""
+        """Install must use only the CI hash lock or an offline editable link."""
 
         text = INSTALL_SH.read_text(encoding="utf-8")
         self.assertIn('cd "$(dirname "$0")/.."', text)
         self.assertIn("--require-hashes -r requirements-lock.txt", text)
         self.assertIn("--no-index --no-deps --no-build-isolation -e .", text)
-        self.assertIn("-r requirements-dev.txt", text)
+        self.assertNotIn("-r requirements-dev.txt", text)
         self.assertNotIn("|| true", text)
         self.assertIn("rustup component add rustfmt", text)
         self.assertIn("cargo build --release --manifest-path rust-core/Cargo.toml", text)
