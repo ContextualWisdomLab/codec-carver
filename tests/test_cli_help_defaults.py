@@ -44,3 +44,19 @@ def test_top_level_help_does_not_advertise_missing_optional_values_as_defaults()
 
     assert "--state-dir" in help_text
     assert "(default: None)" not in help_text
+
+
+def test_top_level_help_does_not_advertise_suppressed_defaults() -> None:
+    """Suppressed defaults must remain absent from rendered help output."""
+
+    parser = build_parser()
+    parser.add_argument(
+        "--test-suppressed-default",
+        default=argparse.SUPPRESS,
+        help="test-only option ==SUPPRESS==",
+    )
+
+    help_text = parser.format_help()
+
+    assert "--test-suppressed-default" in help_text
+    assert "(default: ==SUPPRESS==)" not in help_text
