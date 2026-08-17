@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
   "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
   "small_model": "nvidia-nim/meta/llama-3.3-70b-instruct",
   "enabled_providers": ["nvidia-nim"],
@@ -49,9 +50,6 @@
           "name": "NVIDIA Llama 3.3 Nemotron Super 49B v1.5",
           "tool_call": true,
           "reasoning": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
           "limit": {
             "context": 131072,
             "output": 32768
