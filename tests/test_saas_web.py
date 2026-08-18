@@ -37,6 +37,11 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
 
+    def test_health_returns_ok(self):
+        response = client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
     def test_get_ui_includes_accessible_file_input_helpers(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -731,6 +736,13 @@ class TestApiKeyAuth(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
+
+    def test_health_always_open_without_key(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
 
     def test_job_api_requires_key_when_configured(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):

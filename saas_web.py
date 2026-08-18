@@ -100,18 +100,20 @@ def get_configured_api_keys():
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    """Enforce opt-in API-key authentication on all endpoints except GET /.
+    """Enforce opt-in API-key authentication on all endpoints except GET / and GET /health.
 
     When one or more keys are configured via CODEC_CARVER_API_KEYS, every
-    request other than GET / (the upload UI page) must carry an X-API-Key
-    header matching a configured key; comparison uses hmac.compare_digest to
-    stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    request other than GET / (the upload UI page) and GET /health (the liveness
+    probe) must carry an X-API-Key header matching a configured key; comparison
+    uses hmac.compare_digest to stay constant-time. Requests failing the check
+    receive a 401 JSON error without echoing any key material. When no keys are
+    configured, all requests pass through unchanged.
     """
 
     configured_keys = get_configured_api_keys()
-    if configured_keys and not (request.method == "GET" and request.url.path == "/"):
+    if configured_keys and not (
+        request.method == "GET" and request.url.path in ("/", "/health")
+    ):
         provided_key = request.headers.get("x-api-key", "")
         if not any(
             hmac.compare_digest(provided_key, key) for key in configured_keys
@@ -510,6 +512,18 @@ async def get_ui():
     """Return the single-page upload form."""
 
     return HTML_TEMPLATE
+
+
+@app.get("/health")
+async def health():
+    """Return a lightweight liveness/readiness probe.
+
+    Auth-exempt (like GET /) and intentionally cheap — no HTML rendering or
+    disk/subprocess work — so the container HEALTHCHECK and the environment
+    start script can poll it as a fast readiness signal.
+    """
+
+    return {"status": "ok"}
 
 
 @app.post("/shrink")
