@@ -92,3 +92,26 @@ protection, `require_code_owner_review` in rulesets) are disabled across the Con
 org: there is a single maintainer (solo developer), so a code-owner approval gate can never be
 satisfied. This is ON HOLD until the org has multiple maintainers — do NOT re-enable these
 settings or add CODEOWNERS-based merge gates before then.
+
+## Cloud Agent environment (`.cursor/`)
+
+`.cursor/environment.json` is the repo-managed Cloud Agent config — the
+highest-precedence environment source, so it applies to new agents with no
+dashboard "Save". Keep the two lifecycle phases distinct:
+
+- `.cursor/install.sh` (`install`) — durable, idempotent, source-derived setup:
+  ensure `ffmpeg`/`ffprobe`, add the `rustfmt` component **fail-closed** (the
+  pinned toolchain is `profile = minimal`), install Python deps **hash-locked**
+  from `requirements-lock.txt` + `fuzz/requirements-dev.txt` and then the
+  package with `-e . --no-deps` (mirrors CI's supply-chain contract; never
+  resolve deps from the index unpinned), and build the `codec-carver-core`
+  release binary. It `cd`s to the repo root so it is CWD-independent.
+- `.cursor/start.sh` (`start`) — per-boot reconciliation: rebuild the Rust
+  binary if a fresh checkout wiped `rust-core/target`, then start the FastAPI
+  service on `:8000` and **block until `GET /health` is ready (ready-or-fail)**
+  with time-bounded probes, so a dead worker is a failed boot rather than a
+  green start over a dead port.
+
+Put durable, source-derived setup in `install.sh`; put per-boot service startup
+in `start.sh`. `GET /health` is a cheap, auth-exempt readiness probe used by
+both `start.sh` and the Docker `HEALTHCHECK`.
