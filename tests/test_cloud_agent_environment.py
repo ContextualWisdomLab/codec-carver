@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENVIRONMENT_JSON = ROOT / ".cursor" / "environment.json"
 INSTALL_SH = ROOT / ".cursor" / "install.sh"
 START_SH = ROOT / ".cursor" / "start.sh"
+DOCKERFILE = ROOT / "Dockerfile"
 
 
 class CloudAgentEnvironmentTests(unittest.TestCase):
@@ -62,6 +63,13 @@ class CloudAgentEnvironmentTests(unittest.TestCase):
         self.assertIn("uvicorn exited before becoming ready", text)
         self.assertIn("uvicorn did not become ready", text)
         self.assertIn("kill -0", text)
+
+    def test_docker_healthcheck_uses_the_same_cheap_health_endpoint(self) -> None:
+        """Require container liveness to avoid rendering the upload page."""
+
+        text = DOCKERFILE.read_text(encoding="utf-8")
+        self.assertIn("http://127.0.0.1:8000/health", text)
+        self.assertNotIn("urlopen('http://127.0.0.1:8000/'", text)
 
 
 if __name__ == "__main__":  # pragma: no cover
