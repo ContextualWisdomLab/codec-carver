@@ -675,7 +675,7 @@ class TestShrinkBatch(unittest.TestCase):
 @unittest.skipUnless(
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
-class TestApiKeyAuth(unittest.TestCase):
+class TestApiKeyAuth(unittest.IsolatedAsyncioTestCase):
     """Tests for the opt-in CODEC_CARVER_API_KEYS authentication middleware."""
 
     def _post_shrink(self, headers=None):
@@ -706,6 +706,16 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
+
+    async def test_non_ascii_header_does_not_crash(self):
+        import starlette.requests
+        async def mock_call_next(request):
+            return "SUCCESS"
+        scope = {'type': 'http', 'method': 'GET', 'path': '/shrink', 'headers': [(b'x-api-key', '안녕'.encode('utf-8'))]}
+        request = starlette.requests.Request(scope)
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = await saas_web.require_api_key(request, mock_call_next)
+        self.assertEqual(response.status_code, 401)
 
     def test_wrong_key_rejected(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
