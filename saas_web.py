@@ -98,20 +98,31 @@ def get_configured_api_keys():
     return [key.strip() for key in raw.split(",") if key.strip()]
 
 
+# Upload UI and liveness stay reachable without a key so a browser can open the
+# form and Cloud Agent / load-balancer probes can confirm the process is up.
+_PUBLIC_GET_PATHS = frozenset({"/", "/health"})
+
+
+def _is_public_get(request: Request) -> bool:
+    """Return True when ``request`` is an unauthenticated GET probe or UI page."""
+
+    return request.method == "GET" and request.url.path in _PUBLIC_GET_PATHS
+
+
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    """Enforce opt-in API-key authentication on all endpoints except GET /.
+    """Enforce opt-in API-key authentication except on public GET probes.
 
     When one or more keys are configured via CODEC_CARVER_API_KEYS, every
-    request other than GET / (the upload UI page) must carry an X-API-Key
-    header matching a configured key; comparison uses hmac.compare_digest to
-    stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    request other than GET / (the upload UI) and GET /health (liveness) must
+    carry an X-API-Key header matching a configured key; comparison uses
+    hmac.compare_digest to stay constant-time. Requests failing the check
+    receive a 401 JSON error without echoing any key material. When no keys
+    are configured, all requests pass through unchanged.
     """
 
     configured_keys = get_configured_api_keys()
-    if configured_keys and not (request.method == "GET" and request.url.path == "/"):
+    if configured_keys and not _is_public_get(request):
         provided_key = request.headers.get("x-api-key", "")
         if not any(
             hmac.compare_digest(provided_key, key) for key in configured_keys
@@ -510,6 +521,18 @@ async def get_ui():
     """Return the single-page upload form."""
 
     return HTML_TEMPLATE
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    """Return a liveness payload for Cloud Agent start and load balancers.
+
+    This path stays auth-exempt so a probe can confirm the process is listening
+    without presenting an API key. It does not report job-store or ffmpeg
+    readiness; those checks belong to a future dedicated readiness route.
+    """
+
+    return {"status": "ok", "service": "codec-carver"}
 
 
 @app.post("/shrink")
