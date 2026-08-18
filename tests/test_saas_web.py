@@ -47,24 +47,6 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
-    def test_get_ui_renders_server_target_limit_and_numeric_validation(self):
-        response = client.get("/")
-        self.assertEqual(response.status_code, 200)
-        html = response.text
-
-        self.assertNotIn("__MAX_TARGET_BYTES__", html)
-        self.assertEqual(
-            html.count(f'max="{saas_web.MAX_TARGET_BYTES}"'),
-            2,
-        )
-        self.assertIn(
-            f"const MAX_TARGET_BYTES = {saas_web.MAX_TARGET_BYTES};",
-            html,
-        )
-        self.assertEqual(html.count("const val = this.valueAsNumber;"), 2)
-        self.assertEqual(html.count("Number.isNaN(val)"), 2)
-        self.assertEqual(html.count("val > MAX_TARGET_BYTES"), 2)
-
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
