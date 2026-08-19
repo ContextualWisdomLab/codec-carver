@@ -1222,6 +1222,31 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
+    def test_auth_unicode_encode_error(self):
+        import os
+        from starlette.requests import Request
+        import asyncio
+
+        async def call_next(request):
+            return {"status": "ok"}
+
+        os.environ["CODEC_CARVER_API_KEYS"] = "valid_key"
+        scope = {
+            'type': 'http',
+            'method': 'POST',
+            'path': '/shrink',
+            'headers': [(b'x-api-key', 'invalid_key😀'.encode('utf-8'))],
+            'query_string': b'',
+            'client': ('127.0.0.1', 12345),
+            'server': ('127.0.0.1', 80),
+        }
+        request = Request(scope)
+        try:
+            response = asyncio.run(saas_web.require_api_key(request, call_next))
+            self.assertEqual(response.status_code, 401)
+        finally:
+            del os.environ["CODEC_CARVER_API_KEYS"]
+
 
 if __name__ == "__main__":
     unittest.main()
