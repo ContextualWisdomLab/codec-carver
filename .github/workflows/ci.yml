@@ -55,16 +55,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust 1.88.0 with rustfmt
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+      - name: Install Rust 1.97.1 with rustfmt
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt
 
       - name: Report Rust toolchain
         run: |
-          rustup run 1.88.0 rustc --version --verbose
-          rustup run 1.88.0 cargo --version --verbose
+          rustup run 1.97.1 rustc --version --verbose
+          rustup run 1.97.1 cargo --version --verbose
 
       - name: Check Rust formatting
-        run: rustup run 1.88.0 cargo fmt --manifest-path rust-core/Cargo.toml -- --check
+        run: rustup run 1.97.1 cargo fmt --manifest-path rust-core/Cargo.toml -- --check
 
       - name: Test Rust backend
-        run: rustup run 1.88.0 cargo test --locked --all-targets --manifest-path rust-core/Cargo.toml
+        run: rustup run 1.97.1 cargo test --locked --all-targets --manifest-path rust-core/Cargo.toml
