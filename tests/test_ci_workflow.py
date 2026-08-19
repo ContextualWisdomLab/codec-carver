@@ -6,16 +6,18 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RUST_TOOLCHAIN = ROOT / "rust-toolchain.toml"
+DEPENDABOT = ROOT / ".github" / "dependabot.yml"
 
 
 class CiWorkflowTests(unittest.TestCase):
     """Keep Rust CI reproducible on runners without a suitable default toolchain."""
 
-    def test_rust_job_installs_and_uses_rust_1_88_with_rustfmt(self) -> None:
-        """Require edition-2024 Rust and rustfmt before formatting or tests run."""
+    def test_rust_job_installs_and_uses_rust_1_97_1_with_rustfmt(self) -> None:
+        """Require the reviewed compiler and rustfmt before formatting or tests run."""
 
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-        toolchain = "1.88.0"
+        toolchain = "1.97.1"
         install = f"rustup toolchain install {toolchain} --profile minimal --component rustfmt"
         formatting = (
             f"rustup run {toolchain} cargo fmt --manifest-path "
@@ -29,8 +31,21 @@ class CiWorkflowTests(unittest.TestCase):
         self.assertIn(install, workflow)
         self.assertIn(formatting, workflow)
         self.assertIn(tests, workflow)
+        self.assertNotIn("1.88.0", workflow)
         self.assertLess(workflow.index(install), workflow.index(formatting))
         self.assertLess(workflow.index(install), workflow.index(tests))
+
+    def test_rust_manifest_is_exact_and_automatically_tracked(self) -> None:
+        """Keep local and automated compiler updates reviewable and consistent."""
+
+        manifest = RUST_TOOLCHAIN.read_text(encoding="utf-8")
+        dependabot = DEPENDABOT.read_text(encoding="utf-8")
+
+        self.assertIn('channel = "1.97.1"', manifest)
+        self.assertNotIn('channel = "stable"', manifest)
+        self.assertNotIn("1.88.0", manifest)
+        self.assertIn('package-ecosystem: "rust-toolchain"', dependabot)
+        self.assertIn('interval: "weekly"', dependabot)
 
     def test_rust_job_compiles_linux_and_macos_backends(self) -> None:
         """Compile platform-specific Rust paths on Linux and macOS runners."""
