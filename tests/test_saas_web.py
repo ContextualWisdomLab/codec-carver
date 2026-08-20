@@ -1223,5 +1223,34 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+class AuthMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def test_require_api_key_handles_non_ascii_gracefully(self):
+        import starlette.requests
+        import starlette.responses
+        import os
+
+        scope = {
+            'type': 'http',
+            'method': 'GET',
+            'path': '/jobs/123',
+            'headers': [(b'x-api-key', b'invalid_key_\xc3\xb8')],
+        }
+        request = starlette.requests.Request(scope)
+
+        async def mock_call_next(req):
+            return starlette.responses.Response("OK")
+
+        original_keys = os.environ.get('CODEC_CARVER_API_KEYS')
+        try:
+            os.environ['CODEC_CARVER_API_KEYS'] = 'validkey1'
+            response = await saas_web.require_api_key(request, mock_call_next)
+            self.assertEqual(response.status_code, 401)
+        finally:
+            if original_keys is not None:
+                os.environ['CODEC_CARVER_API_KEYS'] = original_keys
+            else:
+                del os.environ['CODEC_CARVER_API_KEYS']
+
+
 if __name__ == "__main__":
     unittest.main()
