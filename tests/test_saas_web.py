@@ -1223,6 +1223,9 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
 class AuthMiddlewareTests(unittest.IsolatedAsyncioTestCase):
     async def test_require_api_key_handles_non_ascii_gracefully(self):
         import starlette.requests
