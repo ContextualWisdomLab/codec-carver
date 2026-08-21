@@ -1223,5 +1223,34 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+class TestRequireApiKeyMiddleware(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.original_keys = os.environ.get("CODEC_CARVER_API_KEYS")
+        os.environ["CODEC_CARVER_API_KEYS"] = "valid-key"
+
+    async def asyncTearDown(self):
+        if self.original_keys is not None:
+            os.environ["CODEC_CARVER_API_KEYS"] = self.original_keys
+        else:
+            os.environ.pop("CODEC_CARVER_API_KEYS", None)
+
+    async def test_require_api_key_handles_non_ascii(self):
+        from starlette.requests import Request
+        async def mock_call_next(request):
+            return "SUCCESS"
+
+        scope = {
+            'type': 'http',
+            'method': 'POST',
+            'path': '/api/upload',
+            'headers': [(b'x-api-key', 'non-ascii-😀'.encode('utf-8'))]
+        }
+        request = Request(scope)
+
+        response = await saas_web.require_api_key(request, mock_call_next)
+        self.assertEqual(response.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
