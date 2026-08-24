@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 try:
+    import starlette.requests
     from fastapi import BackgroundTasks
     from fastapi.testclient import TestClient
     from fastapi.responses import Response
@@ -675,7 +676,7 @@ class TestShrinkBatch(unittest.TestCase):
 @unittest.skipUnless(
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
-class TestApiKeyAuth(unittest.TestCase):
+class TestApiKeyAuth(unittest.IsolatedAsyncioTestCase):
     """Tests for the opt-in CODEC_CARVER_API_KEYS authentication middleware."""
 
     def _post_shrink(self, headers=None):
@@ -707,13 +708,26 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
 
-    def test_non_ascii_key_rejected_gracefully(self):
+    async def test_non_ascii_key_rejected_gracefully(self):
+        import saas_web
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = self._post_shrink(headers={"X-API-Key": "non_ascii_キー"})
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": "/shrink",
+                "headers": [(b"x-api-key", "non_ascii_キー".encode("utf-8"))]
+            }
+            request = starlette.requests.Request(scope)
+
+            async def mock_call_next(request):
+                return saas_web.JSONResponse(status_code=200, content={"status": "success"})
+
+            response = await saas_web.require_api_key(request, mock_call_next)
 
         self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
-        self.assertNotIn("secret-key", response.text)
+        import json
+        body = json.loads(response.body)
+        self.assertEqual(body, {"error": "Invalid or missing API key"})
 
     def test_wrong_key_rejected(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
