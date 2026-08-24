@@ -1,3 +1,8 @@
+## 2026-07-15 - [Sentinel: 인증 미들웨어에서 처리되지 않은 예외 수정]
+**Vulnerability:** X-API-Key 헤더에 비-ASCII 문자가 포함되어 있을 때 처리되지 않은 TypeError (500 Internal Server Error) 발생.
+**Learning:** Python의 `hmac.compare_digest` 함수는 비-ASCII 문자가 포함된 문자열을 비교할 때 TypeError를 발생시킵니다. 바이트로 변환하지 않고 이 함수를 통해 인증을 수행하는 미들웨어는 악의적이거나 잘못된 요청으로 인해 의도적으로 500 에러를 유발할 수 있으며, 이로 인해 서비스 거부 공격(DoS)이나 정보 노출의 가능성이 있습니다.
+**Prevention:** `hmac.compare_digest`와 같은 암호화 함수에 사용자 입력 문자열을 전달하기 전에는 항상 `utf-8` 바이트로 안전하게 인코딩(encode)해야 합니다.
+
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
