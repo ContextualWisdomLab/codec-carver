@@ -2180,13 +2180,7 @@ def _execute_plan(
                 f"ffmpeg failed for {source}: {completed.stderr.strip()}"
             )
 
-        try:
-            final_output.stat()
-            exists = True
-        except OSError:
-            exists = False
-
-        if exists and not overwrite:
+        if os.path.exists(final_output) and not overwrite:
             raise FileExistsError(f"Output already exists: {final_output}")
 
         temp_output.replace(final_output)
@@ -2207,19 +2201,11 @@ def _ensure_not_source_path(source: Path, output: Path) -> None:
 
 def _resolve_collision(path: Path, *, overwrite: bool) -> Path:
     """Return path or a numbered variant if path already exists."""
-    if not overwrite:
-        try:
-            path.stat()
-        except OSError:
-            return path
-    else:
+    if overwrite or not os.path.exists(path):
         return path
-
     for index in range(1, 10_000):
         candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
-        try:
-            candidate.stat()
-        except OSError:
+        if not os.path.exists(candidate):
             return candidate
     raise FileExistsError(f"Could not find free output path for {path}")
 

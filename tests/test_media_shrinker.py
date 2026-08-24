@@ -2433,9 +2433,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "existing.flac"
             path.write_bytes(b"data")
-            # The optimization now uses path.stat() instead of path.exists()
-            with patch("pathlib.Path.stat") as mock_stat:
-                mock_stat.return_value = MagicMock()
+            with patch("os.path.exists", return_value=True):
                 with self.assertRaisesRegex(FileExistsError, "Could not find free"):
                     media_shrinker._resolve_collision(path, overwrite=False)
 
