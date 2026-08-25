@@ -1,3 +1,7 @@
+## 2024-05-15 - Prevent 500 errors with HMAC non-ASCII inputs
+**Vulnerability:** Unhandled TypeError (and 500 Server Error) when `hmac.compare_digest` processes non-ASCII strings.
+**Learning:** Python`s `hmac.compare_digest` does not support comparing strings with non-ASCII characters directly.
+**Prevention:** Always encode both strings to `utf-8` bytes before comparison to prevent unhandled TypeError exceptions.
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
