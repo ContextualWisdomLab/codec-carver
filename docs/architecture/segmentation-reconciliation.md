@@ -1,6 +1,6 @@
 # Long-recording segmentation and late-TMK reconciliation (PRD/TRD/ADR)
 
-Status: accepted for the GPU audio-library path.
+Status: accepted for the GPU audio-library path. See [ADR 0003](../adr/0003-tmk-vad-fixed-duration-precedence.md).
 
 ## Product requirements
 
