@@ -31,6 +31,26 @@ if _HAS_FASTAPI:
 @unittest.skipUnless(
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
+class RequireAPIKeyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_require_api_key_unicode(self):
+        import starlette.requests
+        async def mock_call_next(request):
+            return None
+        scope = {
+            'type': 'http',
+            'method': 'POST',
+            'path': '/api',
+            'headers': [(b'x-api-key', b'secret1\xe2\x98\x83')] # secret1 + snowman
+        }
+        req = starlette.requests.Request(scope)
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret1"}):
+            response = await saas_web.require_api_key(req, mock_call_next)
+            self.assertEqual(response.status_code, 401)
+
+
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
 class TestSaasWeb(unittest.TestCase):
     def test_get_ui(self):
         response = client.get("/")
