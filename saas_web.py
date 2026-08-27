@@ -242,7 +242,7 @@ HTML_TEMPLATE = """
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
+                const val = this.valueAsNumber;
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
@@ -282,7 +282,7 @@ HTML_TEMPLATE = """
             });
 
             document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
+                const val = this.valueAsNumber;
                 const preview = document.getElementById('batch_target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
