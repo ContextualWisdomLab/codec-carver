@@ -32,6 +32,14 @@ class TestTargetLimitContract(unittest.TestCase):
         self.assertEqual(html.count("formatBinaryBytes(MAX_TARGET_BYTES)"), 2)
         self.assertNotIn("5368709120", html)
 
+    def test_numeric_input_validation_uses_browser_number_semantics(self):
+        """Keep exponent notation such as 6e9 from being truncated to 6."""
+
+        html = asyncio.run(saas_web.get_ui())
+
+        self.assertEqual(html.count("const val = this.valueAsNumber;"), 2)
+        self.assertNotIn("parseInt(this.value, 10)", html)
+
 
 if __name__ == "__main__":
     unittest.main()
