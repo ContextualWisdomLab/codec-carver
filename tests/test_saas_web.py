@@ -707,6 +707,32 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
 
+    @unittest.skipUnless(
+        _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+    )
+    def test_non_ascii_key_rejected_safely(self):
+        from starlette.requests import Request
+        from saas_web import require_api_key
+        import asyncio
+
+        async def mock_call_next(request):
+            return "SUCCESS"
+
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "url": "http://testserver/upload",
+                "path": "/upload",
+                "headers": [(b"x-api-key", "test🌟".encode("utf-8"))]
+            }
+            request = Request(scope)
+            response = asyncio.run(require_api_key(request, mock_call_next))
+
+        self.assertEqual(response.status_code, 401)
+        import json
+        self.assertEqual(json.loads(response.body), {"error": "Invalid or missing API key"})
+
     def test_wrong_key_rejected(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
             response = self._post_shrink(headers={"X-API-Key": "wrong-key"})

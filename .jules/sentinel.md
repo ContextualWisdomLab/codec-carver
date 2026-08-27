@@ -65,3 +65,8 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+
+## 2026-08-27 - [Sentinel: API Key DoS via hmac.compare_digest]
+**Vulnerability:** Denial of Service (DoS) due to unhandled exceptions when passing non-ASCII string headers to `hmac.compare_digest` (CWE-400 / Uncontrolled Resource Consumption).
+**Learning:** `hmac.compare_digest` throws a `TypeError` if provided strings contain non-ASCII characters. Since Starlette extracts HTTP headers as strings and passes them to authentication middleware, an attacker can crash the server on a per-request basis by sending arbitrary non-ASCII characters (like emojis) in the `x-api-key` header.
+**Prevention:** Always encode user-controlled strings (like HTTP headers or tokens) to bytes using `.encode("utf-8")` before comparing them using cryptographic functions like `hmac.compare_digest`.
