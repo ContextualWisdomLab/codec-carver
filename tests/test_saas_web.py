@@ -186,6 +186,28 @@ class TestSaasWeb(unittest.TestCase):
             {"error": "Invalid target_bytes value. Must be greater than 0."},
         )
 
+    def test_non_ascii_key_does_not_crash(self):
+        import asyncio
+        from starlette.requests import Request
+        import saas_web
+
+        async def run_test():
+            async def mock_call_next(request):
+                return "SUCCESS"
+
+            with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+                scope = {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/shrink",
+                    "headers": [(b"x-api-key", "secret✨".encode("utf-8"))]
+                }
+                req = Request(scope)
+                response = await saas_web.require_api_key(req, mock_call_next)
+                self.assertEqual(response.status_code, 401)
+
+        asyncio.run(run_test())
+
     def test_shrink_media_rejects_missing_filename(self):
         response = saas_web.shrink_media(
             BackgroundTasks(),
