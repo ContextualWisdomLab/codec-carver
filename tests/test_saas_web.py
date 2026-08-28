@@ -1222,6 +1222,13 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
+    @patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret1,secret2"}, clear=True)
+    def test_hmac_non_ascii_api_key_401(self):
+        # Pass headers as bytes to bypass httpx's strict ASCII string check.
+        response = client.get("/jobs/123", headers={b"X-API-Key": "test🌟".encode("utf-8")})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
 
 if __name__ == "__main__":
     unittest.main()

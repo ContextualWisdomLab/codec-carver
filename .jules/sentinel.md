@@ -1,3 +1,8 @@
+## 2026-08-28 - [Sentinel: Unhandled hmac.compare_digest TypeError (DoS)]
+**취약점:** `hmac.compare_digest`에서 발생한 예외가 처리되지 않아 500 Internal Server Error를 유발하고, 이를 통한 서비스 거부(DoS) 공격이 가능함 (CWE-400).
+**학습 내용:** Python의 `hmac.compare_digest`는 ASCII 문자가 아닌 문자가 포함된 문자열을 비교할 때 `TypeError`를 발생시킴. 악의적인 사용자가 X-API-Key 헤더에 비-ASCII 문자를 전송하면 401 에러 대신 애플리케이션의 에러율을 높여 서버 장애를 일으킬 수 있음.
+**예방 조치:** 모든 API 키 문자열 입력을 `utf-8` 바이트로 인코딩한 후 `hmac.compare_digest`로 전달하여 안전하게 비교를 수행하도록 함.
+
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
