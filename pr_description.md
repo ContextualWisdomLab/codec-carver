@@ -1,8 +1,14 @@
-🚨 **Severity:** CRITICAL
-💡 **Vulnerability:** `media_shrinker.py`의 `convert_file` 함수가 `Path.relative_to()`를 해결되지 않은 경로에 직접 적용해, `..` 세그먼트 또는 symlink escape가 루트 경계 검증을 우회할 수 있었습니다.
-🎯 **Impact:** 루트 밖 입력 파일이 변환 대상으로 들어오면 의도하지 않은 파일 읽기 및 출력 경로 계획으로 이어질 수 있습니다.
-🔧 **Fix:** source/root를 한 번만 `resolve()`한 뒤 resolved source가 resolved root 아래인지 검사하고, 실패 시 내부 경로를 노출하지 않는 `MediaShrinkerError`로 중단합니다. 기존 Sentinel 보안 학습 이력은 유지하고 새 path traversal 항목만 추가했습니다.
-✅ **Verification:**
-1. `python3 -m pytest tests/test_security_path_traversal.py -q` → 2 passed.
-2. `python3 -m pytest -q` → 145 passed.
-3. `python3 -m py_compile media_shrinker.py saas_web.py mcp_driver.py job_store.py && python3 -m unittest discover -s tests -v` → 145 tests OK.
+💡 What
+- 대상 바이트(단일 및 일괄) 입력 필드가 비워졌을 때 단순히 에러를 없애는 대신 명시적으로 "This field is required."라는 텍스트 안내와 빨간색 강조를 표시하도록 수정했습니다.
+
+🎯 Why
+- 필수 입력 필드를 사용자가 비웠을 때 오류 메시지가 없으면 스크린 리더 사용자나 일반 사용자 모두 무엇이 문제인지 명확히 알기 어렵기 때문에 인지 부하를 줍니다.
+- 명시적인 텍스트 안내를 통해 빈 입력값 상태임을 즉시 인지하도록 돕기 위함입니다.
+
+📸 Before/After
+- Before: 대용량 파일 변환 폼에서 대상 바이트 입력값을 지우면 힌트 텍스트 영역이 단순히 비워지고 `aria-invalid` 상태도 삭제되어 정상 상태인 것처럼 오해를 일으킴.
+- After: 값을 지우면 "This field is required."가 표시되며 텍스트가 붉게 변하고 `aria-invalid='true'`가 부여되어 시각적, 청각적으로 필수 입력 누락 오류를 명확히 인지하게 함.
+
+♿ Accessibility
+- `aria-invalid` 상태를 `true`로 설정하여 스크린 리더 사용자에게 입력이 유효하지 않음을 명확히 전달합니다.
+- `setCustomValidity`를 이용해 네이티브 HTML 폼 검증과 일치하는 텍스트 오류 메시지를 제공합니다.
