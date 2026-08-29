@@ -787,6 +787,32 @@ class TestApiKeyAuth(unittest.TestCase):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
             self.assertEqual(saas_web.get_configured_api_keys(), [])
 
+    def test_auth_dos_non_ascii_header(self):
+        # We need to test the ASGI middleware directly instead of using TestClient
+        # because TestClient throws a UnicodeEncodeError before the middleware executes
+        # when passing non-ASCII headers.
+        import asyncio
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+
+        async def mock_call_next(request):
+            return JSONResponse(status_code=200, content={"message": "SUCCESS"})
+
+        async def run_test():
+            scope = {
+                'type': 'http',
+                'method': 'POST',
+                'path': '/shrink',
+                'headers': [(b'x-api-key', 'non-ascii-🔥'.encode('utf-8'))],
+            }
+            request = Request(scope)
+            with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "valid-key"}):
+                response = await saas_web.require_api_key(request, mock_call_next)
+                return response
+
+        response = asyncio.run(run_test())
+        self.assertEqual(response.status_code, 401)
+
 
 @unittest.skipUnless(
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
