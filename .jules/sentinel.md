@@ -1,3 +1,9 @@
+## 2024-05-24 - [API 키 비교 500 에러 처리]
+**Vulnerability:** HMAC 문자열 비교에서 non-ASCII 문자가 사용될 경우 500 서버 에러(DoS 가능성)가 발생함.
+**Learning:** 파이썬 hmac.compare_digest에 non-ASCII 문자열을 직접 전달하면 TypeError가 발생함.
+**Prevention:** API 키를 검사할 때 항상 문자열을 UTF-8 바이트로 인코딩한 후 비교해야 함.
+
+
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
