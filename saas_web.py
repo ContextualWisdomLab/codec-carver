@@ -241,7 +241,7 @@ HTML_TEMPLATE = """
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
+                const val = Number(this.value);
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
@@ -281,7 +281,7 @@ HTML_TEMPLATE = """
             });
 
             document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
+                const val = Number(this.value);
                 const preview = document.getElementById('batch_target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
