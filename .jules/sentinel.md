@@ -1,3 +1,7 @@
+## 2026-08-30 - [Sentinel: Unhandled ValueError in API Key Middleware]
+**Vulnerability:** Unhandled TypeError when processing non-ASCII API keys in `X-API-Key` header.
+**Learning:** Python's `hmac.compare_digest` raises a `TypeError` when comparing non-ASCII string arguments. If user input like an API key is passed directly to `compare_digest` without ensuring it is ASCII or encoding it to bytes, an attacker can crash the request process with a 500 server error by providing Unicode characters.
+**Prevention:** Always encode user-provided secrets and configured secrets to bytes (e.g., `.encode('utf-8')`) before passing them to `hmac.compare_digest`.
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.

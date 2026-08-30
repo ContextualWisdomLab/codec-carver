@@ -1222,6 +1222,27 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
+    def test_unicode_api_key_handled_safely(self):
+        import asyncio
+        from fastapi import Request
+        from fastapi.responses import JSONResponse
+
+        class MockCallNext:
+            async def __call__(self, request):
+                return JSONResponse({"status": "ok"})
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "url": "/shrink",
+            "headers": [(b"x-api-key", "안녕".encode("utf-8"))],
+        }
+
+        request = Request(scope)
+        with patch("saas_web.get_configured_api_keys", return_value=["secret1"]):
+            res = asyncio.run(saas_web.require_api_key(request, MockCallNext()))
+            self.assertEqual(res.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()
