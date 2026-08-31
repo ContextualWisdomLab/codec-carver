@@ -228,6 +228,13 @@ HTML_TEMPLATE = """
                     preview.innerText = '';
                     return;
                 }
+                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                    input.setCustomValidity('Please select an audio or video file.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected file is not a supported media type.';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
@@ -330,6 +337,13 @@ HTML_TEMPLATE = """
 
                 let totalSize = 0;
                 for (let i = 0; i < files.length; i++) {
+                    if (files[i].type && !files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) {
+                        input.setCustomValidity('One or more files are not supported media types.');
+                        input.setAttribute('aria-invalid', 'true');
+                        preview.innerText = 'One or more files are not supported media types.';
+                        preview.style.color = '#dc3545';
+                        return;
+                    }
                     totalSize += files[i].size;
                 }
 
