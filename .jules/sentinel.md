@@ -1,3 +1,8 @@
+## 2026-07-28 - [Sentinel: Fix HMAC Type Error DoS]
+**Vulnerability:** Unhandled `TypeError` in `hmac.compare_digest` when comparing non-ASCII characters, leading to Denial of Service (CWE-400 / CWE-20).
+**Learning:** `hmac.compare_digest` only supports ASCII strings or byte-like objects. When passed an arbitrary HTTP header (which might contain non-ASCII characters), it raises a TypeError resulting in an unhandled 500 error.
+**Prevention:** Always encode strings to bytes (e.g., `.encode('utf-8')`) before passing them to `hmac.compare_digest` when validating arbitrary user inputs.
+
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
