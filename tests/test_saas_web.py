@@ -31,6 +31,34 @@ if _HAS_FASTAPI:
 @unittest.skipUnless(
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
+class TestApiKeyAuthDoSMitigation(unittest.IsolatedAsyncioTestCase):
+    async def test_non_ascii_header_does_not_crash(self):
+        from fastapi import Request
+        import saas_web
+
+        # Setup a mock request with a non-ASCII API key header
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/shrink",
+            "headers": [(b"x-api-key", "wrong-key-ö".encode("utf-8"))],
+        }
+        request = Request(scope)
+
+        async def mock_call_next(request):
+            return "SUCCESS"
+
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = await saas_web.require_api_key(request, mock_call_next)
+
+        self.assertEqual(response.status_code, 401)
+        body = json.loads(response.body.decode('utf-8'))
+        self.assertEqual(body["error"], "Invalid or missing API key")
+
+
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
 class TestSaasWeb(unittest.TestCase):
     def test_get_ui(self):
         response = client.get("/")
