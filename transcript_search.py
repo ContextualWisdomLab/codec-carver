@@ -242,7 +242,9 @@ class TranscriptIndex:
             if not postings:
                 return []
             candidates = (
-                set(postings) if candidates is None else candidates & postings
+                # ⚡ Bolt: No need for set(postings) defensive copy.
+                # Bitwise AND creates a new set inherently.
+                postings if candidates is None else candidates & postings
             )
             if not candidates:
                 return []
