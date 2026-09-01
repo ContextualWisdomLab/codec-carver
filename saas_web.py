@@ -257,9 +257,9 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
-                    preview.innerText = '';
-                    this.setCustomValidity('');
-                    this.removeAttribute('aria-invalid');
+                    preview.innerHTML = '<span class="required-star">This field is required.</span>';
+                    this.setCustomValidity('This field is required.');
+                    this.setAttribute('aria-invalid', 'true');
                     return;
                 }
 
@@ -291,9 +291,9 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
-                    preview.innerText = '';
-                    this.setCustomValidity('');
-                    this.removeAttribute('aria-invalid');
+                    preview.innerHTML = '<span class="required-star">This field is required.</span>';
+                    this.setCustomValidity('This field is required.');
+                    this.setAttribute('aria-invalid', 'true');
                     return;
                 }
 
