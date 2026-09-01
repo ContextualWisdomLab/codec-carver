@@ -707,6 +707,23 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
 
+    def test_non_ascii_key_rejected_safely(self):
+        import asyncio
+        from fastapi import Request
+        from saas_web import require_api_key
+
+        scope = {'type': 'http', 'method': 'POST', 'path': '/shrink', 'headers': [(b'x-api-key', '안녕'.encode('utf-8'))]}
+        request = Request(scope)
+
+        async def call_next(req):
+            pass
+
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = asyncio.run(require_api_key(request, call_next))
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(json.loads(response.body), {"error": "Invalid or missing API key"})
+
     def test_wrong_key_rejected(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
             response = self._post_shrink(headers={"X-API-Key": "wrong-key"})
