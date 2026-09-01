@@ -22,7 +22,7 @@ class TestJobStoreNamingContract(unittest.TestCase):
         self.db_path = os.path.join(self._tmp.name, "jobs.sqlite3")
 
     def test_new_store_uses_semantic_table_columns_and_record_keys(self) -> None:
-        """Require qualified names in both persisted and Python-owned records."""
+        """Require qualified names in persisted and canonical Python records."""
 
         store = JobStore(self.db_path)
         store.create("job-1", temp_dir="/tmp/job-1", now=NOW)
@@ -48,7 +48,7 @@ class TestJobStoreNamingContract(unittest.TestCase):
         self.assertNotIn("status", column_names)
         self.assertNotIn("error", column_names)
 
-        job_record = store.get("job-1")
+        job_record = store.get_job_record("job-1")
         self.assertEqual(job_record["job_id"], "job-1")
         self.assertEqual(job_record["job_status"], "queued")
         self.assertIsNone(job_record["error_message"])
@@ -94,7 +94,7 @@ class TestJobStoreNamingContract(unittest.TestCase):
             )
 
         store = JobStore(self.db_path)
-        migrated_record = store.get("legacy-job")
+        migrated_record = store.get_job_record("legacy-job")
 
         self.assertEqual(migrated_record["job_id"], "legacy-job")
         self.assertEqual(migrated_record["job_status"], "failed")
@@ -127,9 +127,28 @@ class TestJobStoreNamingContract(unittest.TestCase):
             error_message="processing failed",
         )
 
-        job_record = store.get("job-1")
+        job_record = store.get_job_record("job-1")
         self.assertEqual(job_record["job_status"], "failed")
         self.assertEqual(job_record["error_message"], "processing failed")
+
+    def test_legacy_python_record_adapter_is_explicit_and_non_authoritative(self) -> None:
+        """Preserve old web-facing dict keys only through compatibility methods."""
+
+        store = JobStore(self.db_path)
+        store.create("job-1", temp_dir="/tmp/job-1", now=NOW)
+
+        legacy_record = store.get("job-1")
+        self.assertEqual(legacy_record["id"], "job-1")
+        self.assertEqual(legacy_record["status"], "queued")
+        self.assertIsNone(legacy_record["error"])
+        self.assertNotIn("job_id", legacy_record)
+        self.assertNotIn("job_status", legacy_record)
+        self.assertNotIn("error_message", legacy_record)
+
+        self.assertEqual(
+            store.list_jobs(status="queued"),
+            [legacy_record],
+        )
 
 
 if __name__ == "__main__":
