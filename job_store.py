@@ -1,26 +1,18 @@
 """SQLite-backed durable job store for async/worker job tracking.
 
-The async web layer currently tracks jobs in an in-memory dict, which
-loses all state on restart and cannot be shared across processes. This
-module provides :class:`JobStore`, a small stdlib-only persistence layer
-(``sqlite3`` with WAL journaling) that any async or worker process can
-use so jobs survive restarts and are visible across processes.
+The FastAPI layer uses this store for restart-safe asynchronous job state.
+The store is stdlib-only, uses SQLite WAL journaling, and keeps each operation
+on a short-lived connection so independent web/worker processes can share the
+same database file.
 
 Design notes:
 
-- Every public method opens a short-lived connection guarded by a lock,
-  so a single ``JobStore`` instance is safe to share across threads.
-- WAL mode allows concurrent readers alongside a writer, which suits a
-  web process polling job status while a worker updates it.
-- Callers pass ``now`` (a :class:`datetime.datetime`) explicitly; the
-  store never calls ``datetime.now()`` itself, keeping tests
-  deterministic.
-
-Example:
-    >>> from datetime import datetime, timezone
-    >>> store = JobStore("/tmp/jobs.db")  # doctest: +SKIP
-    >>> store.create("job-1", temp_dir="/tmp/job-1",
-    ...              now=datetime.now(timezone.utc))  # doctest: +SKIP
+- Every public operation is serialized per ``JobStore`` instance; SQLite
+  coordinates independent processes.
+- WAL mode allows concurrent readers while a writer updates durable job state.
+- Callers pass ``now`` explicitly; the store never reads wall-clock time itself.
+- Historical ``jobs(id, status, error, ...)`` databases are migrated in place to
+  the semantic ``job_record(job_id, job_status, error_message, ...)`` schema.
 """
 
 from __future__ import annotations
@@ -34,27 +26,27 @@ from datetime import datetime
 #: Allowed job lifecycle states.
 VALID_STATUSES = frozenset({"queued", "processing", "done", "failed"})
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS jobs (
-    id          TEXT PRIMARY KEY,
-    status      TEXT NOT NULL,
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL,
-    output_path TEXT,
-    output_name TEXT,
-    error       TEXT,
-    temp_dir    TEXT
+_JOB_RECORD_SCHEMA = """
+CREATE TABLE IF NOT EXISTS job_record (
+    job_id        TEXT PRIMARY KEY,
+    job_status    TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    output_path   TEXT,
+    output_name   TEXT,
+    error_message TEXT,
+    temp_dir      TEXT
 )
 """
 
-_COLUMNS = (
-    "id",
-    "status",
+_JOB_RECORD_COLUMNS = (
+    "job_id",
+    "job_status",
     "created_at",
     "updated_at",
     "output_path",
     "output_name",
-    "error",
+    "error_message",
     "temp_dir",
 )
 
@@ -66,27 +58,19 @@ class DuplicateJobError(ValueError):
 class JobStore:
     """Durable, thread-safe job store backed by a SQLite database file.
 
-    Multiple processes may open independent ``JobStore`` instances on the
-    same ``db_path``; SQLite's file locking plus WAL mode keeps their
-    reads and writes consistent. Within one process, a single instance
-    may be shared freely across threads.
+    Multiple processes may open independent ``JobStore`` instances on the same
+    ``db_path``. SQLite file locking plus WAL mode keeps reads and writes
+    consistent; within one process, one instance may be shared across threads.
 
     Args:
-        db_path: Filesystem path of the SQLite database. Created (along
-            with the schema) if it does not exist. ``":memory:"`` is not
-            supported because each operation opens a fresh connection,
-            which would discard an in-memory database every time.
+        db_path: Filesystem path of the SQLite database. Created together with
+            the semantic schema when absent. ``":memory:"`` is unsupported
+            because each operation opens a fresh connection.
     """
 
     def __init__(self, db_path: str) -> None:
-        """Initialize the store and create the schema if needed.
+        """Initialize the durable store and migrate historical schema names."""
 
-        Args:
-            db_path: Path to the SQLite database file.
-
-        Raises:
-            ValueError: If ``db_path`` is ``":memory:"``.
-        """
         if db_path == ":memory:":
             raise ValueError(
                 "JobStore requires a file path; ':memory:' databases do "
@@ -94,76 +78,133 @@ class JobStore:
             )
         self._db_path = str(db_path)
         self._lock = threading.Lock()
-        with self._connect() as conn:
-            conn.execute(_SCHEMA)
+        with self._connect() as connection:
+            self._ensure_job_record_schema(connection)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        """Open a new WAL-mode connection to the underlying database.
+        """Open a short-lived WAL-mode connection with rollback on failure."""
 
-        Yields:
-            A short-lived ``sqlite3.Connection`` with WAL journaling and
-            a row factory that yields ``sqlite3.Row`` objects.
-        """
-        conn = sqlite3.connect(self._db_path, timeout=30.0)
+        connection = sqlite3.connect(self._db_path, timeout=30.0)
         try:
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            yield conn
-            conn.commit()
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA journal_mode=WAL")
+            yield connection
+        except BaseException:
+            connection.rollback()
+            raise
+        else:
+            connection.commit()
         finally:
-            conn.close()
+            connection.close()
 
     @staticmethod
-    def _validate_status(status: str) -> None:
-        """Reject statuses outside the allowed lifecycle set.
+    def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+        """Return whether ``table_name`` exists in the current SQLite schema."""
 
-        Args:
-            status: Candidate status string.
+        return (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table_name,),
+            ).fetchone()
+            is not None
+        )
 
-        Raises:
-            ValueError: If ``status`` is not one of ``VALID_STATUSES``.
+    @staticmethod
+    def _job_record_column_names(connection: sqlite3.Connection) -> set[str]:
+        """Return physical columns currently present on ``job_record``."""
+
+        return {
+            str(column_row[1])
+            for column_row in connection.execute("PRAGMA table_info(job_record)")
+        }
+
+    def _ensure_job_record_schema(self, connection: sqlite3.Connection) -> None:
+        """Create or atomically migrate the durable job-record schema.
+
+        ``BEGIN IMMEDIATE`` serializes competing process startup writers. The
+        migration uses SQLite metadata renames only, preserving rows and the
+        primary-key index without copy/delete backfill. If both historical and
+        semantic tables exist simultaneously, initialization fails closed
+        rather than guessing which table owns durable state.
         """
-        if status not in VALID_STATUSES:
-            allowed = ", ".join(sorted(VALID_STATUSES))
-            raise ValueError(
-                f"invalid status {status!r}; must be one of: {allowed}"
+
+        connection.execute("BEGIN IMMEDIATE")
+        historical_table_exists = self._table_exists(connection, "jobs")
+        semantic_table_exists = self._table_exists(connection, "job_record")
+        if historical_table_exists and semantic_table_exists:
+            raise RuntimeError(
+                "ambiguous durable job schema: both jobs and job_record exist"
+            )
+
+        if historical_table_exists:
+            connection.execute("ALTER TABLE jobs RENAME TO job_record")
+            semantic_table_exists = True
+
+        if not semantic_table_exists:
+            connection.execute(_JOB_RECORD_SCHEMA)
+            return
+
+        column_names = self._job_record_column_names(connection)
+        legacy_column_renames = (
+            ("id", "job_id"),
+            ("status", "job_status"),
+            ("error", "error_message"),
+        )
+        for historical_column_name, semantic_column_name in legacy_column_renames:
+            if (
+                historical_column_name in column_names
+                and semantic_column_name in column_names
+            ):
+                raise RuntimeError(
+                    "ambiguous durable job schema: both "
+                    f"{historical_column_name} and {semantic_column_name} exist"
+                )
+            if historical_column_name in column_names:
+                connection.execute(
+                    "ALTER TABLE job_record RENAME COLUMN "
+                    f"{historical_column_name} TO {semantic_column_name}"
+                )
+                column_names.remove(historical_column_name)
+                column_names.add(semantic_column_name)
+
+        required_column_names = set(_JOB_RECORD_COLUMNS)
+        if column_names != required_column_names:
+            missing_column_names = sorted(required_column_names - column_names)
+            unexpected_column_names = sorted(column_names - required_column_names)
+            raise RuntimeError(
+                "unsupported durable job schema after naming migration; "
+                f"missing={missing_column_names!r}, "
+                f"unexpected={unexpected_column_names!r}"
             )
 
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> dict:
-        """Convert a database row into a plain job dict.
+    def _validate_job_status(job_status: str) -> None:
+        """Reject job lifecycle states outside the allowed set."""
 
-        Args:
-            row: A ``sqlite3.Row`` from the ``jobs`` table.
+        if job_status not in VALID_STATUSES:
+            allowed_job_statuses = ", ".join(sorted(VALID_STATUSES))
+            raise ValueError(
+                f"invalid job status {job_status!r}; must be one of: "
+                f"{allowed_job_statuses}"
+            )
 
-        Returns:
-            A dict with the keys ``id``, ``status``, ``created_at``,
-            ``updated_at``, ``output_path``, ``output_name``, ``error``,
-            and ``temp_dir``.
-        """
-        return {key: row[key] for key in _COLUMNS}
+    @staticmethod
+    def _row_to_job_record(row: sqlite3.Row) -> dict:
+        """Convert a SQLite row to the organization-owned semantic job record."""
+
+        return {column_name: row[column_name] for column_name in _JOB_RECORD_COLUMNS}
 
     def create(self, job_id: str, *, temp_dir: str, now: datetime) -> None:
-        """Insert a new job in the ``queued`` state.
+        """Insert a new durable job record in the ``queued`` state."""
 
-        Args:
-            job_id: Unique identifier for the job.
-            temp_dir: Working directory associated with the job (stored
-                so a cleanup pass can remove it later).
-            now: Timestamp recorded as both ``created_at`` and
-                ``updated_at`` (ISO 8601 via ``datetime.isoformat()``).
-
-        Raises:
-            DuplicateJobError: If a job with ``job_id`` already exists.
-                (Subclass of ``ValueError``, so callers may catch either.)
-        """
         timestamp = now.isoformat()
-        with self._lock, self._connect() as conn:
+        with self._lock, self._connect() as connection:
             try:
-                conn.execute(
-                    "INSERT INTO jobs (id, status, created_at, updated_at,"
-                    " temp_dir) VALUES (?, 'queued', ?, ?, ?)",
+                connection.execute(
+                    "INSERT INTO job_record "
+                    "(job_id, job_status, created_at, updated_at, temp_dir) "
+                    "VALUES (?, 'queued', ?, ?, ?)",
                     (job_id, timestamp, timestamp, temp_dir),
                 )
             except sqlite3.IntegrityError as exc:
@@ -174,98 +215,66 @@ class JobStore:
     def set_status(
         self,
         job_id: str,
-        status: str,
+        job_status: str,
         *,
         now: datetime,
         output_path: str | None = None,
         output_name: str | None = None,
-        error: str | None = None,
+        error_message: str | None = None,
     ) -> None:
-        """Update a job's status, timestamp, and optional result fields.
+        """Update a job's lifecycle state, timestamp, and optional result data."""
 
-        Only the fields passed as non-``None`` keyword arguments are
-        overwritten; previously stored values for ``output_path``,
-        ``output_name``, and ``error`` are preserved otherwise.
-
-        Args:
-            job_id: Identifier of the job to update.
-            status: New status; one of ``queued``, ``processing``,
-                ``done``, or ``failed``.
-            now: Timestamp recorded as ``updated_at``.
-            output_path: Path of the finished output file, if any.
-            output_name: Client-facing download name, if any.
-            error: Human-readable failure message, if any.
-
-        Raises:
-            ValueError: If ``status`` is not allowed.
-            KeyError: If no job with ``job_id`` exists.
-        """
-        self._validate_status(status)
-        with self._lock, self._connect() as conn:
-            cursor = conn.execute(
-                "UPDATE jobs SET status = ?, updated_at = ?,"
+        self._validate_job_status(job_status)
+        with self._lock, self._connect() as connection:
+            update_cursor = connection.execute(
+                "UPDATE job_record SET job_status = ?, updated_at = ?,"
                 " output_path = COALESCE(?, output_path),"
                 " output_name = COALESCE(?, output_name),"
-                " error = COALESCE(?, error)"
-                " WHERE id = ?",
-                (status, now.isoformat(), output_path, output_name,
-                 error, job_id),
+                " error_message = COALESCE(?, error_message)"
+                " WHERE job_id = ?",
+                (
+                    job_status,
+                    now.isoformat(),
+                    output_path,
+                    output_name,
+                    error_message,
+                    job_id,
+                ),
             )
-            if cursor.rowcount == 0:
+            if update_cursor.rowcount == 0:
                 raise KeyError(f"job {job_id!r} does not exist")
 
     def get(self, job_id: str) -> dict | None:
-        """Fetch a single job by id.
+        """Fetch one semantic durable job record by ``job_id``."""
 
-        Args:
-            job_id: Identifier of the job to look up.
-
-        Returns:
-            The job as a dict (see :meth:`_row_to_dict` for keys), or
-            ``None`` if no such job exists.
-        """
-        with self._lock, self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM jobs WHERE id = ?", (job_id,)
+        with self._lock, self._connect() as connection:
+            job_row = connection.execute(
+                "SELECT * FROM job_record WHERE job_id = ?", (job_id,)
             ).fetchone()
-        return self._row_to_dict(row) if row is not None else None
+        return self._row_to_job_record(job_row) if job_row is not None else None
 
-    def list_jobs(self, status: str | None = None) -> list[dict]:
-        """List jobs, optionally filtered by status.
+    def list_jobs(self, job_status: str | None = None) -> list[dict]:
+        """List durable job records, optionally filtered by ``job_status``."""
 
-        Args:
-            status: If given, only jobs in this state are returned; must
-                be one of the allowed statuses.
-
-        Returns:
-            Jobs as dicts, ordered by ``created_at`` then id for a
-            stable listing.
-
-        Raises:
-            ValueError: If ``status`` is given but not allowed.
-        """
-        with self._lock, self._connect() as conn:
-            if status is None:
-                rows = conn.execute(
-                    "SELECT * FROM jobs ORDER BY created_at, id"
+        with self._lock, self._connect() as connection:
+            if job_status is None:
+                job_rows = connection.execute(
+                    "SELECT * FROM job_record ORDER BY created_at, job_id"
                 ).fetchall()
             else:
-                self._validate_status(status)
-                rows = conn.execute(
-                    "SELECT * FROM jobs WHERE status = ?"
-                    " ORDER BY created_at, id",
-                    (status,),
+                self._validate_job_status(job_status)
+                job_rows = connection.execute(
+                    "SELECT * FROM job_record WHERE job_status = ?"
+                    " ORDER BY created_at, job_id",
+                    (job_status,),
                 ).fetchall()
-        return [self._row_to_dict(row) for row in rows]
+        return [self._row_to_job_record(job_row) for job_row in job_rows]
 
     def delete(self, job_id: str) -> None:
-        """Remove a job record if it exists.
+        """Delete the durable job record for ``job_id`` when present."""
 
-        Deleting an unknown id is a no-op, so cleanup passes can call
-        this without checking existence first.
-
-        Args:
-            job_id: Identifier of the job to remove.
-        """
-        with self._lock, self._connect() as conn:
-            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "DELETE FROM job_record WHERE job_id = ?",
+                (job_id,),
+            )
