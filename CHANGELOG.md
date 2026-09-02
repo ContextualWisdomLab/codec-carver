@@ -9,7 +9,7 @@
 - transcript retrieval의 token admission·relevance ranking·tie policy가 검증되기 전까지 fail-closed하도록 하는 retrieval evidence boundary와 RCA 문서를 추가했습니다.
 
 ### Changed
-- 순수 영숫자 토큰은 정규식 호출을 건너뛰되 다국어·문장부호 토큰화 결과는 기존 의미와 동일하게 유지합니다. 근거, 한계, APA 7 참고문헌은 [`docs/doctoring/token-fast-path-equivalence.md`](docs/doctoring/token-fast-path-equivalence.md)에 기록했습니다.
+- 과거 순수 영숫자 token fast-path equivalence 증거는 구현 동등성 기록으로만 보존하고, transcript summarization/search의 production decision 근거로는 폐기했습니다. [`docs/doctoring/token-fast-path-equivalence.md`](docs/doctoring/token-fast-path-equivalence.md)에 superseded 상태와 범위를 기록했습니다.
 - 검증되지 않은 stopword/빈도 점수/고정 5문장/위치 tie-break 기반 transcript summarizer를 제거했습니다. 비어 있지 않은 입력은 검증된 selection/evaluation contract가 존재할 때까지 `SummarizationPolicyUnavailable`로 fail closed하며, `max_sentences`는 기본값 없는 호환 인자만 유지합니다.
 - transcript search의 Unicode-regex tokenization, summed term-frequency `score`, result ranking 및 recording/time tie-break를 production decision authority에서 제거했습니다. 원본 segment 저장/JSON loading은 유지하되 비어 있지 않은 tokenization/search는 검증된 retrieval/evaluation contract가 존재할 때까지 `SearchPolicyUnavailable`로 fail closed합니다.
 
