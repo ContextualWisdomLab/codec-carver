@@ -1225,3 +1225,28 @@ class UploadValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
+class TestApiKeyAuthAsync(unittest.IsolatedAsyncioTestCase):
+    async def test_non_ascii_key_rejected_safely(self):
+        from starlette.requests import Request
+        import saas_web
+        import json
+
+        async def mock_call_next(request):
+            return "SUCCESS"
+
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": "/shrink",
+                "headers": [(b"x-api-key", "non-ascii-é".encode("utf-8"))],
+            }
+            request = Request(scope)
+            response = await saas_web.require_api_key(request, mock_call_next)
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(json.loads(response.body), {"error": "Invalid or missing API key"})
