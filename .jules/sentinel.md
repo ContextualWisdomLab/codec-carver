@@ -1,3 +1,8 @@
+## 2025-02-20 - hmac.compare_digest 500 에러
+**Vulnerability:** API 키와 같은 HTTP 헤더 값에 Non-ASCII 문자가 포함될 경우 `hmac.compare_digest(str, str)`가 `TypeError`를 발생시켜 500 내부 서버 오류로 이어집니다 (DoS 위험).
+**Learning:** Python의 `hmac.compare_digest`는 ASCII 문자열이나 바이트(bytes) 비교만 지원합니다. Non-ASCII 문자열은 표준 에러 처리 로직을 우회하는 처리되지 않은 예외를 발생시킵니다.
+**Prevention:** `hmac.compare_digest`와 같은 암호학적 비교를 수행하기 전에 문자열 입력을 항상 바이트(예: `.encode('utf-8')`)로 인코딩해야 합니다.
+
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
