@@ -4,7 +4,7 @@ Python CLI for carving long recordings into metadata-preserved FLAC/Opus files.
 
 For the long-recording curation contract (TMK/VAD evidence precedence,
 provenance, and late-TMK selective reconciliation), see
-[`docs/architecture/segmentation-reconciliation.md`](docs/architecture/segmentation-reconciliation.md).
+[`docs/architecture/segmentation-reconciliation.md`](architecture/segmentation-reconciliation.md).
 
 Convert supported audio recordings to FLAC or, only when needed to fit each output under a target size, high-bitrate Opus. The tool preserves originals and writes generated files to a separate output directory. Each generated output is kept below the configured size target and below four hours; longer sources are split at long silence intervals when possible.
 
@@ -474,7 +474,7 @@ library.
 
 The importable API is `audio_library.AudioLibrary`. The architecture, evidence
 precedence, filename contract, and primary research/standards sources are in
-[`docs/architecture/gpu-transcription-rust-backend.md`](docs/architecture/gpu-transcription-rust-backend.md).
+[`docs/architecture/gpu-transcription-rust-backend.md`](architecture/gpu-transcription-rust-backend.md).
 
 ### Persistent macOS GPU runtime
 
