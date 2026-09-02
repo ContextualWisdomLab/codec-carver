@@ -42,7 +42,7 @@ Architecture reference:
 
 ## Documentation
 
-- [Repository README](../README.md)
+- [Repository README](https://github.com/ContextualWisdomLab/codec-carver/blob/main/README.md)
 - [Advanced operations reference](advanced-operations.md)
 - [Ask DeepWiki](https://deepwiki.com/ContextualWisdomLab/codec-carver)
 
@@ -54,4 +54,4 @@ The package metadata currently identifies source version `0.1.0`. Treat GitHub R
 
 ## License
 
-Codec Carver source declares the MIT license in `pyproject.toml`; this branch completes that existing source-license lineage with the root [MIT LICENSE](../LICENSE). The MIT grant applies to Codec Carver-authored source and documentation. External tools and dependencies—including `ffmpeg`/`ffprobe`, Python/Rust packages, model runtimes, model weights, and provider services—retain their own licenses and terms and are not relicensed by this repository.
+Codec Carver source declares the MIT license in `pyproject.toml`; this branch completes that existing source-license lineage with the root [MIT LICENSE](https://github.com/ContextualWisdomLab/codec-carver/blob/main/LICENSE). The MIT grant applies to Codec Carver-authored source and documentation. External tools and dependencies—including `ffmpeg`/`ffprobe`, Python/Rust packages, model runtimes, model weights, and provider services—retain their own licenses and terms and are not relicensed by this repository.
