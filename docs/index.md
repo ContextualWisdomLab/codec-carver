@@ -29,7 +29,7 @@ docker build -t codec-carver .
 docker run -p 8000:8000 codec-carver
 ```
 
-See the repository README for configuration, duration splitting, metadata tagging, transcription, and the GPU/Rust library-curation workflow.
+Use the repository README for the product overview and common workflow. Detailed configuration, duration-splitting controls, metadata tagging, transcription, iCloud/TMK handling, and GPU/Rust library-curation procedures are preserved in the [advanced operations reference](advanced-operations.md).
 
 ## Architecture and operating model
 
@@ -38,12 +38,15 @@ The CLI owns conversion planning and execution. The library-curation path combin
 Architecture reference:
 
 - [Segmentation and reconciliation](architecture/segmentation-reconciliation.md)
+- [GPU transcription / Rust backend](architecture/gpu-transcription-rust-backend.md)
 
 ## Documentation
 
-Start with the [repository README](../README.md), then follow the architecture and doctoring material under `docs/` for specific operational and safety contracts. DeepWiki provides an additional navigable view of the repository:
-
+- [Repository README](../README.md)
+- [Advanced operations reference](advanced-operations.md)
 - [Ask DeepWiki](https://deepwiki.com/ContextualWisdomLab/codec-carver)
+
+Follow the architecture and doctoring material under `docs/` for specific operational and safety contracts.
 
 ## Status and verification
 
