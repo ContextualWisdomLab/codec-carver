@@ -45,6 +45,10 @@ Start with the [repository README](../README.md), then follow the architecture a
 
 - [Ask DeepWiki](https://deepwiki.com/ContextualWisdomLab/codec-carver)
 
-## Releases and verification
+## Status and verification
 
-Use GitHub Releases and the repository's protected-branch history as the source of truth for shipped versions. A documentation source commit is not, by itself, evidence that a GitHub Pages deployment is live; publication should be verified from the repository's live Pages state before treating this page as a deployed site.
+The package metadata currently identifies source version `0.1.0`. Treat GitHub Releases and protected-branch history as the authority for shipped versions and release evidence; a source version or documentation commit alone is not a release. Likewise, this `docs/index.md` file is only a Pages source prerequisite until repository settings, deployment, and the live HTTPS page are independently verified.
+
+## License
+
+Codec Carver source declares the MIT license in `pyproject.toml`; this branch completes that existing source-license lineage with the root [MIT LICENSE](../LICENSE). The MIT grant applies to Codec Carver-authored source and documentation. External tools and dependencies—including `ffmpeg`/`ffprobe`, Python/Rust packages, model runtimes, model weights, and provider services—retain their own licenses and terms and are not relicensed by this repository.
