@@ -4,7 +4,7 @@
 
 Codec Carver does not own an inferred transcript-importance model by default. Automatic removal, ranking, or prioritization of transcript content is disabled until a validated selector and evaluation design are adopted through review.
 
-`summary.py` is therefore an evidence boundary rather than a hidden quality model:
+`summarize.py` is therefore an evidence boundary rather than a hidden quality model:
 
 - empty input returns an empty `Summary` without selection;
 - non-empty text or segment input raises `SummarizationPolicyUnavailable`;
