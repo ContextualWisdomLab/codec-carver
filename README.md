@@ -133,7 +133,6 @@ Python owns the user-facing orchestration and optional model workflows. The Rust
 - [Public documentation landing](docs/index.md) — product, architecture, safety, and licensing navigation.
 - [Segmentation reconciliation](docs/architecture/segmentation-reconciliation.md) — TMK/VAD evidence precedence and late-evidence reconciliation.
 - [GPU transcription + Rust backend](docs/architecture/gpu-transcription-rust-backend.md) — advanced library architecture and evidence boundary.
-- [ADR index](docs/adr/README.md) — accepted architecture decisions once the ADR documentation lane integrates.
 - [FFmpeg commercial-license blocker #513](https://github.com/ContextualWisdomLab/codec-carver/issues/513) — required codec/probe replacement boundary.
 - [GitHub Releases](https://github.com/ContextualWisdomLab/codec-carver/releases) — immutable release evidence when a release exists.
 
