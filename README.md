@@ -43,11 +43,13 @@ On Windows, activate `.venv\Scripts\activate` instead.
 
 This installs the repository's Python source and declared runtime dependencies. It does **not** make an external codec binary or optional model profile commercially approved.
 
-Run the source-level verification suite with:
+Run the source-level checks that mirror the Python CI entry points:
 
 ```bash
-python3 -m unittest discover -s tests
-python3 -m py_compile media_shrinker.py
+python -m py_compile \
+  media_shrinker.py config_file.py presets.py saas_web.py mcp_driver.py job_store.py
+python -m unittest discover -s tests -v
+codec-carver --help
 ```
 
 ## CLI workflow
@@ -66,20 +68,16 @@ Configuration can be stored in `.codec-carver.json`; explicit CLI options overri
 
 ## Web and MCP surfaces
 
-The repository exposes optional integration surfaces through package extras:
-
-```bash
-python -m pip install -e ".[web]"
-python -m pip install -e ".[mcp]"
-```
+The base package metadata already declares the dependencies needed by the current web and MCP entry points because CI imports and tests those surfaces. The `[web]` and `[mcp]` extras remain compatibility/grouping aliases rather than prerequisites that unlock otherwise-missing dependencies.
 
 The web surface provides the upload-oriented application boundary, while the MCP surface lets an authorized host call Codec Carver capabilities without importing private implementation modules. These adapters do not change the underlying source/mutation or third-party license boundaries.
 
 ## Audio-library workflow
 
-`codec-carver-library` is the higher-level curation surface for large recording collections. It separates evidence collection from mutation:
+`codec-carver-library` is the higher-level curation surface for large recording collections. It requires the repository Rust backend in addition to the Python editable install. Build that backend first, then keep inventory/planning separate from mutation:
 
 ```bash
+cargo build --release --manifest-path rust-core/Cargo.toml
 codec-carver-library /path/to/recordings inventory
 codec-carver-library /path/to/recordings plan
 codec-carver-library /path/to/recordings apply          # validation only
