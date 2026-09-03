@@ -2,8 +2,14 @@ name: fuzz
 
 on:
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
   schedule:
     # Nightly deeper run (10 minutes/target) at 03:17 UTC.
     - cron: "17 3 * * *"
