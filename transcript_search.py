@@ -241,8 +241,9 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
+            # No need to copy postings into a set first, & operator returns a new set
             candidates = (
-                set(postings) if candidates is None else candidates & postings
+                postings if candidates is None else candidates & postings
             )
             if not candidates:
                 return []

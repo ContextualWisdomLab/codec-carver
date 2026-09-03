@@ -67,3 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2024-09-03 - Avoid Redundant Set Allocations for Bitwise Intersections
+**Learning:** When iteratively calculating set intersections in Python using the bitwise AND operator (`&`), creating an initial defensive copy of the source set (e.g., `set(postings)`) is an anti-pattern. The `&` operator inherently returns a new set, making the initial O(N) allocation redundant and a measurable performance bottleneck in hot paths.
+**Action:** Always assign the initial set directly without wrapping it in `set()`. Let the `&` operator implicitly handle the creation of the new set during the first intersection operation.
