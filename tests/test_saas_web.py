@@ -717,7 +717,7 @@ class TestApiKeyAuth(unittest.TestCase):
 
     def test_non_ascii_key_handled_gracefully(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            response = self._post_shrink(headers={"X-API-Key": "안녕"})
+            response = self._post_shrink(headers={"X-API-Key": "안녕".encode("utf-8")})
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
