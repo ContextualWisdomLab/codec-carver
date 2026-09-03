@@ -1,3 +1,8 @@
+## 2026-09-04 - hmac.compare_digest 500 Error and ASGI header bounds
+**Vulnerability:** HTTP headers mapped as Latin-1 by ASGI frameworks (e.g. Starlette) cause type exceptions and 500 internal server errors when Python's `hmac.compare_digest` runs against UTF-8 configured bytes.
+**Learning:** The raw ASGI bytes containing Unicode must be correctly processed, or missing duplicate headers properly caught, to prevent unhandled decoding and Dos exceptions.
+**Prevention:** Always compare UTF-8 encoded bytes for strings in `hmac.compare_digest`, mapping them safely with fallback encoding, and handle explicit header iteration.
+
 ## 2025-02-20 - hmac.compare_digest 500 에러
 **Vulnerability:** API 키와 같은 HTTP 헤더 값에 Non-ASCII 문자가 포함될 경우 `hmac.compare_digest(str, str)`가 `TypeError`를 발생시켜 500 내부 서버 오류로 이어집니다 (DoS 위험).
 **Learning:** Python의 `hmac.compare_digest`는 ASCII 문자열이나 바이트(bytes) 비교만 지원합니다. Non-ASCII 문자열은 표준 에러 처리 로직을 우회하는 처리되지 않은 예외를 발생시킵니다.
