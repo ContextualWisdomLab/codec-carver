@@ -83,6 +83,7 @@ async def limit_request_size(request: Request, call_next):
     except RequestTooLarge:
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
+
 def get_configured_api_keys():
     """Return the API keys configured via the CODEC_CARVER_API_KEYS env var.
 
@@ -98,26 +99,36 @@ def get_configured_api_keys():
     return [key.strip() for key in raw.split(",") if key.strip()]
 
 
+def _raw_api_key_header(request: Request) -> bytes | None:
+    """Return the sole raw X-API-Key value, or None for missing/duplicate input."""
+
+    values = [
+        value
+        for name, value in request.scope.get("headers", ())
+        if name.lower() == b"x-api-key"
+    ]
+    if len(values) != 1:
+        return None
+    return values[0]
+
+
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
     """Enforce opt-in API-key authentication on all endpoints except GET /.
 
     When one or more keys are configured via CODEC_CARVER_API_KEYS, every
-    request other than GET / (the upload UI page) must carry an X-API-Key
-    header matching a configured key; comparison uses hmac.compare_digest to
-    stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    request other than GET / (the upload UI page) must carry exactly one raw
+    X-API-Key header matching a configured UTF-8 key. Comparison uses
+    hmac.compare_digest on bytes so Unicode credentials survive the ASGI header
+    boundary without a Latin-1 round-trip. Missing or duplicated credentials
+    fail closed with a 401 and no key material is echoed. When no keys are
+    configured, all requests pass through unchanged.
     """
 
     configured_keys = get_configured_api_keys()
     if configured_keys and not (request.method == "GET" and request.url.path == "/"):
-        provided_key = request.headers.get("x-api-key", "")
-        try:
-            provided_bytes = provided_key.encode("latin-1")
-        except UnicodeEncodeError:
-            provided_bytes = provided_key.encode("utf-8")
-        if not any(
+        provided_bytes = _raw_api_key_header(request)
+        if provided_bytes is None or not any(
             hmac.compare_digest(provided_bytes, key.encode("utf-8"))
             for key in configured_keys
         ):
