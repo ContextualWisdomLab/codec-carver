@@ -113,8 +113,12 @@ async def require_api_key(request: Request, call_next):
     configured_keys = get_configured_api_keys()
     if configured_keys and not (request.method == "GET" and request.url.path == "/"):
         provided_key = request.headers.get("x-api-key", "")
+        try:
+            provided_bytes = provided_key.encode("latin-1")
+        except UnicodeEncodeError:
+            provided_bytes = provided_key.encode("utf-8")
         if not any(
-            hmac.compare_digest(provided_key.encode("utf-8"), key.encode("utf-8"))
+            hmac.compare_digest(provided_bytes, key.encode("utf-8"))
             for key in configured_keys
         ):
             return JSONResponse(

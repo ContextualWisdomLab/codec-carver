@@ -18,7 +18,7 @@ class TestUnicodeApiKeyContract(unittest.TestCase):
     """Exercise API-key authentication from the raw ASGI header boundary."""
 
     @staticmethod
-    def _request(raw_api_key: bytes) -> Request:
+    def _request(raw_api_key: bytes) -> "Request":
         return Request(
             {
                 "type": "http",
@@ -37,7 +37,7 @@ class TestUnicodeApiKeyContract(unittest.TestCase):
     def test_configured_unicode_key_matches_its_raw_utf8_header(self) -> None:
         reached_handler = False
 
-        async def call_next(_request: Request) -> Response:
+        async def call_next(_request: "Request") -> "Response":
             nonlocal reached_handler
             reached_handler = True
             return Response(status_code=204)
@@ -58,7 +58,7 @@ class TestUnicodeApiKeyContract(unittest.TestCase):
         self.assertEqual(response.status_code, 204)
 
     def test_different_raw_utf8_key_is_rejected(self) -> None:
-        async def call_next(_request: Request) -> Response:
+        async def call_next(_request: "Request") -> "Response":
             self.fail("invalid credentials must not reach the protected handler")
 
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "안녕"}):
