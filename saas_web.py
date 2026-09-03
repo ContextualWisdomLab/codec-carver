@@ -223,11 +223,16 @@ HTML_TEMPLATE = """
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
-                preview.style.color = '#0f6674';
                 if (!file) {
-                    preview.innerText = '';
+                    preview.innerText = 'This field is required.';
+                    preview.classList.add('required-star');
+                    preview.style.color = '';
+                    input.setCustomValidity('This field is required.');
+                    input.setAttribute('aria-invalid', 'true');
                     return;
                 }
+                preview.classList.remove('required-star');
+                preview.style.color = '#0f6674';
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
@@ -257,11 +262,14 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
-                    preview.innerText = '';
-                    this.setCustomValidity('');
-                    this.removeAttribute('aria-invalid');
+                    preview.innerText = 'This field is required.';
+                    preview.classList.add('required-star');
+                    preview.style.color = '';
+                    this.setCustomValidity('This field is required.');
+                    this.setAttribute('aria-invalid', 'true');
                     return;
                 }
+                preview.classList.remove('required-star');
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
@@ -291,11 +299,14 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
-                    preview.innerText = '';
-                    this.setCustomValidity('');
-                    this.removeAttribute('aria-invalid');
+                    preview.innerText = 'This field is required.';
+                    preview.classList.add('required-star');
+                    preview.style.color = '';
+                    this.setCustomValidity('This field is required.');
+                    this.setAttribute('aria-invalid', 'true');
                     return;
                 }
+                preview.classList.remove('required-star');
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
@@ -320,13 +331,18 @@ HTML_TEMPLATE = """
                 const preview = document.getElementById('batch_files_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
-                preview.style.color = '#0f6674';
 
                 const files = input.files;
                 if (!files || files.length === 0) {
-                    preview.innerText = '';
+                    preview.innerText = 'This field is required.';
+                    preview.classList.add('required-star');
+                    preview.style.color = '';
+                    input.setCustomValidity('This field is required.');
+                    input.setAttribute('aria-invalid', 'true');
                     return;
                 }
+                preview.classList.remove('required-star');
+                preview.style.color = '#0f6674';
 
                 let totalSize = 0;
                 for (let i = 0; i < files.length; i++) {
