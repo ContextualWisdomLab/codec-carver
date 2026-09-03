@@ -32,6 +32,32 @@ if _HAS_FASTAPI:
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class TestSaasWeb(unittest.TestCase):
+    @patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "안녕"})
+    def test_require_api_key_handles_non_ascii_gracefully(self):
+        from fastapi import Request
+        import saas_web
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/shrink",
+            "headers": [(b"x-api-key", "안녕".encode("utf-8"))]
+        }
+        request = Request(scope)
+
+        async def mock_call_next(req):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(content={"status": "ok"})
+
+        result = asyncio.run(saas_web.require_api_key(request, mock_call_next))
+        self.assertEqual(result.status_code, 200)
+
+        scope["headers"] = [(b"x-api-key", "잘가".encode("utf-8"))]
+        request = Request(scope)
+        result = asyncio.run(saas_web.require_api_key(request, mock_call_next))
+        self.assertEqual(result.status_code, 401)
+        self.assertEqual(json.loads(result.body), {"error": "Invalid or missing API key"})
+
     def test_get_ui(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
