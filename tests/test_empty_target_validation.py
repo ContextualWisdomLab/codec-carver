@@ -45,14 +45,16 @@ class EmptyTargetValidationTests(unittest.TestCase):
 
         self.assertEqual(SOURCE_TEXT.count("if (this.value === '') {"), 2)
 
-    def test_batch_controls_exist_before_batch_listener_initialization(self) -> None:
-        """Batch listeners must not run before the batch form exists in the DOM."""
+    def test_batch_listener_initialization_waits_for_document_parse(self) -> None:
+        """Batch listeners run only after the parser has created the batch form."""
 
-        batch_form = SOURCE_TEXT.index('id="shrink-batch-form"')
+        deferred_init = SOURCE_TEXT.index(
+            "document.addEventListener('DOMContentLoaded', () => {"
+        )
         batch_listener = SOURCE_TEXT.index(
             "document.getElementById('batch_preset_buttons_container').addEventListener"
         )
-        self.assertLess(batch_form, batch_listener)
+        self.assertLess(deferred_init, batch_listener)
 
     def test_file_feedback_handles_change_invalid_and_cancel(self) -> None:
         """Picker cancellation and native invalid events reuse the visible feedback."""
