@@ -1,4 +1,4 @@
-"""Focused contracts for clearing empty target-size validation state."""
+"""Focused contracts for required upload-field validation state."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ SOURCE_TEXT = (Path(__file__).resolve().parents[1] / "saas_web.py").read_text(
 
 
 class EmptyTargetValidationTests(unittest.TestCase):
-    """Both target-size inputs must clear stale custom validation when emptied."""
+    """Single and batch upload controls keep one consistent validity contract."""
 
     @staticmethod
     def _handler_between(start_marker: str, end_marker: str) -> str:
@@ -53,6 +53,22 @@ class EmptyTargetValidationTests(unittest.TestCase):
             "document.getElementById('batch_preset_buttons_container').addEventListener"
         )
         self.assertLess(batch_form, batch_listener)
+
+    def test_file_feedback_handles_change_invalid_and_cancel(self) -> None:
+        """Picker cancellation and native invalid events reuse the visible feedback."""
+
+        event_block = "['change', 'invalid', 'cancel'].forEach(eventName => {"
+        self.assertIn(event_block, SOURCE_TEXT)
+        self.assertIn(
+            "fileInput.addEventListener(eventName, () => updateFileSizePreview(fileInput));",
+            SOURCE_TEXT,
+        )
+        self.assertIn(
+            "batchFileInput.addEventListener(eventName, () => updateBatchFilePreview(batchFileInput));",
+            SOURCE_TEXT,
+        )
+        self.assertNotIn('onchange="updateFileSizePreview(this)"', SOURCE_TEXT)
+        self.assertNotIn('onchange="updateBatchFilePreview(this)"', SOURCE_TEXT)
 
     def _assert_empty_branch(self, handler: str) -> None:
         """Assert one handler clears stale state before numeric validation."""
