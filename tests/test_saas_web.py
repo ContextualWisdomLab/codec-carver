@@ -1223,5 +1223,27 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+@unittest.skipUnless(
+    _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
+)
+class TestSaasWebAuth(unittest.IsolatedAsyncioTestCase):
+    @patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret"})
+    async def test_require_api_key_non_ascii_dos(self):
+        from starlette.requests import Request
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/jobs",
+            "headers": [(b"x-api-key", "안녕".encode("utf-8"))]
+        }
+        request = Request(scope)
+
+        async def call_next(req):
+            return "SUCCESS"
+
+        response = await saas_web.require_api_key(request, call_next)
+        self.assertEqual(response.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
