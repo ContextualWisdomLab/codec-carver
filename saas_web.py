@@ -172,7 +172,7 @@ HTML_TEMPLATE = """
         <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
             <p>
                 <label for="file">Media File: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required onchange="updateFileSizePreview(this)">
+                <input type="file" id="file" name="file" accept="audio/*,video/*" aria-describedby="file_help file_size_preview" required>
                 <br><span id="file_help" class="help-text">Select an audio or video file to shrink, or drag and drop it here.</span>
                 <br><span id="file_size_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>
@@ -202,6 +202,8 @@ HTML_TEMPLATE = """
                 }
                 return unit === 0 ? size + ' ' + units[unit] : size.toFixed(2) + ' ' + units[unit];
             }
+
+            document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('preset_buttons_container').addEventListener('click', function(e) {
                 if (e.target.classList.contains('preset-btn')) {
                     const input = document.getElementById('target_bytes');
@@ -223,11 +225,16 @@ HTML_TEMPLATE = """
                 const preview = document.getElementById('file_size_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
-                preview.style.color = '#0f6674';
                 if (!file) {
-                    preview.innerText = '';
+                    preview.innerText = 'This field is required.';
+                    preview.classList.add('required-star');
+                    preview.style.color = '';
+                    input.setCustomValidity('This field is required.');
+                    input.setAttribute('aria-invalid', 'true');
                     return;
                 }
+                preview.classList.remove('required-star');
+                preview.style.color = '#0f6674';
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
@@ -257,11 +264,14 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
-                    preview.innerText = '';
-                    this.setCustomValidity('');
-                    this.removeAttribute('aria-invalid');
+                    preview.innerText = 'This field is required.';
+                    preview.classList.add('required-star');
+                    preview.style.color = '';
+                    this.setCustomValidity('This field is required.');
+                    this.setAttribute('aria-invalid', 'true');
                     return;
                 }
+                preview.classList.remove('required-star');
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
@@ -291,11 +301,14 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
-                    preview.innerText = '';
-                    this.setCustomValidity('');
-                    this.removeAttribute('aria-invalid');
+                    preview.innerText = 'This field is required.';
+                    preview.classList.add('required-star');
+                    preview.style.color = '';
+                    this.setCustomValidity('This field is required.');
+                    this.setAttribute('aria-invalid', 'true');
                     return;
                 }
+                preview.classList.remove('required-star');
 
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
@@ -320,13 +333,18 @@ HTML_TEMPLATE = """
                 const preview = document.getElementById('batch_files_preview');
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
-                preview.style.color = '#0f6674';
 
                 const files = input.files;
                 if (!files || files.length === 0) {
-                    preview.innerText = '';
+                    preview.innerText = 'This field is required.';
+                    preview.classList.add('required-star');
+                    preview.style.color = '';
+                    input.setCustomValidity('This field is required.');
+                    input.setAttribute('aria-invalid', 'true');
                     return;
                 }
+                preview.classList.remove('required-star');
+                preview.style.color = '#0f6674';
 
                 let totalSize = 0;
                 for (let i = 0; i < files.length; i++) {
@@ -366,6 +384,11 @@ HTML_TEMPLATE = """
         const fileInput = document.getElementById('file');
         const batchFileInput = document.getElementById('batch_files');
 
+        ['change', 'invalid', 'cancel'].forEach(eventName => {
+            fileInput.addEventListener(eventName, () => updateFileSizePreview(fileInput));
+            batchFileInput.addEventListener(eventName, () => updateBatchFilePreview(batchFileInput));
+        });
+
         [dropZone, batchDropZone].forEach(zone => {
             if (!zone) return;
             ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -403,6 +426,7 @@ HTML_TEMPLATE = """
                 }
             }, false);
         }
+        });
         </script>
     </div>
     <div class="box" id="batch-drop-zone" style="margin-top: 20px;">
@@ -410,7 +434,7 @@ HTML_TEMPLATE = """
         <form action="/shrink-batch" method="post" enctype="multipart/form-data" id="shrink-batch-form">
             <p>
                 <label for="batch_files">Media Files (up to 20): <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="file" id="batch_files" name="files" accept="audio/*,video/*" multiple aria-describedby="batch_files_help batch_files_preview" required onchange="updateBatchFilePreview(this)">
+                <input type="file" id="batch_files" name="files" accept="audio/*,video/*" multiple aria-describedby="batch_files_help batch_files_preview" required>
                 <br><span id="batch_files_help" class="help-text">Select several audio or video files, or drag and drop them here. You get back one zip with every output plus a results.json manifest.</span>
                 <br><span id="batch_files_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #0f6674;"></span>
             </p>

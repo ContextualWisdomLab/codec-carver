@@ -10,5 +10,5 @@
 - 순수 영숫자 토큰은 정규식 호출을 건너뛰되 다국어·문장부호 토큰화 결과는 기존 의미와 동일하게 유지합니다. 근거, 한계, APA 7 참고문헌은 [`docs/doctoring/token-fast-path-equivalence.md`](docs/doctoring/token-fast-path-equivalence.md)에 기록했습니다.
 
 ### Fixed
-- 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
+- 단일·일괄 파일 및 대상 크기 입력이 비어 있는 경우 `This field is required.` 인라인 피드백과 custom validity·`aria-invalid` 상태를 일관되게 설정하고, 파일 선택의 `change`·`invalid`·`cancel` 경로가 같은 검증 계약을 사용하도록 수정했습니다.
 - 업로드 파일명의 경로 구분자를 정규화하여 POSIX에서도 Windows 형식의 클라이언트 경로가 일관된 basename으로 기록되도록 수정했습니다.

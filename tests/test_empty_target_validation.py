@@ -1,4 +1,4 @@
-"""Focused contracts for clearing empty target-size validation state."""
+"""Focused contracts for required upload-field validation state."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ SOURCE_TEXT = (Path(__file__).resolve().parents[1] / "saas_web.py").read_text(
 
 
 class EmptyTargetValidationTests(unittest.TestCase):
-    """Both target-size inputs must clear stale custom validation when emptied."""
+    """Single and batch upload controls keep one consistent validity contract."""
 
     @staticmethod
     def _handler_between(start_marker: str, end_marker: str) -> str:
@@ -45,15 +45,43 @@ class EmptyTargetValidationTests(unittest.TestCase):
 
         self.assertEqual(SOURCE_TEXT.count("if (this.value === '') {"), 2)
 
+    def test_batch_listener_initialization_waits_for_document_parse(self) -> None:
+        """Batch listeners run only after the parser has created the batch form."""
+
+        deferred_init = SOURCE_TEXT.index(
+            "document.addEventListener('DOMContentLoaded', () => {"
+        )
+        batch_listener = SOURCE_TEXT.index(
+            "document.getElementById('batch_preset_buttons_container').addEventListener"
+        )
+        self.assertLess(deferred_init, batch_listener)
+
+    def test_file_feedback_handles_change_invalid_and_cancel(self) -> None:
+        """Picker cancellation and native invalid events reuse the visible feedback."""
+
+        event_block = "['change', 'invalid', 'cancel'].forEach(eventName => {"
+        self.assertIn(event_block, SOURCE_TEXT)
+        self.assertIn(
+            "fileInput.addEventListener(eventName, () => updateFileSizePreview(fileInput));",
+            SOURCE_TEXT,
+        )
+        self.assertIn(
+            "batchFileInput.addEventListener(eventName, () => updateBatchFilePreview(batchFileInput));",
+            SOURCE_TEXT,
+        )
+        self.assertNotIn('onchange="updateFileSizePreview(this)"', SOURCE_TEXT)
+        self.assertNotIn('onchange="updateBatchFilePreview(this)"', SOURCE_TEXT)
+
     def _assert_empty_branch(self, handler: str) -> None:
         """Assert one handler clears stale state before numeric validation."""
 
         empty_marker = "if (this.value === '') {"
         invalid_marker = "if (isNaN(val) || val <= 0) {"
         self.assertIn(empty_marker, handler)
-        self.assertIn("preview.innerText = '';", handler)
-        self.assertIn("this.setCustomValidity('');", handler)
-        self.assertIn("this.removeAttribute('aria-invalid');", handler)
+        self.assertIn("preview.innerText = 'This field is required.';", handler)
+        self.assertIn("preview.classList.add('required-star');", handler)
+        self.assertIn("this.setCustomValidity('This field is required.');", handler)
+        self.assertIn("this.setAttribute('aria-invalid', 'true');", handler)
         self.assertIn(
             "return;",
             handler[handler.index(empty_marker) : handler.index(invalid_marker)],
