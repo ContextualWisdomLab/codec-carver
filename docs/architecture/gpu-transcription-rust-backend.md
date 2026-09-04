@@ -1,5 +1,7 @@
 # GPU transcription and Rust audio-library backend
 
+Accepted decisions: [ADR 0001](../adr/0001-sha256-content-identity.md), [ADR 0002](../adr/0002-pinned-whisper-gpu-transcription.md), [ADR 0003](../adr/0003-tmk-vad-fixed-duration-precedence.md).
+
 ## Context
 
 Codec Carver now has two workloads with different performance characteristics:
