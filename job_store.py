@@ -28,7 +28,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime
 
 #: Allowed job lifecycle states.
@@ -94,8 +94,11 @@ class JobStore:
             )
         self._db_path = str(db_path)
         self._lock = threading.Lock()
-        with self._connect() as conn:
-            conn.execute(_SCHEMA)
+        with closing(sqlite3.connect(self._db_path, timeout=30.0)) as conn:
+            # OPTIMIZATION: SQLite persists PRAGMA journal_mode=WAL per database file.
+            # We execute it once during schema initialization via executescript rather than
+            # redundantly on every short-lived connection, removing connection overhead.
+            conn.executescript(f"PRAGMA journal_mode=WAL;\n{_SCHEMA}")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -108,7 +111,6 @@ class JobStore:
         conn = sqlite3.connect(self._db_path, timeout=30.0)
         try:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
             yield conn
             conn.commit()
         finally:
