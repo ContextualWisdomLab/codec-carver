@@ -37,6 +37,17 @@ class TestSaasWeb(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
 
+    @patch("saas_web.get_configured_api_keys", return_value=["valid-key"])
+    def test_require_api_key_handles_non_ascii(self, _mock):
+        from fastapi import Request
+        scope = {'type': 'http', 'method': 'POST', 'path': '/jobs', 'headers': [(b'x-api-key', '\uc548\ub155'.encode('utf-8'))]}
+        request = Request(scope)
+        async def call_next(req):
+            return None
+        response = asyncio.run(saas_web.require_api_key(request, call_next))
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(json.loads(response.body.decode()), {"error": "Invalid or missing API key"})
+
     def test_get_ui_includes_accessible_file_input_helpers(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
