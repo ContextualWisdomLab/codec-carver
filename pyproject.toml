@@ -75,6 +75,7 @@ codec-carver = "media_shrinker:main"
 codec-carver-library = "audio_library:main"
 
 [tool.setuptools]
+license-files = ["LICENSE"]
 py-modules = [
     "chapters",
     "config_file",
