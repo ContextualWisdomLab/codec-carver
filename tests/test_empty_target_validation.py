@@ -45,6 +45,15 @@ class EmptyTargetValidationTests(unittest.TestCase):
 
         self.assertEqual(SOURCE_TEXT.count("if (this.value === '') {"), 2)
 
+    def test_batch_controls_exist_before_batch_listener_initialization(self) -> None:
+        """Batch listeners must not run before the batch form exists in the DOM."""
+
+        batch_form = SOURCE_TEXT.index('id="shrink-batch-form"')
+        batch_listener = SOURCE_TEXT.index(
+            "document.getElementById('batch_preset_buttons_container').addEventListener"
+        )
+        self.assertLess(batch_form, batch_listener)
+
     def _assert_empty_branch(self, handler: str) -> None:
         """Assert one handler clears stale state before numeric validation."""
 
