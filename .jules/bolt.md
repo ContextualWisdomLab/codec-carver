@@ -67,7 +67,3 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
-
-## 2025-02-16 - [Optimize scoring loop in transcript_search]
-**Learning:** In performance-critical Python code, such as the inner hot loop of full-text search algorithms evaluating thousands of segments, replacing generator expressions (`sum(x for x in iter)`) with explicit `for` loops avoids the massive overhead of generator object instantiation and repeated `next()` function calls.
-**Action:** When writing tight inner loops that process large volumes of data (like iterating over posting intersections), prefer explicit accumulators and `for` loops over generator expressions or comprehensions inside higher-order functions.
