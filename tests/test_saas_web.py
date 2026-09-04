@@ -58,7 +58,7 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("File exceeds ' + limitText + ' limit.", html)
         self.assertIn("Total file size exceeds ' + limitText + ' limit.", html)
         self.assertIn("preview.style.color = '#0f6674';", html)
-
+        self.assertIn('onchange="updateFileSizePreview(this)"', html)
 
     def test_security_headers_present_without_plain_http_hsts(self):
         response = client.get("/")
@@ -667,7 +667,7 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertIn("multiple", html)
         self.assertIn('accept="audio/*,video/*"', html)
         self.assertIn('aria-describedby="batch_files_help batch_files_preview"', html)
-
+        self.assertIn('onchange="updateBatchFilePreview(this)"', html)
         self.assertIn('id="batch_files_preview"', html)
         self.assertIn("function updateBatchFilePreview(input)", html)
 
