@@ -1,8 +1,3 @@
-## 2026-09-04 - [API Key Unicode Support Fix]
-**Vulnerability:** The API key validation used `hmac.compare_digest` with unencoded strings, which raises a `TypeError` when given non-ASCII characters, causing a 500 server error and potential DoS vectors.
-**Learning:** Python's `hmac.compare_digest` strictly requires strings to contain only ASCII characters. When processing arbitrary user input like HTTP headers, it must be encoded to bytes first.
-**Prevention:** Always encode user-provided strings (e.g. `utf-8`) before using them with `hmac.compare_digest`.
-
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
@@ -30,7 +25,7 @@
 ## 2026-06-09 - [Sentinel: FFmpeg Argument Injection Vulnerability Fix]
 **Vulnerability:** Argument injection via maliciously crafted filenames.
 **Learning:** Command-line utilities (like `ffprobe`) interpret arguments starting with a hyphen (e.g., `-version`, `-help`) as options. If user input (like a file path) is directly passed to the command list without an explicit input flag (like `-i`), a maliciously named file could inject arguments and alter the command execution flow, even with `shell=False`.
-**Prevention:** When passing file paths to command-line tools like `ffmpeg` or `ffprobe` via `subprocess.run`, explicitly use the input flag (e.g., `-i`) immediately before the file path. This prevents argument injection vulnerabilities where a filename starting with a hyphen (e.g., `-version`) is misinterpreted as a command-line option.
+**Prevention:** When passing file paths to command-line tools like `ffmpeg` or `ffprobe` via `subprocess.run`, explicitly use the input flag (e.g., `-i`) immediately before the file path. This prevents argument injection vulnerabilities where a filename starting with a hyphen (e.g., `-version.wav`) is misinterpreted as a command-line option.
 
 ## 2026-06-15 - [Sentinel: Uncontrolled Resource Consumption in Uploads]
 **Vulnerability:** Uncontrolled Resource Consumption (CWE-400) / Missing input length limits via unbound file uploads.
