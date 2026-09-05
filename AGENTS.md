@@ -92,3 +92,11 @@ protection, `require_code_owner_review` in rulesets) are disabled across the Con
 org: there is a single maintainer (solo developer), so a code-owner approval gate can never be
 satisfied. This is ON HOLD until the org has multiple maintainers — do NOT re-enable these
 settings or add CODEOWNERS-based merge gates before then.
+
+## Current loop goal
+
+Ship `conversion_jobs` as the only durable async table. Prefer this
+rename over folding ownership or API-key work onto the same branch.
+Drop-zone click remains #419 / overlay #428. Credential registry remains
+#430. Next after those land: `usage_metering.credential_id`, then
+retention on `conversion_jobs`.

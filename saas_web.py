@@ -761,7 +761,9 @@ def _run_job(
     except Exception:
         logger.exception("Job processing failed")
         try:
-            store.set_status(job_id, "failed", now=_now(), error="Processing failed")
+            store.set_status(
+                job_id, "failed", now=_now(), error_message="Processing failed"
+            )
         except KeyError:
             logger.error("Job %s disappeared while recording failure", job_id)
         cleanup_temp_dir(temp_dir_path)
@@ -790,7 +792,7 @@ def _run_job(
                 job_id,
                 "failed",
                 now=_now(),
-                error="Processing failed or no output generated",
+                error_message="Processing failed or no output generated",
             )
         except KeyError:
             logger.error("Job %s disappeared while recording empty output", job_id)
@@ -838,7 +840,11 @@ def job_status(job_id: str):
     job = _get_job_store().get(job_id)
     if job is None:
         return JSONResponse(status_code=404, content={"error": "Unknown job"})
-    return {"job_id": job_id, "status": job["status"], "error": job.get("error")}
+    return {
+        "job_id": job_id,
+        "status": job["job_status"],
+        "error": job.get("error_message"),
+    }
 
 
 def _cleanup_job(job_id: str) -> None:
@@ -856,9 +862,9 @@ def job_result(job_id: str, background_tasks: BackgroundTasks):
     job = _get_job_store().get(job_id)
     if job is None:
         return JSONResponse(status_code=404, content={"error": "Unknown job"})
-    if job["status"] != "done":
+    if job["job_status"] != "done":
         return JSONResponse(
-            status_code=409, content={"error": f"Job is {job['status']}"}
+            status_code=409, content={"error": f"Job is {job['job_status']}"}
         )
     # Defense in depth: only ever serve a regular file that lives inside this
     # job's own temp workspace. `job_id` is an opaque store key and is never

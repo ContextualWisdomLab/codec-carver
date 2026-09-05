@@ -843,7 +843,7 @@ class JobModelTests(unittest.TestCase):
             temp = job.get("temp_dir")
             if temp:
                 saas_web.cleanup_temp_dir(Path(temp))
-            saas_web.JOB_STORE.delete(job["id"])
+            saas_web.JOB_STORE.delete(job["job_id"])
 
     def _create_job(
         self,
@@ -864,7 +864,7 @@ class JobModelTests(unittest.TestCase):
                 now=saas_web._now(),
                 output_path=output_path,
                 output_name=output_name,
-                error=error,
+                error_message=error,
             )
 
     def _make_workspace(self) -> tuple[Path, Path, Path, Path]:
