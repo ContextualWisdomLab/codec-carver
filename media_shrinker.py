@@ -2203,10 +2203,20 @@ def _resolve_collision(path: Path, *, overwrite: bool) -> Path:
     """Return path or a numbered variant if path already exists."""
     if overwrite or not path.exists():
         return path
+
+    # Fast path: Use string operations and lstat inside the tight collision loop
+    # instead of repeated Path instantiations to save object overhead.
+    parent_str = str(path.parent)
+    stem_str = path.stem
+    suffix_str = path.suffix
+
     for index in range(1, 10_000):
-        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
-        if not candidate.exists():
-            return candidate
+        candidate_str = os.path.join(parent_str, f"{stem_str}-{index}{suffix_str}")
+        try:
+            os.lstat(candidate_str)
+        except OSError:
+            return Path(candidate_str)
+
     raise FileExistsError(f"Could not find free output path for {path}")
 
 
