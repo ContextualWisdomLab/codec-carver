@@ -1,8 +1,3 @@
-## 2024-09-03 - [Sentinel: Unhandled TypeError in hmac.compare_digest with non-ASCII keys]
-**Vulnerability:** Unhandled Exception leading to Denial of Service (DoS) (CWE-755) when processing API keys.
-**Learning:** `hmac.compare_digest` raises a `TypeError` if provided strings contain non-ASCII characters, which crashes the server with a 500 status when an invalid, non-ASCII API key is supplied via request headers.
-**Prevention:** Always encode strings to `utf-8` bytes before passing them to `hmac.compare_digest` to ensure it operates on safe binary data and prevents unexpected TypeErrors.
-
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
