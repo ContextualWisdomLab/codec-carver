@@ -1,3 +1,8 @@
+## 2026-09-04 - [API Key Unicode Support Fix]
+**Vulnerability:** The API key validation used `hmac.compare_digest` with unencoded strings, which raises a `TypeError` when given non-ASCII characters, causing a 500 server error and potential DoS vectors.
+**Learning:** Python's `hmac.compare_digest` strictly requires strings to contain only ASCII characters. When processing arbitrary user input like HTTP headers, it must be encoded to bytes first.
+**Prevention:** Always encode user-provided strings (e.g. `utf-8`) before using them with `hmac.compare_digest`.
+
 ## 2026-07-25 - [Cross-platform upload basename normalization]
 **Behavior:** Upload metadata now interprets both forward slashes and backslashes as path separators before extracting a basename.
 **Learning:** On POSIX systems, `pathlib.Path(filename).name` retains backslashes because they are ordinary characters there. That caused inconsistent manifest and converter filenames for Windows-style client paths. The upload itself is still written inside a trusted temporary workspace, and batch archive entry names are generated outputs; this change does not establish a filesystem traversal or archive-entry escape.
