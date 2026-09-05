@@ -368,14 +368,29 @@ HTML_TEMPLATE = """
 
         [dropZone, batchDropZone].forEach(zone => {
             if (!zone) return;
+            zone.dragCounter = 0;
             ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
                 zone.addEventListener(eventName, preventDefaults, false);
             });
-            ['dragenter', 'dragover'].forEach(eventName => {
-                zone.addEventListener(eventName, () => zone.classList.add('dragover'), false);
+            ['dragenter'].forEach(eventName => {
+                zone.addEventListener(eventName, () => {
+                    zone.dragCounter++;
+                    zone.classList.add('dragover');
+                }, false);
             });
-            ['dragleave', 'drop'].forEach(eventName => {
-                zone.addEventListener(eventName, () => zone.classList.remove('dragover'), false);
+            ['dragleave'].forEach(eventName => {
+                zone.addEventListener(eventName, () => {
+                    zone.dragCounter--;
+                    if (zone.dragCounter === 0) {
+                        zone.classList.remove('dragover');
+                    }
+                }, false);
+            });
+            ['drop'].forEach(eventName => {
+                zone.addEventListener(eventName, () => {
+                    zone.dragCounter = 0;
+                    zone.classList.remove('dragover');
+                }, false);
             });
         });
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
