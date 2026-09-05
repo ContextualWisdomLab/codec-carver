@@ -186,6 +186,24 @@ class TestSaasWeb(unittest.TestCase):
             {"error": "Invalid target_bytes value. Must be greater than 0."},
         )
 
+
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi not installed (optional integration dependency)")
+class TestAPIKeyDoS(unittest.IsolatedAsyncioTestCase):
+    async def test_non_ascii_key_does_not_crash(self):
+        import starlette.requests
+        from saas_web import require_api_key
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": "/shrink",
+                "headers": [(b"x-api-key", "non-ascii-☃".encode("utf-8"))],
+            }
+            request = starlette.requests.Request(scope)
+            response = await require_api_key(request, lambda r: None)
+
+        self.assertEqual(response.status_code, 401)
+
     def test_shrink_media_rejects_missing_filename(self):
         response = saas_web.shrink_media(
             BackgroundTasks(),
