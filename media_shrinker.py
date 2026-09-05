@@ -11,6 +11,7 @@ import argparse
 import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import errno
 import math
 import os
 import re
@@ -2214,8 +2215,10 @@ def _resolve_collision(path: Path, *, overwrite: bool) -> Path:
         candidate_str = os.path.join(parent_str, f"{stem_str}-{index}{suffix_str}")
         try:
             os.lstat(candidate_str)
-        except OSError:
-            return Path(candidate_str)
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                return Path(candidate_str)
+            continue
 
     raise FileExistsError(f"Could not find free output path for {path}")
 
