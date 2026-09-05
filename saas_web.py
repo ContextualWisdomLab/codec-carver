@@ -178,7 +178,7 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" step="1" aria-describedby="target_bytes_help target_bytes_preview" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes">
@@ -241,18 +241,19 @@ HTML_TEMPLATE = """
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
+                const val = Number(this.value);
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
+                const hasValidPresetValue = this.value !== '' && Number.isFinite(val) && this.validity.valid;
 
                 const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
                 buttons.forEach(btn => {
                     const presetValue = Number.parseInt(btn.dataset.bytes, 10);
                     btn.setAttribute(
                         'aria-pressed',
-                        presetValue === val ? 'true' : 'false'
+                        hasValidPresetValue && presetValue === val ? 'true' : 'false'
                     );
                 });
 
@@ -263,10 +264,14 @@ HTML_TEMPLATE = """
                     return;
                 }
 
-                if (isNaN(val) || val <= 0) {
+                if (!Number.isFinite(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
+                } else if (!this.validity.valid) {
+                    preview.innerText = 'Enter a whole number of bytes.';
+                    preview.style.color = '#dc3545';
                     this.setAttribute('aria-invalid', 'true');
                 } else {
                     preview.innerText = formatBinaryBytes(val);
@@ -275,18 +280,19 @@ HTML_TEMPLATE = """
             });
 
             document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
+                const val = Number(this.value);
                 const preview = document.getElementById('batch_target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
+                const hasValidPresetValue = this.value !== '' && Number.isFinite(val) && this.validity.valid;
 
                 const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
                 buttons.forEach(btn => {
                     const presetValue = Number.parseInt(btn.dataset.bytes, 10);
                     btn.setAttribute(
                         'aria-pressed',
-                        presetValue === val ? 'true' : 'false'
+                        hasValidPresetValue && presetValue === val ? 'true' : 'false'
                     );
                 });
 
@@ -297,10 +303,14 @@ HTML_TEMPLATE = """
                     return;
                 }
 
-                if (isNaN(val) || val <= 0) {
+                if (!Number.isFinite(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
+                } else if (!this.validity.valid) {
+                    preview.innerText = 'Enter a whole number of bytes.';
+                    preview.style.color = '#dc3545';
                     this.setAttribute('aria-invalid', 'true');
                 } else {
                     preview.innerText = formatBinaryBytes(val);
@@ -416,7 +426,7 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="batch_target_bytes">Target Bytes (per file): <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="batch_target_bytes_help batch_target_bytes_preview" required>
+                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" step="1" aria-describedby="batch_target_bytes_help batch_target_bytes_preview" required>
                 <br><span id="batch_target_bytes_help" class="help-text">Maximum allowed size in bytes for each output file</span>
                 <br><span id="batch_target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="batch_preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes for batch">
