@@ -8,6 +8,7 @@
 
 ### Changed
 - 순수 영숫자 토큰은 정규식 호출을 건너뛰되 다국어·문장부호 토큰화 결과는 기존 의미와 동일하게 유지합니다. 근거, 한계, APA 7 참고문헌은 [`docs/doctoring/token-fast-path-equivalence.md`](docs/doctoring/token-fast-path-equivalence.md)에 기록했습니다.
+- 업로드 카드 도움말은 클릭 또는 드래그를 다음 행동으로 안내하고, `role="region"` 랜드마크와 디자인 토큰을 같은 클릭 트리 위에 겹칩니다. 근거는 [`docs/doctoring/drop-zone-pointer-activation.md`](docs/doctoring/drop-zone-pointer-activation.md)에 기록했습니다.
 
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
