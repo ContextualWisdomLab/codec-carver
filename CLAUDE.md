@@ -22,8 +22,8 @@ python3 -m unittest discover -s tests -v
 python3 -m unittest tests.test_media_shrinker -v
 python3 -m unittest tests.test_job_store.TestCreateAndGet.test_create_get_roundtrip
 
-# Compile check (CI runs this on all four modules)
-python -m py_compile media_shrinker.py saas_web.py mcp_driver.py job_store.py
+# Compile check (CI runs this on the declared top-level modules)
+python -m py_compile media_shrinker.py saas_web.py mcp_driver.py job_store.py credential_registry.py usage_metering.py
 
 # CLI (omit --execute for a dry run that only lists candidates)
 codec-carver /path/to/recordings --execute --output-dir under_2gb
@@ -47,9 +47,11 @@ CI installs pinned dependencies with `pip install --require-hashes -r requiremen
 Four flat top-level modules (declared as `py-modules` in `pyproject.toml`; there is no package directory):
 
 - **`media_shrinker.py`** — the core engine and CLI, deliberately stdlib-only (external work happens in `ffmpeg`/`ffprobe` subprocesses). The console script `codec-carver` maps to `media_shrinker:main`. Pipeline for a batch run: `find_candidates` scans the root (pruned `os.walk`, excludes the output dir and `--exclude-dir-prefix` dirs) → per file, `convert_file` probes with ffprobe (`probe_media` / `_parse_probe_payload`), detects silence and builds a split plan for long sources (`detect_silence_intervals`, `parse_silencedetect_intervals`, `build_segments`) → each segment gets a `ConversionPlan` (`build_audio_plan` prefers FLAC; `build_opus_plan` is the fallback when a FLAC output exceeds the target size) → `_execute_plan` runs ffmpeg and `preserve_file_attributes` restores permissions/timestamps/xattrs best-effort → `write_report` emits a JSON report. `convert_file(source, root=..., output_dir=..., target_bytes=...)` is the programmatic API that the web and MCP layers call.
-- **`saas_web.py`** — single-file FastAPI upload UI (the `[web]` extra; what the Docker image serves). Streams one upload into a temp workspace, calls `media_shrinker.convert_file`, and returns the first generated output as a download. Middleware enforces a 5 GiB upload cap and security headers. Processing is synchronous per request.
+- **`saas_web.py`** — single-file FastAPI upload UI (the `[web]` extra; what the Docker image serves). Streams one upload into a temp workspace, calls `media_shrinker.convert_file`, and returns generated outputs (zip when split). Middleware enforces a 5 GiB upload cap, registry auth, optional monthly quotas, and security headers. `/jobs` is the async path backed by `job_store`.
 - **`mcp_driver.py`** — FastMCP server (the `[mcp]` extra) exposing a single `shrink_media` tool that wraps `convert_file`.
-- **`job_store.py`** — stdlib-only SQLite (WAL) durable job store intended for async/worker job tracking. It is tested but not yet wired into `saas_web.py`. Callers pass `now` explicitly; the store never calls `datetime.now()` itself.
+- **`job_store.py`** — stdlib-only SQLite (WAL) durable job store used by `/jobs`. Callers pass `now` explicitly; the store never calls `datetime.now()` itself.
+- **`credential_registry.py`** — stdlib-only SQLite verifier store for API keys. Request-time auth reads digests only; `CODEC_CARVER_API_KEYS` is startup transport. Callers pass `now` explicitly.
+- **`usage_metering.py`** — stdlib-only SQLite WAL store for monthly `usage_periods` keyed by `credential_id`. Callers pass `now` explicitly. Never stores plaintext API keys.
 
 Supporting directories: `fuzz/` holds Atheris harnesses plus seed corpora for the three untrusted-input parsing surfaces (`parse_silencedetect_intervals`, `_parse_probe_payload`, `build_segments`); the same invariants run as Hypothesis property tests in `tests/test_fuzz_properties.py` so they execute in the normal suite. `docs/papers/` holds the fuzzing survey the harness design references.
 
@@ -61,7 +63,7 @@ Supporting directories: `fuzz/` holds Atheris harnesses plus seed corpora for th
 ## Key conventions
 
 - **Never endanger sources.** The scan's selected sources are protected from deletion/overwrite (`protected_sources` / `_ensure_not_protected_source_path`). Generated names keep the full original filename plus a new suffix (`clip.wav.flac`, `meeting.wav.part0001.flac`) so same-stem inputs cannot collide. Keep `--output-dir` a generated-only directory.
-- **Stdlib-only core.** `media_shrinker.py` and `job_store.py` must not grow third-party imports; FastAPI/MCP dependencies belong to the optional `web`/`mcp` extras. Tests guard optional imports with `skipUnless` so the suite passes without extras installed.
+- **Stdlib-only core.** `media_shrinker.py`, `job_store.py`, `credential_registry.py`, and `usage_metering.py` must not grow third-party imports; FastAPI/MCP dependencies belong to the optional `web`/`mcp` extras. Tests guard optional imports with `skipUnless` so the suite passes without extras installed.
 - **Docstring coverage is 100%.** `interrogate` is configured with `fail-under = 100` (excluding `scripts`, `tests`, `fuzz`) — every module and function, including private helpers, needs a docstring. `.coveragerc` likewise sets `fail_under = 100` over `media_shrinker`, `saas_web`, and `mcp_driver`.
 - **Security posture.** ffmpeg/ffprobe are always invoked with `-nostdin` and `-protocol_whitelist file,crypto,data` (SSRF/LFI hardening); uploaded filenames are sanitized to a safe basename; temp files use `tempfile` APIs, not predictable names; copied permissions are masked to drop setuid/setgid/sticky bits. `.jules/sentinel.md` logs past vulnerabilities and their prevention rules — check it before touching subprocess invocation, temp-file, or metadata-copy code. `.jules/bolt.md` records performance lessons (pre-resolve paths once, prune walks, avoid repeated `stat`).
 - **Fuzzing-first for parsers.** Anything that parses ffmpeg/ffprobe output is an untrusted-input surface: parsers must never raise unexpected exception types on arbitrary input (raise `MediaShrinkerError` for invalid payloads). If you change one, update the matching harness in `fuzz/` and its Hypothesis mirror in `tests/test_fuzz_properties.py`.

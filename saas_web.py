@@ -1,18 +1,30 @@
 """FastAPI upload UI for shrinking one media file through Codec Carver."""
 
+import contextvars
 import json
-import hmac
 import logging
 import os
 import shutil
 import tempfile
 import uuid
 import zipfile
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from credential_registry import (
+    MAX_KEY_BYTES,
+    CredentialRegistry,
+    bootstrap_registry_from_mapping,
+)
 from job_store import JobStore
+from usage_metering import (
+    QuotaExceededError,
+    UsageStore,
+    seconds_until_next_period,
+)
 import media_shrinker
 
 app = FastAPI(title="Codec Carver SaaS")
@@ -83,43 +95,352 @@ async def limit_request_size(request: Request, call_next):
     except RequestTooLarge:
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
-def get_configured_api_keys():
-    """Return the API keys configured via the CODEC_CARVER_API_KEYS env var.
+_credential_registry: CredentialRegistry | None = None
 
-    The variable holds a comma-separated list of keys. Whitespace around each
-    key is stripped and empty entries are ignored. Keys are read from the
-    environment at request time (not import time) so tests can patch the
-    environment easily and key rotation needs no server restart. Returns an
-    empty list when the variable is unset or contains no usable keys, which
-    leaves the service open (today's default behaviour).
+
+def configure_credential_registry(registry: CredentialRegistry | None) -> None:
+    """Install or clear the process-wide request-time credential registry.
+
+    Args:
+        registry: Store used by :func:`require_api_key`, or ``None`` to
+            restore the unconfigured fail-open default.
     """
 
+    global _credential_registry
+    _credential_registry = registry
+
+
+def get_credential_registry() -> CredentialRegistry | None:
+    """Return the registry installed for this process, if any.
+
+    Returns:
+        The configured :class:`CredentialRegistry`, or ``None``.
+    """
+
+    return _credential_registry
+
+
+def bootstrap_web_credentials(
+    transport: Mapping[str, str],
+    *,
+    now: datetime,
+    db_path: str,
+) -> CredentialRegistry:
+    """Named startup hook: copy transport keys into the registry once.
+
+    Args:
+        transport: Bootstrap mapping (pass ``os.environ`` only from this
+            hook). Request handlers must not read it.
+        now: Bootstrap timestamp.
+        db_path: SQLite file for ``api_credentials``.
+
+    Returns:
+        The installed registry.
+    """
+
+    registry = bootstrap_registry_from_mapping(transport, now=now, db_path=db_path)
+    configure_credential_registry(registry)
+    return registry
+
+
+def get_configured_api_keys() -> list[str]:
+    """Return public key labels from the registry, never plaintext secrets.
+
+    An empty list means authentication is fail-open. Labels are the first
+    eight hex characters of each stored digest so operators can count keys
+    without recovering them.
+    """
+
+    registry = get_credential_registry()
+    if registry is None:
+        return []
+    return [
+        str(row["key_label"])
+        for row in registry.list_public_records()
+        if row["lifecycle_state"] in {"active", "rotated"}
+    ]
+
+
+def bootstrap_credentials_from_environ() -> None:
+    """Load ``CODEC_CARVER_API_KEYS`` into the registry at process start.
+
+    This is the only approved environment read for API keys. Tests that
+    already called :func:`configure_credential_registry` are left unchanged.
+    """
+
+    if get_credential_registry() is not None:
+        return
     raw = os.environ.get("CODEC_CARVER_API_KEYS", "")
-    return [key.strip() for key in raw.split(",") if key.strip()]
+    if not raw.strip():
+        return
+    db_path = os.environ.get(
+        "CODEC_CARVER_CREDENTIAL_DB",
+        str(Path(tempfile.gettempdir()) / "codec-carver-api-credentials.db"),
+    )
+    bootstrap_web_credentials(
+        os.environ,
+        now=datetime.now(timezone.utc),
+        db_path=db_path,
+    )
+
+
+_usage_store: UsageStore | None = None
+_usage_max_conversions: int | None = None
+_usage_max_bytes: int | None = None
+_request_credential: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "codec_carver_credential_id", default=None
+)
+
+
+def configure_usage_store(
+    store: UsageStore | None,
+    *,
+    max_conversions: int | None = None,
+    max_bytes: int | None = None,
+) -> None:
+    """Install or clear the process-wide usage store and optional quotas.
+
+    Args:
+        store: Durable usage store, or ``None`` to disable metering.
+        max_conversions: Monthly conversion cap, or ``None`` for unlimited.
+        max_bytes: Monthly input+output byte cap, or ``None`` for unlimited.
+    """
+
+    global _usage_store, _usage_max_conversions, _usage_max_bytes
+    _usage_store = store
+    _usage_max_conversions = max_conversions
+    _usage_max_bytes = max_bytes
+
+
+def get_usage_store() -> UsageStore | None:
+    """Return the usage store installed for this process, if any.
+
+    Returns:
+        The configured :class:`UsageStore`, or ``None``.
+    """
+
+    return _usage_store
+
+
+def _parse_optional_positive_int(raw: str | None) -> int | None:
+    """Parse a bootstrap quota integer, or return ``None`` when unset.
+
+    Args:
+        raw: Transport text such as ``"100"``. Blank or invalid values
+            mean unlimited.
+
+    Returns:
+        A positive integer, or ``None``.
+    """
+
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        value = int(text, 10)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def bootstrap_usage_from_mapping(
+    transport: Mapping[str, str],
+    *,
+    db_path: str,
+) -> UsageStore:
+    """Named startup hook: open the usage store and copy quota transport.
+
+    Args:
+        transport: Bootstrap mapping (pass ``os.environ`` only from this
+            hook). Request handlers must not read it.
+        db_path: SQLite file for ``usage_periods``.
+
+    Returns:
+        The installed store.
+    """
+
+    store = UsageStore(db_path)
+    configure_usage_store(
+        store,
+        max_conversions=_parse_optional_positive_int(
+            transport.get("CODEC_CARVER_MAX_CONVERSIONS")
+        ),
+        max_bytes=_parse_optional_positive_int(
+            transport.get("CODEC_CARVER_MAX_BYTES")
+        ),
+    )
+    return store
+
+
+def bootstrap_usage_from_environ() -> None:
+    """Load usage-store path and quotas from startup transport.
+
+    This is the only approved environment read for usage metering. Tests
+    that already called :func:`configure_usage_store` are left unchanged.
+    An unset ``CODEC_CARVER_USAGE_DB`` leaves metering off.
+    """
+
+    if get_usage_store() is not None:
+        return
+    raw_path = os.environ.get("CODEC_CARVER_USAGE_DB", "").strip()
+    if not raw_path:
+        return
+    bootstrap_usage_from_mapping(os.environ, db_path=raw_path)
+
+
+def _current_credential_id() -> str | None:
+    """Return the credential id stashed by :func:`require_api_key`.
+
+    Returns:
+        The verified ``credential_id``, or ``None`` when auth is fail-open.
+    """
+
+    credential_id = _request_credential.get()
+    if isinstance(credential_id, str) and credential_id:
+        return credential_id
+    return None
+
+
+def _quota_rejection(now: datetime) -> JSONResponse | None:
+    """Return HTTP 429 when the verified credential is at its monthly cap.
+
+    Args:
+        now: Billing timestamp.
+
+    Returns:
+        A 429 response, or ``None`` when metering is off or the
+        credential is still within quota. The body never includes the
+        API key.
+    """
+
+    store = get_usage_store()
+    credential_id = _current_credential_id()
+    if store is None or credential_id is None:
+        return None
+    try:
+        store.check_quota(
+            credential_id,
+            now,
+            max_conversions=_usage_max_conversions,
+            max_bytes=_usage_max_bytes,
+        )
+    except QuotaExceededError:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Monthly conversion quota exceeded"},
+            headers={
+                "Cache-Control": "no-store",
+                "Retry-After": str(seconds_until_next_period(now)),
+            },
+        )
+    return None
+
+
+def _record_usage(
+    *,
+    input_bytes: int,
+    output_bytes: int,
+    now: datetime,
+) -> None:
+    """Record one conversion against the verified credential, if any.
+
+    Args:
+        input_bytes: Persisted upload size.
+        output_bytes: Generated output size, or ``0`` on failure.
+        now: Billing timestamp.
+    """
+
+    store = get_usage_store()
+    credential_id = _current_credential_id()
+    if store is None or credential_id is None:
+        return
+    store.record(
+        credential_id,
+        input_bytes=input_bytes,
+        output_bytes=output_bytes,
+        now=now,
+    )
+
+
+def _record_job_usage(
+    credential_id: str | None,
+    *,
+    input_bytes: int,
+    output_bytes: int,
+    now: datetime,
+) -> None:
+    """Record usage for an async job that no longer has a request.
+
+    Args:
+        credential_id: Verified registry primary key, or ``None``.
+        input_bytes: Persisted upload size.
+        output_bytes: Generated output size, or ``0`` on failure.
+        now: Billing timestamp.
+    """
+
+    store = get_usage_store()
+    if store is None or not credential_id:
+        return
+    store.record(
+        credential_id,
+        input_bytes=input_bytes,
+        output_bytes=output_bytes,
+        now=now,
+    )
+
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Copy bootstrap transport into the registry and usage store once."""
+
+    bootstrap_credentials_from_environ()
+    bootstrap_usage_from_environ()
+    yield
+
+
+app.router.lifespan_context = _app_lifespan
 
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    """Enforce opt-in API-key authentication on all endpoints except GET /.
+    """Enforce registry authentication on all endpoints except GET /.
 
-    When one or more keys are configured via CODEC_CARVER_API_KEYS, every
+    When the process registry has at least one usable credential, every
     request other than GET / (the upload UI page) must carry an X-API-Key
-    header matching a configured key; comparison uses hmac.compare_digest to
-    stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    header that verifies against stored digests. Failures return 401 JSON
+    without echoing key material. An unconfigured or empty registry leaves
+    the service open so local CLI-adjacent use still works.
     """
 
-    configured_keys = get_configured_api_keys()
-    if configured_keys and not (request.method == "GET" and request.url.path == "/"):
+    registry = get_credential_registry()
+    now = datetime.now(timezone.utc)
+    if (
+        registry is not None
+        and registry.has_active_credentials(now=now)
+        and not (request.method == "GET" and request.url.path == "/")
+    ):
         provided_key = request.headers.get("x-api-key", "")
-        if not any(
-            hmac.compare_digest(provided_key, key) for key in configured_keys
-        ):
+        credential_id = None
+        if len(provided_key.encode("utf-8")) <= MAX_KEY_BYTES:
+            credential_id = registry.verify_api_key(provided_key, now=now)
+        if credential_id is None:
             return JSONResponse(
                 status_code=401,
                 content={"error": "Invalid or missing API key"},
+                headers={"Cache-Control": "no-store"},
             )
+        state = getattr(request, "state", None)
+        if state is not None:
+            state.credential_id = credential_id
+        token = _request_credential.set(credential_id)
+        try:
+            return await call_next(request)
+        finally:
+            _request_credential.reset(token)
     return await call_next(request)
 
 
@@ -538,12 +859,18 @@ def shrink_media(
     if error is not None:
         return {"error": error}
 
+    billed_at = _now()
+    blocked = _quota_rejection(billed_at)
+    if blocked is not None:
+        return blocked
+
     try:
         temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file)
     except Exception:
         logger.exception("Failed to prepare uploaded media")
         return {"error": "Upload processing failed"}
 
+    input_bytes = source_path.stat().st_size
     # Process the file using media_shrinker
     try:
         results = media_shrinker.convert_file(
@@ -560,10 +887,17 @@ def shrink_media(
 
         if not outputs:
             logger.error("Processing produced no output: %r", results)
+            _record_usage(input_bytes=input_bytes, output_bytes=0, now=billed_at)
             return {"error": "Processing failed or no output generated"}
 
         output_path = _download_path_for_outputs(
             outputs, temp_dir_path, source_path.stem + "_shrunk.zip"
+        )
+        output_bytes = sum(path.stat().st_size for path in outputs)
+        _record_usage(
+            input_bytes=input_bytes,
+            output_bytes=output_bytes,
+            now=billed_at,
         )
         media_type = (
             "application/zip"
@@ -579,6 +913,7 @@ def shrink_media(
     except Exception:
         cleanup_temp_dir(temp_dir_path)
         logger.exception("Media processing failed")
+        _record_usage(input_bytes=input_bytes, output_bytes=0, now=billed_at)
         return {"error": "Upload processing failed"}
 
 
@@ -589,6 +924,10 @@ def shrink_media_batch(
     target_bytes: int = Form(2_000_000_000),
 ):
     """Shrink several uploaded media files and return one zip archive."""
+    billed_at = _now()
+    blocked = _quota_rejection(billed_at)
+    if blocked is not None:
+        return blocked
     if target_bytes <= 0:
         return JSONResponse(
             status_code=400,
@@ -655,6 +994,7 @@ def shrink_media_batch(
                     entry["error"] = "Upload processing failed"
                     continue
 
+                file_output_bytes = 0
                 try:
                     results = media_shrinker.convert_file(
                         source=source_path,
@@ -665,12 +1005,22 @@ def shrink_media_batch(
                 except Exception:
                     logger.exception("Batch media processing failed for upload #%d", index)
                     entry["error"] = "Upload processing failed"
+                    _record_usage(
+                        input_bytes=bytes_written,
+                        output_bytes=0,
+                        now=billed_at,
+                    )
                     continue
 
                 outputs = _existing_outputs(results)
                 if not outputs:
                     logger.error("Batch processing produced no output for upload #%d: %r", index, results)
                     entry["error"] = "Processing failed or no output generated"
+                    _record_usage(
+                        input_bytes=bytes_written,
+                        output_bytes=0,
+                        now=billed_at,
+                    )
                     continue
 
                 for output_index, output_path in enumerate(outputs, start=1):
@@ -685,6 +1035,12 @@ def shrink_media_batch(
                     entry["status"] = "ok"
                     entry["output_name"] = arcname
                     entry["output_bytes"] = (entry["output_bytes"] or 0) + output_path.stat().st_size
+                    file_output_bytes = entry["output_bytes"]
+                _record_usage(
+                    input_bytes=bytes_written,
+                    output_bytes=file_output_bytes,
+                    now=billed_at,
+                )
 
             archive.writestr(
                 "results.json",
@@ -741,9 +1097,12 @@ def _run_job(
     output_dir: Path,
     target_bytes: int,
     temp_dir_path: Path,
+    credential_id: str | None = None,
 ) -> None:
     """Background worker: shrink one uploaded file and record the outcome."""
     store = _get_job_store()
+    billed_at = _now()
+    input_bytes = source_path.stat().st_size if source_path.is_file() else 0
     try:
         store.set_status(job_id, "processing", now=_now())
     except KeyError:
@@ -764,6 +1123,7 @@ def _run_job(
             store.set_status(job_id, "failed", now=_now(), error="Processing failed")
         except KeyError:
             logger.error("Job %s disappeared while recording failure", job_id)
+        _record_job_usage(credential_id, input_bytes=input_bytes, output_bytes=0, now=billed_at)
         cleanup_temp_dir(temp_dir_path)
         return
 
@@ -772,6 +1132,7 @@ def _run_job(
         output_path = _download_path_for_outputs(
             outputs, temp_dir_path, source_path.stem + "_shrunk.zip"
         )
+        output_bytes = sum(path.stat().st_size for path in outputs)
         try:
             store.set_status(
                 job_id,
@@ -783,6 +1144,13 @@ def _run_job(
         except KeyError:
             logger.error("Job %s disappeared while recording result", job_id)
             cleanup_temp_dir(temp_dir_path)
+            return
+        _record_job_usage(
+            credential_id,
+            input_bytes=input_bytes,
+            output_bytes=output_bytes,
+            now=billed_at,
+        )
     else:
         logger.error("Job produced no output: %r", results)
         try:
@@ -794,6 +1162,7 @@ def _run_job(
             )
         except KeyError:
             logger.error("Job %s disappeared while recording empty output", job_id)
+        _record_job_usage(credential_id, input_bytes=input_bytes, output_bytes=0, now=billed_at)
         cleanup_temp_dir(temp_dir_path)
 
 
@@ -808,6 +1177,11 @@ def submit_job(
     if error is not None:
         return JSONResponse(status_code=400, content={"error": error})
 
+    billed_at = _now()
+    blocked = _quota_rejection(billed_at)
+    if blocked is not None:
+        return blocked
+
     try:
         temp_dir_path, input_dir, output_dir, source_path = _persist_upload(file)
     except Exception:
@@ -818,7 +1192,7 @@ def submit_job(
 
     job_id = uuid.uuid4().hex
     try:
-        _get_job_store().create(job_id, temp_dir=str(temp_dir_path), now=_now())
+        _get_job_store().create(job_id, temp_dir=str(temp_dir_path), now=billed_at)
     except ValueError:
         cleanup_temp_dir(temp_dir_path)
         logger.exception("Failed to create async job record")
@@ -827,7 +1201,14 @@ def submit_job(
         )
 
     background_tasks.add_task(
-        _run_job, job_id, source_path, input_dir, output_dir, target_bytes, temp_dir_path
+        _run_job,
+        job_id,
+        source_path,
+        input_dir,
+        output_dir,
+        target_bytes,
+        temp_dir_path,
+        _current_credential_id(),
     )
     return {"job_id": job_id, "status": "queued"}
 
