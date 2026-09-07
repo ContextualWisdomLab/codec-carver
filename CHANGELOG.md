@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 ### Added
+- Cloud Agent `install`/`start` 스크립트가 해시 잠금 pip, fail-closed rustfmt, `GET /health` 준비 대기를 강제합니다. 근거는 [`docs/doctoring/cloud-agent-environment.md`](docs/doctoring/cloud-agent-environment.md)에 있습니다.
+- `GET /health` 활성 프로브를 추가해 업로드 페이지와 같이 API 키 없이 프로세스 생존을 확인할 수 있습니다.
 - 다중 파일 업로드 선택 시 즉각적인 파일 개수 피드백 및 제한 초과 경고 메시지 추가
 - 일괄 업로드 폼에 대상 바이트 프리셋 버튼과 총 파일 크기 미리보기를 추가하여 사용성을 개선했습니다.
 - 클라이언트 측 폼 검증 시 하드코딩된 '5 GiB' 텍스트를 동적으로 변환되도록 수정하고 일괄 업로드 폼에 최대 크기(MAX_UPLOAD_BYTES) 검증 피드백을 추가했습니다.

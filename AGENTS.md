@@ -85,6 +85,17 @@ repo.
   or feature-extraction path.
 <!-- END cwl-agent-guidance -->
 
+## Cloud Agent environment
+
+`.cursor/environment.json` is repository-managed and overrides dashboard
+environments. `install` (`bash .cursor/install.sh`) must stay idempotent,
+hash-lock Python deps, and fail if `rustfmt` cannot be added. `start`
+(`bash .cursor/start.sh`) must wait on `GET /health` before exiting 0; do not
+`nohup` uvicorn and return. Do not add `$schema` to the JSON. Decision record:
+[`docs/doctoring/cloud-agent-environment.md`](docs/doctoring/cloud-agent-environment.md).
+The module map, job-store ERD, and connector order live in
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 ## Code-owner review gates — disabled (on hold)
 
 As of 2026-08-04, code-owner review requirements (`require_code_owner_reviews` in branch

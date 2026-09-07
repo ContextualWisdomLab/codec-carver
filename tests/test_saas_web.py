@@ -732,6 +732,36 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Codec Carver SaaS", response.content)
 
+    def test_health_always_open_without_key(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"status": "ok", "service": "codec-carver"},
+        )
+
+    def test_health_open_when_keys_unconfigured(self):
+        with patch.dict(os.environ):
+            os.environ.pop("CODEC_CARVER_API_KEYS", None)
+            response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
+    def test_is_public_get_covers_ui_and_health_only(self):
+        ui = SimpleNamespace(method="GET", url=SimpleNamespace(path="/"))
+        health = SimpleNamespace(method="GET", url=SimpleNamespace(path="/health"))
+        shrink = SimpleNamespace(method="POST", url=SimpleNamespace(path="/"))
+        jobs = SimpleNamespace(method="GET", url=SimpleNamespace(path="/jobs/x"))
+
+        self.assertTrue(saas_web._is_public_get(ui))
+        self.assertTrue(saas_web._is_public_get(health))
+        self.assertFalse(saas_web._is_public_get(shrink))
+        self.assertFalse(saas_web._is_public_get(jobs))
+        self.assertEqual(saas_web._PUBLIC_GET_PATHS, frozenset({"/", "/health"}))
+
     def test_job_api_requires_key_when_configured(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
             response = client.get("/jobs/missing")
