@@ -43,6 +43,19 @@ class EmptyFileValidationTests(unittest.TestCase):
             "if (!files || files.length === 0) {",
         )
 
+    def test_initial_required_file_submission_uses_same_inline_feedback(self) -> None:
+        """Native required rejection must populate the same visible/semantic state."""
+
+        self.assertIn(
+            "fileInput.addEventListener('invalid', () => updateFileSizePreview(fileInput));",
+            SOURCE_TEXT,
+        )
+        self.assertIn(
+            "batchFileInput.addEventListener('invalid', () => "
+            "updateBatchFilePreview(batchFileInput));",
+            SOURCE_TEXT,
+        )
+
     def test_batch_controls_exist_before_script_binds_listeners(self) -> None:
         """The inline script must not dereference batch controls before they exist."""
 
