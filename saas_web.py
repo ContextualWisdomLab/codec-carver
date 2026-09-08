@@ -246,6 +246,7 @@ HTML_TEMPLATE = """
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
+                preview.classList.remove('required-star');
 
                 const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
                 buttons.forEach(btn => {
@@ -282,6 +283,7 @@ HTML_TEMPLATE = """
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
                 preview.style.color = '#1e7e34';
+                preview.classList.remove('required-star');
 
                 const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
                 buttons.forEach(btn => {
