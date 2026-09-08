@@ -67,6 +67,3 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
-## 2026-06-25 - [Optimize Path.stat() calls by using os.stat()]
-**Learning:** Calling `Path.stat()` or `Path(path).stat()` is slightly slower and has more instantiation overhead than using `os.stat(path)` directly. In hot loops or batch processes checking many file sizes, using `os.stat(path)` yields measurable performance improvements.
-**Action:** Replace `Path.stat()` and `Path(path).stat()` with `os.stat(path)` in performance-critical areas, specifically when repeatedly fetching `st_size` of media files or outputs.
