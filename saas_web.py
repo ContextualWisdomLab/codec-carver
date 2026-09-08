@@ -684,7 +684,7 @@ def shrink_media_batch(
                     archive.write(output_path, arcname=arcname)
                     entry["status"] = "ok"
                     entry["output_name"] = arcname
-                    entry["output_bytes"] = (entry["output_bytes"] or 0) + output_path.stat().st_size
+                    entry["output_bytes"] = (entry["output_bytes"] or 0) + os.stat(output_path).st_size
 
             archive.writestr(
                 "results.json",
