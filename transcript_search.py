@@ -236,16 +236,20 @@ class TranscriptIndex:
         unique_terms = sorted(
             set(terms), key=lambda t: len(self._postings.get(t, ()))
         )
-        candidates: set[int] | None = None
+        # Fast path: gather all postings lists first.
+        # If any term is completely unknown, the intersection is empty.
+        postings_lists = []
         for term in unique_terms:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            candidates = (
-                set(postings) if candidates is None else candidates & postings
-            )
-            if not candidates:
-                return []
+            postings_lists.append(postings)
+
+        # Optimize multiple set intersections using the C-optimized
+        # base_set.intersection(*other_sets) to avoid intermediate allocations.
+        candidates = set(postings_lists[0]).intersection(*postings_lists[1:])
+        if not candidates:
+            return []
 
         matches = []
         for position in candidates or ():
