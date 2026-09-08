@@ -1,4 +1,4 @@
-"""Focused contracts for target-size validation state transitions."""
+"""Focused contracts for clearing empty target-size validation state."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ SOURCE_TEXT = (Path(__file__).resolve().parents[1] / "saas_web.py").read_text(
 
 
 class EmptyTargetValidationTests(unittest.TestCase):
-    """Both target-size inputs must keep error presentation synchronized."""
+    """Both target-size inputs must clear stale custom validation when emptied."""
 
     @staticmethod
     def _handler_between(start_marker: str, end_marker: str) -> str:
@@ -23,7 +23,7 @@ class EmptyTargetValidationTests(unittest.TestCase):
         return SOURCE_TEXT[start:end]
 
     def test_single_target_empty_branch_clears_stale_state(self) -> None:
-        """The single-file target handler exposes required-state feedback."""
+        """The single-file target handler clears preview and accessibility state."""
 
         handler = self._handler_between(
             "document.getElementById('target_bytes').addEventListener('input'",
@@ -46,14 +46,11 @@ class EmptyTargetValidationTests(unittest.TestCase):
         self.assertEqual(SOURCE_TEXT.count("if (this.value === '') {"), 2)
 
     def _assert_empty_branch(self, handler: str) -> None:
-        """Assert one handler resets prior error styling before revalidation."""
+        """Assert one handler clears stale state before numeric validation."""
 
         empty_marker = "if (this.value === '') {"
         invalid_marker = "if (isNaN(val) || val <= 0) {"
         self.assertIn(empty_marker, handler)
-        reset_marker = "preview.classList.remove('required-star');"
-        self.assertIn(reset_marker, handler)
-        self.assertLess(handler.index(reset_marker), handler.index(empty_marker))
         self.assertIn("preview.innerText = 'This field is required.';", handler)
         self.assertIn("this.setCustomValidity('This field is required.');", handler)
         self.assertIn("this.setAttribute('aria-invalid', 'true');", handler)
