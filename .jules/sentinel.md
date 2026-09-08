@@ -65,3 +65,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2024-05-18 - API Key HMAC Encoding DoS
+**Vulnerability:** Unhandled TypeError when processing non-ASCII characters in X-API-Key header during `hmac.compare_digest`, leading to 500 Internal Server Errors (Denial of Service).
+**Learning:** Python's `hmac.compare_digest` strictly requires ASCII-only strings or bytes objects. The previous implementation passed HTTP headers directly as strings, which can contain non-ASCII chars if sent maliciously.
+**Prevention:** Always encode strings to `utf-8` bytes before passing them to `hmac.compare_digest` to prevent DoS via unhandled exceptions in authentication middleware.
