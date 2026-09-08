@@ -229,7 +229,7 @@ HTML_TEMPLATE = """
                     return;
                 }
 
-                if (!file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
                     input.setCustomValidity('Invalid file type. Please select an audio or video file.');
                     input.setAttribute('aria-invalid', 'true');
                     preview.innerText = 'Invalid file type: ' + file.name;
@@ -339,7 +339,7 @@ HTML_TEMPLATE = """
 
                 let totalSize = 0;
                 for (let i = 0; i < files.length; i++) {
-                    if (!files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) {
+                    if (files[i].type && !files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) {
                         input.setCustomValidity('Invalid file type in batch. Please select only audio or video files.');
                         input.setAttribute('aria-invalid', 'true');
                         preview.innerText = 'Invalid file type included: ' + files[i].name;
