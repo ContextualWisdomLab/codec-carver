@@ -407,6 +407,11 @@ HTML_TEMPLATE = """
         const fileInput = document.getElementById('file');
         const batchFileInput = document.getElementById('batch_files');
 
+        fileInput.addEventListener('invalid', () => updateFileSizePreview(fileInput));
+        if (batchFileInput) {
+            batchFileInput.addEventListener('invalid', () => updateBatchFilePreview(batchFileInput));
+        }
+
         [dropZone, batchDropZone].forEach(zone => {
             if (!zone) return;
             ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
