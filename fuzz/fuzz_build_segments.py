@@ -15,7 +15,7 @@ inputs and asserts the structural invariants of a valid split plan:
 Malformed inputs are expected to raise ``ValueError`` (a documented guard);
 any other exception is a defect.
 
-Run locally (Python 3.8 - 3.12)::
+Run locally (Python 3.12 - 3.14)::
 
     python fuzz/fuzz_build_segments.py -atheris_runs=200000 fuzz/corpus/build_segments
 """

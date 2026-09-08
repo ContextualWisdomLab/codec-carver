@@ -7,7 +7,7 @@ crafted media file can steer ffmpeg's log output). This harness feeds
 arbitrary byte strings and asserts the parser never raises and only ever
 produces well-formed, ordered silence intervals.
 
-Run locally (Python 3.8 - 3.12)::
+Run locally (Python 3.12 - 3.14)::
 
     python fuzz/fuzz_parse_silencedetect.py -atheris_runs=200000 fuzz/corpus/parse_silencedetect
 

@@ -7,10 +7,28 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 FUZZ_WORKFLOW = ROOT / ".github" / "workflows" / "fuzz.yml"
+FUZZ_REQUIREMENTS = ROOT / "fuzz" / "requirements-fuzz.txt"
 
 
 class CiWorkflowTests(unittest.TestCase):
-    """Keep Rust CI reproducible on runners without a suitable default toolchain."""
+    """Keep repository CI reproducible across its supported runner toolchains."""
+
+    def test_atheris_lock_supports_fuzz_and_coverage_python_versions(self) -> None:
+        """Pin artifacts installable by the Python 3.12 fuzz and 3.14 coverage lanes."""
+
+        requirements = FUZZ_REQUIREMENTS.read_text(encoding="utf-8")
+        workflow = FUZZ_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("atheris==3.1.0", requirements)
+        self.assertIn(
+            "sha256:ec5e11f21a4c197fe91f7aea2b2de88e623c73a21fc07b105ac6329a1588457b",
+            requirements,
+        )
+        self.assertIn(
+            "sha256:315a0b5c819852b1ffe1ca72efc389c7724881f2c33e4aacb8c6bcec49bd5011",
+            requirements,
+        )
+        self.assertIn("CPython 3.12 - 3.14", workflow)
 
     def test_rust_job_installs_and_uses_rust_1_88_with_rustfmt(self) -> None:
         """Require edition-2024 Rust and rustfmt before formatting or tests run."""

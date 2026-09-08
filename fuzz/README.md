@@ -12,7 +12,8 @@ in-process data structures.
 | [Atheris](https://github.com/google/atheris) | coverage-guided (libFuzzer) fuzzing | Apache-2.0 |
 | [Hypothesis](https://hypothesis.readthedocs.io/) | property-based tests in the normal suite | MPL-2.0 |
 
-Both are permissive (no GPL/AGPL). Atheris supports CPython 3.6–3.12.
+Both are permissive (no GPL/AGPL). The pinned Atheris artifacts support
+CPython 3.12–3.14; CI uses Python 3.12 for deterministic fuzz runs.
 
 ## Targets
 

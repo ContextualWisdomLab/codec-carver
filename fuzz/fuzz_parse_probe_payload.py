@@ -10,7 +10,7 @@ asserts the parser either returns a valid ``MediaProbe`` or raises the
 project's own ``MediaShrinkerError`` — never an unhandled ``KeyError`` /
 ``TypeError`` / ``ValueError``.
 
-Run locally (Python 3.8 - 3.12)::
+Run locally (Python 3.12 - 3.14)::
 
     python fuzz/fuzz_parse_probe_payload.py -atheris_runs=200000 fuzz/corpus/parse_probe_payload
 """

@@ -35,7 +35,7 @@ docker build -t codec-carver . && docker run -p 8000:8000 codec-carver
 # MCP server
 python mcp_driver.py
 
-# Fuzzing (Atheris; CPython <= 3.12, not Windows)
+# Fuzzing (Atheris; CPython 3.12-3.14, not Windows; CI uses 3.12)
 pip install --require-hashes -r fuzz/requirements-fuzz.txt
 python fuzz/fuzz_parse_silencedetect.py -max_total_time=60 fuzz/corpus/parse_silencedetect
 ```
