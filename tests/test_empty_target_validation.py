@@ -1,4 +1,4 @@
-"""Focused contracts for clearing empty target-size validation state."""
+"""Focused contracts for required target-size validation feedback."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ SOURCE_TEXT = (Path(__file__).resolve().parents[1] / "saas_web.py").read_text(
 
 
 class EmptyTargetValidationTests(unittest.TestCase):
-    """Both target-size inputs must clear stale custom validation when emptied."""
+    """Both target-size inputs must expose the same missing-required state."""
 
     @staticmethod
     def _handler_between(start_marker: str, end_marker: str) -> str:
@@ -22,8 +22,8 @@ class EmptyTargetValidationTests(unittest.TestCase):
         end = SOURCE_TEXT.index(end_marker, start)
         return SOURCE_TEXT[start:end]
 
-    def test_single_target_empty_branch_clears_stale_state(self) -> None:
-        """The single-file target handler clears preview and accessibility state."""
+    def test_single_target_empty_branch_keeps_required_feedback(self) -> None:
+        """The single-file target handler keeps visible and semantic feedback."""
 
         handler = self._handler_between(
             "document.getElementById('target_bytes').addEventListener('input'",
@@ -31,8 +31,8 @@ class EmptyTargetValidationTests(unittest.TestCase):
         )
         self._assert_empty_branch(handler)
 
-    def test_batch_target_empty_branch_clears_stale_state(self) -> None:
-        """The batch target handler applies the identical empty-state contract."""
+    def test_batch_target_empty_branch_keeps_required_feedback(self) -> None:
+        """The batch target handler applies the identical required contract."""
 
         handler = self._handler_between(
             "document.getElementById('batch_target_bytes').addEventListener('input'",
@@ -46,18 +46,23 @@ class EmptyTargetValidationTests(unittest.TestCase):
         self.assertEqual(SOURCE_TEXT.count("if (this.value === '') {"), 2)
 
     def _assert_empty_branch(self, handler: str) -> None:
-        """Assert one handler clears stale state before numeric validation."""
+        """Require stale-style cleanup followed by one explicit missing-value verdict."""
 
+        cleanup_marker = "preview.classList.remove('required-star');"
         empty_marker = "if (this.value === '') {"
         invalid_marker = "if (isNaN(val) || val <= 0) {"
+        self.assertIn(cleanup_marker, handler)
         self.assertIn(empty_marker, handler)
-        self.assertIn("preview.innerText = 'This field is required.';", handler)
-        self.assertIn("this.setCustomValidity('This field is required.');", handler)
-        self.assertIn("this.setAttribute('aria-invalid', 'true');", handler)
-        self.assertIn(
-            "return;",
-            handler[handler.index(empty_marker) : handler.index(invalid_marker)],
-        )
+        self.assertLess(handler.index(cleanup_marker), handler.index(empty_marker))
+
+        empty_start = handler.index(empty_marker)
+        empty_end = handler.index("return;", empty_start)
+        empty_branch = handler[empty_start:empty_end]
+        self.assertIn("preview.innerText = 'This field is required.';", empty_branch)
+        self.assertIn("preview.style.color = '';", empty_branch)
+        self.assertIn("preview.classList.add('required-star');", empty_branch)
+        self.assertIn("this.setCustomValidity('This field is required.');", empty_branch)
+        self.assertIn("this.setAttribute('aria-invalid', 'true');", empty_branch)
         self.assertLess(handler.index(empty_marker), handler.index(invalid_marker))
 
 
