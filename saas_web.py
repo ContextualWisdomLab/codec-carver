@@ -668,10 +668,22 @@ def shrink_media_batch(
                     entry["error"] = "Upload processing failed"
                     continue
 
-                outputs = _existing_outputs(results)
-                if not outputs:
+                if not results:
                     logger.error("Batch processing produced no output for upload #%d: %r", index, results)
                     entry["error"] = "Processing failed or no output generated"
+                    continue
+
+                outputs = []
+                for result in results:
+                    output_path = getattr(result, "output_path", None)
+                    if output_path is None:
+                        logger.error("Batch processing produced an incomplete output set for upload #%d: %r", index, results)
+                        entry["error"] = "Processing failed or no output generated"
+                        outputs = []
+                        break
+                    outputs.append(output_path)
+
+                if not outputs:
                     continue
 
                 admitted_outputs = []
