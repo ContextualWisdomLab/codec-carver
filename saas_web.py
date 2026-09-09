@@ -627,6 +627,7 @@ def shrink_media_batch(
                     "filename": safe_filename,
                     "status": "error",
                     "output_name": None,
+                    "output_names": [],
                     "output_bytes": None,
                     "error": None,
                 }
@@ -667,24 +668,50 @@ def shrink_media_batch(
                     entry["error"] = "Upload processing failed"
                     continue
 
-                outputs = _existing_outputs(results)
-                if not outputs:
+                if not results:
                     logger.error("Batch processing produced no output for upload #%d: %r", index, results)
                     entry["error"] = "Processing failed or no output generated"
                     continue
 
+                outputs = []
+                for result in results:
+                    output_path = getattr(result, "output_path", None)
+                    if output_path is None:
+                        logger.error("Batch processing produced an incomplete output set for upload #%d: %r", index, results)
+                        entry["error"] = "Processing failed or no output generated"
+                        outputs = []
+                        break
+                    outputs.append(output_path)
+
+                if not outputs:
+                    continue
+
+                admitted_outputs = []
                 for output_index, output_path in enumerate(outputs, start=1):
                     output_path = output_path.resolve()
                     if not (output_path.is_file() and output_path.is_relative_to(workspace_root)):
                         logger.error("Batch output for upload #%d is missing or outside the workspace", index)
                         entry["error"] = "Processing failed or no output generated"
+                        admitted_outputs = []
                         break
                     suffix = "" if len(outputs) == 1 else f".part{output_index:04d}"
                     arcname = f"{index + 1:02d}_{output_path.stem}{suffix}{output_path.suffix}"
+                    admitted_outputs.append((output_path, arcname, output_path.stat().st_size))
+
+                if len(admitted_outputs) != len(outputs):
+                    continue
+
+                for output_path, arcname, _ in admitted_outputs:
                     archive.write(output_path, arcname=arcname)
-                    entry["status"] = "ok"
-                    entry["output_name"] = arcname
-                    entry["output_bytes"] = (entry["output_bytes"] or 0) + output_path.stat().st_size
+
+                entry["status"] = "ok"
+                entry["output_names"] = [
+                    arcname for _, arcname, _ in admitted_outputs
+                ]
+                entry["output_name"] = entry["output_names"][-1]
+                entry["output_bytes"] = sum(
+                    output_size for _, _, output_size in admitted_outputs
+                )
 
             archive.writestr(
                 "results.json",
