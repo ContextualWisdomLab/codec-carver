@@ -7,7 +7,7 @@
 **Action:** Replace `rglob` with `os.walk`, modifying `dirnames` in-place to prune excluded folders directly, resulting in orders of magnitude speedups depending on search depth and amount of un-traversable folders.
 
 ## 2024-05-29 - [Unit Test Add: _first_int in media_shrinker]
-**Learning:** Even simple utility functions like `_first_int` benefit from explicit tests of edge cases, particularly their exception handling blocks which often go uncovered. Placing tests before `if __name__ == "__main__":` ensures compatibility with all test execution methods.
+**Learning:** Even simple utility functions like `_first_int` benefit from explicit tests of edge cases, particularly their exception handling blocks which often go uncovered. Placing tests before `if __name__ == "__main__":` ensures compatibility with all test execution methods and script execution paradigms.
 **Action:** Always verify test file structure when appending new test classes to ensure they run correctly within the target test framework and script execution paradigms.
 
 ## 2024-05-15 - Unsafe Path Resolution Optimization
@@ -67,6 +67,3 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
-## 2024-08-16 - [불필요한 방어적 복사 제거]
-**학습:** [루프 내에서 비트 연산자(&)를 사용하여 집합 교집합을 수행할 때, 초기 집합의 방어적 복사본(예: set(postings))을 만들지 않아도 됩니다. & 연산자는 본질적으로 새로운 집합을 반환하므로, 초기 O(N) 복사는 중복되며 성능 병목 현상을 일으킵니다.]
-**실행:** [반복문에서 집합 교집합을 처리할 때 불필요한 set() 변환을 피하고 바로 할당하여 사용합니다.]
