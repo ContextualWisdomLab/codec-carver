@@ -112,6 +112,38 @@ class BatchManifestAtomicityTests(unittest.TestCase):
         self.assertIsNone(entry["output_bytes"])
 
     @patch("saas_web.media_shrinker.convert_file")
+    def test_missing_output_path_does_not_publish_partial_success(
+        self, mock_convert_file
+    ) -> None:
+        """A result without an output path keeps the whole upload entry failed."""
+
+        def convert(source, root, output_dir, target_bytes):
+            del source, root, target_bytes
+            inside = Path(output_dir) / "inside.flac"
+            inside.write_bytes(b"inside")
+            return [
+                SimpleNamespace(output_path=inside),
+                SimpleNamespace(output_path=None),
+            ]
+
+        mock_convert_file.side_effect = convert
+        response = self.client.post(
+            "/shrink-batch",
+            files=[("files", ("recording.wav", b"audio", "audio/wav"))],
+            data={"target_bytes": 10000},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        names, manifest = self._read_archive(response)
+        self.assertEqual(names, ["results.json"])
+        entry = manifest["results"][0]
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["error"], "Processing failed or no output generated")
+        self.assertIsNone(entry["output_name"])
+        self.assertEqual(entry["output_names"], [])
+        self.assertIsNone(entry["output_bytes"])
+
+    @patch("saas_web.media_shrinker.convert_file")
     def test_successful_multisegment_entry_records_every_archive_name(
         self, mock_convert_file
     ) -> None:
