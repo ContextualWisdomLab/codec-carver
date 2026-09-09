@@ -780,6 +780,29 @@ class TestApiKeyAuth(unittest.TestCase):
             {"error": "Invalid target_bytes value. Must be greater than 0."},
         )
 
+    def test_non_ascii_header_does_not_crash(self):
+        import json
+        import asyncio
+        from fastapi import Request
+
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": "/shrink",
+                "headers": [(b"x-api-key", "wrong-key-😊".encode("utf-8"))]
+            }
+            request = Request(scope)
+
+            async def dummy_call_next(req):
+                pass
+
+            response = asyncio.run(saas_web.require_api_key(request, dummy_call_next))
+
+            self.assertEqual(response.status_code, 401)
+            body = json.loads(response.body)
+            self.assertEqual(body, {"error": "Invalid or missing API key"})
+
     def test_get_configured_api_keys_parsing(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " a ,, b ,"}):
             self.assertEqual(saas_web.get_configured_api_keys(), ["a", "b"])
