@@ -25,7 +25,7 @@ class SecurityTests(unittest.TestCase):
         )
 
         source_path = Path("-version.wav")
-        with patch.object(Path, "stat") as mock_stat:
+        with patch("media_shrinker.os.stat") as mock_stat:
             mock_stat.return_value = MagicMock(st_size=10)
             probe_media(source_path)
 

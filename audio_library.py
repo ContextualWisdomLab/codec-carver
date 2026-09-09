@@ -574,7 +574,7 @@ def trusted_executable(
     if stat.S_ISLNK(lexical_metadata.st_mode) and not allow_symlink:
         raise ValueError(f"trusted executable must not be a symlink: {candidate}")
     resolved = candidate.resolve(strict=True)
-    metadata = resolved.stat()
+    metadata = os.stat(resolved)
     if not stat.S_ISREG(metadata.st_mode) or not os.access(resolved, os.X_OK):
         raise ValueError(f"trusted executable is not an executable file: {candidate}")
     if metadata.st_uid not in {0, os.getuid()}:
@@ -1086,7 +1086,7 @@ class RustBackend:
                     current_size_rows = []
                     for partial in staging_dir.glob(pattern):
                         try:
-                            size = partial.stat().st_size
+                            size = os.stat(partial).st_size
                         except FileNotFoundError:
                             # The Rust backend can atomically finalize a partial
                             # between the directory scan and this progress probe.
@@ -9188,7 +9188,7 @@ def is_icloud_dataless(path: Path) -> bool:
     if platform.system() != "Darwin":
         return False
     try:
-        flags = path.stat().st_flags
+        flags = os.stat(path).st_flags
     except FileNotFoundError:
         return False
     return bool(flags & MACOS_SF_DATALESS)
