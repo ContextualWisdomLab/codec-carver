@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import math
 import os
+import errno
 import re
 import shutil
 import stat
@@ -2201,12 +2202,27 @@ def _ensure_not_source_path(source: Path, output: Path) -> None:
 
 def _resolve_collision(path: Path, *, overwrite: bool) -> Path:
     """Return path or a numbered variant if path already exists."""
-    if overwrite or not path.exists():
+    if overwrite:
         return path
+    try:
+        os.lstat(str(path))
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return path
+        raise
+
+    base_dir = str(path.parent)
+    stem = path.stem
+    suffix = path.suffix
+
     for index in range(1, 10_000):
-        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
-        if not candidate.exists():
-            return candidate
+        cand_str = os.path.join(base_dir, f"{stem}-{index}{suffix}")
+        try:
+            os.lstat(cand_str)
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                return Path(cand_str)
+            raise
     raise FileExistsError(f"Could not find free output path for {path}")
 
 

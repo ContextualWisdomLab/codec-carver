@@ -2433,7 +2433,13 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "existing.flac"
             path.write_bytes(b"data")
-            with patch("pathlib.Path.exists", return_value=True):
+
+            original_lstat = os.lstat
+
+            def mock_lstat(target, *args, **kwargs):
+                return original_lstat(path, *args, **kwargs)
+
+            with patch("media_shrinker.os.lstat", side_effect=mock_lstat):
                 with self.assertRaisesRegex(FileExistsError, "Could not find free"):
                     media_shrinker._resolve_collision(path, overwrite=False)
 
