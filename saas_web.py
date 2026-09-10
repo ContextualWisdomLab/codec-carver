@@ -228,16 +228,28 @@ HTML_TEMPLATE = """
                     preview.innerText = '';
                     return;
                 }
+
+                let unknownMimeNotice = '';
+                if (!file.type) {
+                    unknownMimeNotice = ' File type could not be identified; it will be validated after upload.';
+                } else if (!file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                    input.setCustomValidity('Unsupported file type. Please select an audio or video file.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected file is not an audio or video file.';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
                     input.setCustomValidity('File exceeds ' + limitText + ' limit.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected file size: ' + text + ' (exceeds ' + limitText + ' limit)';
+                    preview.innerText = 'Selected file size: ' + text + ' (exceeds ' + limitText + ' limit)' + unknownMimeNotice;
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected file size: ' + text;
+                preview.innerText = 'Selected file size: ' + text + unknownMimeNotice;
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
@@ -329,14 +341,34 @@ HTML_TEMPLATE = """
                 }
 
                 let totalSize = 0;
+                let invalidTypeCount = 0;
+                let unknownTypeCount = 0;
                 for (let i = 0; i < files.length; i++) {
                     totalSize += files[i].size;
+                    if (!files[i].type) {
+                        unknownTypeCount++;
+                    } else if (!files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) {
+                        invalidTypeCount++;
+                    }
+                }
+
+                if (invalidTypeCount > 0) {
+                    input.setCustomValidity('Unsupported file type. Please select audio or video files only.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = invalidTypeCount + ' of ' + files.length + ' selected files are not audio or video files.';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+
+                let unknownMimeNotice = '';
+                if (unknownTypeCount > 0) {
+                    unknownMimeNotice = ' ' + (unknownTypeCount === 1 ? 'File' : unknownTypeCount + ' files') + ' type could not be identified; it will be validated after upload.';
                 }
 
                 if (files.length > 20) {
                     input.setCustomValidity('Maximum is 20 files per batch.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected ' + files.length + ' files (' + formatBinaryBytes(totalSize) + ', exceeds 20 files limit)';
+                    preview.innerText = 'Selected ' + files.length + ' files (' + formatBinaryBytes(totalSize) + ', exceeds 20 files limit)' + unknownMimeNotice;
                     preview.style.color = '#dc3545';
                     return;
                 }
@@ -345,11 +377,11 @@ HTML_TEMPLATE = """
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
                     input.setCustomValidity('Total file size exceeds ' + limitText + ' limit.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ', exceeds ' + limitText + ' limit)';
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ', exceeds ' + limitText + ' limit)' + unknownMimeNotice;
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
+                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')' + unknownMimeNotice;
             }
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
