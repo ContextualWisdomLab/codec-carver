@@ -2181,10 +2181,15 @@ def _execute_plan(
                 f"ffmpeg failed for {source}: {completed.stderr.strip()}"
             )
 
-        if final_output.exists() and not overwrite:
-            raise FileExistsError(f"Output already exists: {final_output}")
-
-        temp_output.replace(final_output)
+        if not overwrite:
+            try:
+                os.link(temp_output, final_output)
+            except OSError as exc:
+                if exc.errno == errno.EEXIST:
+                    raise FileExistsError(errno.EEXIST, f"Output already exists: {final_output}")
+                raise
+        else:
+            temp_output.replace(final_output)
     finally:
         temp_output.unlink(missing_ok=True)
 
