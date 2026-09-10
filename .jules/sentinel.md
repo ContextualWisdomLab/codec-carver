@@ -69,3 +69,7 @@
 **Vulnerability:** `hmac.compare_digest` in `require_api_key` crashes with a `TypeError` when evaluating non-ASCII API key strings.
 **Learning:** Python's `hmac.compare_digest` expects ASCII-only strings or bytes. Providing non-ASCII strings causes a `TypeError`. Unhandled exceptions in HTTP middleware result in a 500 error and could crash the request or worker thread.
 **Prevention:** When using `hmac.compare_digest` on data that might contain non-ASCII characters, always explicitly `.encode("utf-8")` the input values to bytes.
+## 2024-10-27 - [Fix CI Trivy failure]
+**Vulnerability:** Dependency vulnerabilities in `httpx2`.
+**Learning:** `httpx2` dependency was flagged by `trivy-fs` for having known vulnerabilities (CVE-2026-84382, CVE-2026-84378, CVE-2026-84379, CVE-2026-84380) with HIGH/MEDIUM severity.
+**Prevention:** Removed `httpx2` from the project's dependencies since it is unused, resolving the vulnerabilities.
