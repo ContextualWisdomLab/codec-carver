@@ -2884,6 +2884,7 @@ class RustBackendTests(unittest.TestCase):
 
             vanished = Mock()
             vanished.name = ".codec-carver-73-1.wav.partial"
+            vanished.stat.side_effect = FileNotFoundError
             process = Mock(pid=73, returncode=0)
             process.communicate.side_effect = [
                 subprocess.TimeoutExpired(["core", "stage"], 1),
@@ -2892,7 +2893,6 @@ class RustBackendTests(unittest.TestCase):
             with (
                 patch("audio_library.subprocess.Popen", return_value=process),
                 patch("audio_library.Path.glob", side_effect=[[vanished], []]),
-                patch("audio_library.os.stat", side_effect=FileNotFoundError),
                 patch(
                     "audio_library.time.monotonic",
                     side_effect=[0.0, 0.0, 0.5, 0.5],
@@ -8910,19 +8910,17 @@ class CliTests(unittest.TestCase):
             self.assertFalse(staged.exists())
 
     def test_icloud_dataless_detection(self) -> None:
-        path = Mock(spec=Path)
+        path = Mock()
         with patch("audio_library.platform.system", return_value="Linux"):
-            with patch("audio_library.os.stat") as mock_stat:
-                self.assertFalse(is_icloud_dataless(path))
-                mock_stat.assert_not_called()
+            self.assertFalse(is_icloud_dataless(path))
+            path.stat.assert_not_called()
         with patch("audio_library.platform.system", return_value="Darwin"):
-            with patch("audio_library.os.stat") as mock_stat:
-                mock_stat.return_value = Mock(st_flags=audio_library.MACOS_SF_DATALESS)
-                self.assertTrue(is_icloud_dataless(path))
-                mock_stat.return_value = Mock(st_flags=0)
-                self.assertFalse(is_icloud_dataless(path))
-                mock_stat.side_effect = FileNotFoundError
-                self.assertFalse(is_icloud_dataless(path))
+            path.stat.return_value = Mock(st_flags=audio_library.MACOS_SF_DATALESS)
+            self.assertTrue(is_icloud_dataless(path))
+            path.stat.return_value = Mock(st_flags=0)
+            self.assertFalse(is_icloud_dataless(path))
+            path.stat.side_effect = FileNotFoundError
+            self.assertFalse(is_icloud_dataless(path))
 
     def test_staging_capacity_and_safe_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
