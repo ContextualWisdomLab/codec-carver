@@ -149,8 +149,11 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
         .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
-        button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        input[type="number"], input[type="file"] { padding: 8px; border: 1px solid #ced4da; border-radius: 4px; transition: border-color 0.2s ease, box-shadow 0.2s ease; max-width: 100%; box-sizing: border-box; background-color: #fff; margin-top: 4px; font-family: inherit; }
+        input[type="number"]:hover, input[type="file"]:hover { border-color: #a5b1c2; }
+        button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s ease, transform 0.1s ease; }
         button:hover:not(:disabled) { background-color: #004085; }
+        button:active:not(:disabled) { transform: scale(0.98); }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
         button:focus-visible, input:focus-visible { outline: 2px solid #004085; outline-offset: 2px; }
         .required-star { color: #dc3545; }
@@ -160,8 +163,9 @@ HTML_TEMPLATE = """
         .box { transition: background-color 0.2s, border-color 0.2s; }
         .box.dragover { background-color: #f8f9fa; border-color: #0056b3; border-style: dashed; }
         .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
-        .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
+        .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.1s ease; }
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
+        .preset-btn:active { transform: scale(0.96); }
         .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; font-weight: bold; }
         input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
     </style>
