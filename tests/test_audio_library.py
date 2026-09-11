@@ -4536,7 +4536,7 @@ class GpuTranscriberTests(unittest.TestCase):
                 "-ss",
                 "299.000000",
                 "-protocol_whitelist",
-                "file,crypto,data,fd,pipe",
+                "file,crypto,data",
                 "-i",
                 "recording.wav",
                 "-t",
