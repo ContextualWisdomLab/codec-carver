@@ -237,6 +237,17 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
+                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                    input.setCustomValidity('Invalid file type: ' + file.type + '. Please select audio or video.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected file size: ' + text + ' (invalid type: ' + file.type + ')';
+                    preview.style.color = '#dc3545';
+                    return;
+                } else if (!file.type) {
+                    preview.innerText = 'Selected file size: ' + text + ' (warning: unknown file type)';
+                    preview.style.color = '#856404';
+                    return;
+                }
                 preview.innerText = 'Selected file size: ' + text;
             }
 
@@ -329,8 +340,16 @@ HTML_TEMPLATE = """
                 }
 
                 let totalSize = 0;
+                let invalidType = null;
+                let unknownTypeCount = 0;
+
                 for (let i = 0; i < files.length; i++) {
                     totalSize += files[i].size;
+                    if (files[i].type && !files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) {
+                        invalidType = files[i].type;
+                    } else if (!files[i].type) {
+                        unknownTypeCount++;
+                    }
                 }
 
                 if (files.length > 20) {
@@ -349,6 +368,19 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
+
+                if (invalidType) {
+                    input.setCustomValidity('Invalid file type: ' + invalidType + '. Please select audio or video.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ', invalid type: ' + invalidType + ')';
+                    preview.style.color = '#dc3545';
+                    return;
+                } else if (unknownTypeCount > 0) {
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ', warning: ' + unknownTypeCount + ' unknown file type' + (unknownTypeCount > 1 ? 's' : '') + ')';
+                    preview.style.color = '#856404';
+                    return;
+                }
+
                 preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
             }
 
