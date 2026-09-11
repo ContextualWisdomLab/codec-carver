@@ -121,9 +121,17 @@ class UsageStore:
         self._lock = threading.Lock()
         with closing(sqlite3.connect(self._db_path, timeout=30.0)) as conn:
             # OPTIMIZATION: SQLite persists PRAGMA journal_mode=WAL per database file.
-            # We execute it once during schema initialization via executescript rather than
+            # We explicitly execute it once during schema initialization rather than
             # redundantly on every short-lived connection, removing connection overhead.
-            conn.executescript(f"PRAGMA journal_mode=WAL;\n{_SCHEMA}")
+            # Memory databases do not persist mode across connections.
+            if str(self._db_path) != ":memory:":
+                conn.execute("PRAGMA journal_mode=WAL")
+                mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+                if mode.lower() != "wal":
+                    # Non-fatal fallback for filesystems/versions that don't support WAL.
+                    pass
+            with conn:
+                conn.execute(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
         """Open a new short-lived connection to the store's database.
@@ -133,7 +141,10 @@ class UsageStore:
         Returns:
             A fresh :class:`sqlite3.Connection`.
         """
-        return sqlite3.connect(self._db_path, timeout=30.0)
+        conn = sqlite3.connect(self._db_path, timeout=30.0)
+        if str(self._db_path) == ":memory:":
+            conn.execute("PRAGMA journal_mode=WAL")
+        return conn
 
     def record(
         self, api_key: str, *, input_bytes: int, output_bytes: int, now: datetime
