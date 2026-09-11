@@ -83,5 +83,34 @@ class FfmpegProtocolWhitelistContractTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["pass_fds"], ())
 
 
-if __name__ == "__main__":
+
+    def test_decode_mlx_audio_applies_whitelist_before_input_flag(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"dummy", stderr=b""
+        )
+        with tempfile.TemporaryDirectory() as root:
+            media_path = Path(root) / "recording.m4a"
+            media_path.write_bytes(b"fixture")
+            with (
+                patch(
+                    "audio_library.trusted_ffmpeg_binary",
+                    return_value=Path("/usr/bin/ffmpeg"),
+                ),
+                patch("audio_library.subprocess.run", return_value=completed) as run,
+            ):
+                with patch.dict("sys.modules", {"mlx": unittest.mock.MagicMock(), "mlx.core": unittest.mock.MagicMock(), "numpy": unittest.mock.MagicMock()}):
+                    try:
+                        audio_library.decode_audio_for_mlx(media_path)
+                    except Exception:
+                        pass
+
+        command = run.call_args.args[0]
+        whitelist_index = self.assert_local_input_protocols(command)
+        self.assertEqual(
+            command[whitelist_index + 2 : whitelist_index + 4],
+            ["-i", str(media_path)],
+        )
+        self.assertEqual(run.call_args.kwargs["pass_fds"], ())
+
+if __name__ == '__main__':
     unittest.main()
