@@ -96,17 +96,9 @@ class JobStore:
         self._lock = threading.Lock()
         with closing(sqlite3.connect(self._db_path, timeout=30.0)) as conn:
             # OPTIMIZATION: SQLite persists PRAGMA journal_mode=WAL per database file.
-            # We explicitly execute it once during schema initialization rather than
+            # We execute it once during schema initialization via executescript rather than
             # redundantly on every short-lived connection, removing connection overhead.
-            # Memory databases do not persist mode across connections.
-            conn.execute("PRAGMA journal_mode=WAL")
-            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-            if mode.lower() != "wal" and self._db_path != ":memory:":
-                # Documented: Not all environments (e.g. some network mounts) support WAL.
-                # We gracefully fall back to the default journal mode if WAL isn't applied.
-                pass
-            with conn:
-                conn.execute(_SCHEMA)
+            conn.executescript(f"PRAGMA journal_mode=WAL;\n{_SCHEMA}")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -119,8 +111,6 @@ class JobStore:
         conn = sqlite3.connect(self._db_path, timeout=30.0)
         try:
             conn.row_factory = sqlite3.Row
-            if self._db_path == ":memory:":
-                conn.execute("PRAGMA journal_mode=WAL")
             yield conn
             conn.commit()
         finally:
