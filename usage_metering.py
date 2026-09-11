@@ -124,12 +124,12 @@ class UsageStore:
             # We explicitly execute it once during schema initialization rather than
             # redundantly on every short-lived connection, removing connection overhead.
             # Memory databases do not persist mode across connections.
-            if str(self._db_path) != ":memory:":
-                conn.execute("PRAGMA journal_mode=WAL")
-                mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-                if mode.lower() != "wal":
-                    # Non-fatal fallback for filesystems/versions that don't support WAL.
-                    pass
+            conn.execute("PRAGMA journal_mode=WAL")
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            if mode.lower() != "wal" and str(self._db_path) != ":memory:":
+                # Documented: Not all environments (e.g. some network mounts) support WAL.
+                # We gracefully fall back to the default journal mode if WAL isn't applied.
+                pass
             with conn:
                 conn.execute(_SCHEMA)
 
