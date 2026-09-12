@@ -67,6 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
-## 2025-02-12 - [Replace Path.stat() with os.stat() for performance]
-**Learning:** `os.stat(path)` is inherently faster than `Path(path).stat()` or `path.stat()` in Python, particularly when repeatedly executing over thousands of files in tight loops because it avoids unnecessary Path object manipulation/instantiation overhead while still supporting `os.PathLike` objects directly.
-**Action:** Always prefer `os.stat()` when performing high-frequency batched filesystem size/attribute checks, ensuring the paths are guaranteed valid `os.PathLike` objects and tests are not improperly mocking `.stat()` directly on the `Path` instance.
+
+## 2026-09-12 - [Replace Path.stat() with os.stat() for performance]
+**Learning:** `os.stat(path)` is measurably faster than `Path(path).stat()` or `path.stat()` in Python, particularly when repeatedly executing over thousands of files in tight batched file loops, because it avoids unnecessary Path object instantiation overhead while natively supporting `os.PathLike` objects.
+**Action:** Prefer `os.stat()` when performing high-frequency batched filesystem attribute checks over thousands of items, ensuring the paths are guaranteed valid `os.PathLike` objects and tests are not improperly mocking `.stat()` directly on the `Path` instance.
