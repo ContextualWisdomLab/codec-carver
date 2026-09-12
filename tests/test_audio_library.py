@@ -246,6 +246,7 @@ class NamingTests(unittest.TestCase):
             self.assertEqual(audio_duration_seconds(artifact), 1.25)
         descriptor = handle.fileno()
         self.assertEqual(run.call_args.args[0][-1], f"/dev/fd/{descriptor}")
+        self.assertEqual(run.call_args.args[0][-2], "-i")
         self.assertEqual(run.call_args.kwargs["pass_fds"], (descriptor,))
         self.assertNotIn("stdin", run.call_args.kwargs)
         handle.close()

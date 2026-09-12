@@ -65,3 +65,11 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2026-09-12 - [Sentinel: FFprobe Argument Injection and SSRF in duration probing]
+**Vulnerability:** Argument injection and Server-Side Request Forgery via unrestricted FFprobe protocols during audio duration probing in `audio_library.py`.
+**Learning:** Subprocess calls evaluating media inputs must specify safe protocol bounds using `-protocol_whitelist` and restrict option parsing with an explicit `-i` flag, even for read-only metadata probes.
+**Prevention:** Always enforce `"-protocol_whitelist", "file,crypto,data,fd,pipe"` and `-i` flags before user-controlled inputs when calling `ffmpeg` or `ffprobe`.
+## 2026-09-12 - [Sentinel: Remove Unused Vulnerable Dependency]
+**Vulnerability:** Trivy flagged `httpx2==2.5.0` with multiple CVEs (CVE-2026-84382, CVE-2026-84378, CVE-2026-84379, CVE-2026-84380).
+**Learning:** Unused dependencies in `requirements.txt` and `pyproject.toml` increase the attack surface and cause CI security failures, requiring synchronous removal across lockfiles.
+**Prevention:** Periodically audit dependencies and remove unused packages from all requirement and lockfiles.
