@@ -69,3 +69,7 @@
 **Vulnerability:** Argument injection and Server-Side Request Forgery via unrestricted FFprobe protocols during audio duration probing in `audio_library.py`.
 **Learning:** Subprocess calls evaluating media inputs must specify safe protocol bounds using `-protocol_whitelist` and restrict option parsing with an explicit `-i` flag, even for read-only metadata probes.
 **Prevention:** Always enforce `"-protocol_whitelist", "file,crypto,data,fd,pipe"` and `-i` flags before user-controlled inputs when calling `ffmpeg` or `ffprobe`.
+## 2026-09-12 - [Sentinel: Remove Unused Vulnerable Dependency]
+**Vulnerability:** Trivy flagged `httpx2==2.5.0` with multiple CVEs (CVE-2026-84382, CVE-2026-84378, CVE-2026-84379, CVE-2026-84380).
+**Learning:** Unused dependencies in `requirements.txt` and `pyproject.toml` increase the attack surface and cause CI security failures, requiring synchronous removal across lockfiles.
+**Prevention:** Periodically audit dependencies and remove unused packages from all requirement and lockfiles.
