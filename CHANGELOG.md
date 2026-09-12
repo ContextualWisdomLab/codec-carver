@@ -15,4 +15,4 @@
 
 ## [Unreleased]
 ### 성능 개선 (Performance)
-- `media_shrinker.py`에서 배치 작업 시 발생하는 파일 시스템 접근 및 검증 로직 최적화를 위해 불필요한 `Path.stat()` 객체 생성 오버헤드를 제거하고 직접 C 확장의 `os.stat()`을 사용하도록 수정했습니다.
+- `media_shrinker.py` 파일 내 `_ensure_not_protected_source_path` 함수에서 `protected_sources` 인자가 빈 집합일 때 조기 반환(early return)을 수행하도록 수정하여 수천 개의 파일 경로를 스캔하고 변환할 때 불필요하고 비용이 많이 드는 `Path.resolve()` I/O 시스템 호출을 회피하도록 최적화했습니다.
