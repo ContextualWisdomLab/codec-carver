@@ -81,3 +81,7 @@
 ## 2024-08-04 - 숫자 입력 필드 빈 문자열 상태 초기화 처리
 **학습:** 숫자 입력 필드에서 빈 문자열('')을 입력할 때 브라우저는 이전의 유효하지 않은 상태를 암시적으로 유지하므로, 사용자 정의 검증을 명시적으로 초기화하지 않으면 네이티브 HTML5 유효성 검사가 정상 작동하지 않을 수 있음을 확인했습니다.
 **실행:** 인라인 검증 스크립트 작성 시 빈 문자열 상태를 별도로 확인하여 this.setCustomValidity('') 및 this.removeAttribute('aria-invalid')를 명시적으로 호출하는 로직을 추가해야 합니다.
+
+## 2026-09-12 - Client-side file upload validation against file.type
+**Learning:** Implementing client-side file upload validation against `file.type` must account for browsers sometimes omitting the MIME type. Implementing a three-state UX (accept valid, block invalid, warn on unknown) is necessary to avoid blocking valid edge cases while still catching obvious errors early.
+**Action:** Always implement a three-state UX for file type validation: accept known valid types, block known invalid types using `setCustomValidity` and `aria-invalid`, and explicitly warn (without blocking) on unknown types (empty `file.type`).

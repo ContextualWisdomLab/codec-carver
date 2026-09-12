@@ -237,6 +237,21 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
+
+                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                    input.setCustomValidity('Unsupported file type. Please select an audio or video file.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected file: ' + file.name + ' (' + text + ') - Unsupported type';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+
+                if (!file.type) {
+                    preview.innerText = 'Selected file size: ' + text + ' (Warning: unknown file type, submission may fail)';
+                    preview.style.color = '#856404'; // warning color
+                    return;
+                }
+
                 preview.innerText = 'Selected file size: ' + text;
             }
 
@@ -349,6 +364,33 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
+
+                let hasInvalidType = false;
+                let hasUnknownType = false;
+                for (let i = 0; i < files.length; i++) {
+                    if (files[i].type && !files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) {
+                        hasInvalidType = true;
+                        break;
+                    }
+                    if (!files[i].type) {
+                        hasUnknownType = true;
+                    }
+                }
+
+                if (hasInvalidType) {
+                    input.setCustomValidity('One or more files have an unsupported type. Please select audio or video files only.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ') - Contains unsupported types';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+
+                if (hasUnknownType) {
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ') (Warning: contains unknown file types)';
+                    preview.style.color = '#856404';
+                    return;
+                }
+
                 preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
             }
 
