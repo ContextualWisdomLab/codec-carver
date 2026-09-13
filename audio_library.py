@@ -3209,20 +3209,24 @@ def trusted_transcript_text(
     return "" if segments else fallback.strip()
 
 
-def is_context_rich_segment(value: str) -> bool:
+def is_context_rich_segment(value: str, tokens: list[str] | None = None) -> bool:
     """Return whether one segment has diverse, non-stock contextual language."""
 
     sanitized = sanitize_component(value, limit=512)
-    tokens = [
-        token.casefold()
-        for token in DESCRIPTION_TOKEN_RE.findall(value)
-        if not token.isdecimal() and token.casefold() not in DESCRIPTION_STOPWORDS
-    ]
+
+    # Fast-path string checks before doing expensive tokenization
+    if STOCK_HALLUCINATION_RE.search(sanitized) or REPEATED_KOREAN_CHUNK_RE.search(value):
+        return False
+
+    if tokens is None:
+        tokens = [
+            token.casefold()
+            for token in DESCRIPTION_TOKEN_RE.findall(value)
+            if not token.isdecimal() and token.casefold() not in DESCRIPTION_STOPWORDS
+        ]
     unique_tokens = set(tokens)
     return (
-        not STOCK_HALLUCINATION_RE.search(sanitized)
-        and not REPEATED_KOREAN_CHUNK_RE.search(value)
-        and len(tokens) >= 6
+        len(tokens) >= 6
         and len(unique_tokens) >= 5
         and len(unique_tokens) * 2 >= len(tokens)
     )
@@ -3245,7 +3249,7 @@ def has_sustained_contextual_speech(segment_texts: Iterable[str]) -> bool:
             for token in DESCRIPTION_TOKEN_RE.findall(value)
             if not token.isdecimal() and token.casefold() not in DESCRIPTION_STOPWORDS
         ]
-        if is_context_rich_segment(value):
+        if is_context_rich_segment(value, tokens):
             run_segments += 1
             run_tokens.extend(tokens)
             if (
@@ -3499,61 +3503,55 @@ def semantic_transcript_excerpt(
             if STOCK_HALLUCINATION_RE.search(sanitize_component(fallback, limit=256))
             else [fallback]
         )
-    values = [
-        value
-        for value in values
-        if value
-        and len(sanitize_component(value, limit=256)) >= 4
-        and (
-            len(DESCRIPTION_TOKEN_RE.findall(value)) < 8
-            or len({token.casefold() for token in DESCRIPTION_TOKEN_RE.findall(value)})
-            * 4
-            >= len(DESCRIPTION_TOKEN_RE.findall(value))
-        )
-    ]
+    # Cache regex execution locally rather than running findall() 3x per item inside comprehensions
+    filtered_values = []
+    for value in values:
+        if not value or len(sanitize_component(value, limit=256)) < 4:
+            continue
+        tokens = DESCRIPTION_TOKEN_RE.findall(value)
+        token_count = len(tokens)
+        if token_count < 8 or len({token.casefold() for token in tokens}) * 4 >= token_count:
+            filtered_values.append(value)
+    values = filtered_values
+
     context_rich_values = [value for value in values if is_context_rich_segment(value)]
     if len(context_rich_values) >= 8:
         values = context_rich_values
     if len(values) > max_segments:
         indexed_values = list(enumerate(values))
         cue_limit = max(1, max_segments // 4)
+
+        def rank_key(item: tuple[int, str]) -> tuple[int, int, int]:
+            tokens = DESCRIPTION_TOKEN_RE.findall(item[1])
+            return (
+                -len(SEMANTIC_CONTEXT_CUE_RE.findall(item[1])),
+                -len({token.casefold() for token in tokens}),
+                item[0],
+            )
+
         cue_ranked = sorted(
             (
                 (index, value)
                 for index, value in indexed_values
                 if SEMANTIC_CONTEXT_CUE_RE.search(value)
             ),
-            key=lambda item: (
-                -len(SEMANTIC_CONTEXT_CUE_RE.findall(item[1])),
-                -len(
-                    {
-                        token.casefold()
-                        for token in DESCRIPTION_TOKEN_RE.findall(item[1])
-                    }
-                ),
-                item[0],
-            ),
+            key=rank_key,
         )[:cue_limit]
         selected_indices = {index for index, _value in cue_ranked}
         timeline_slots = max_segments - len(selected_indices)
+
+        def fallback_rank_key(item: tuple[int, str]) -> tuple[int, int]:
+            tokens = DESCRIPTION_TOKEN_RE.findall(item[1])
+            return (
+                len({token.casefold() for token in tokens}),
+                min(len(item[1]), 320),
+            )
+
         for bucket in range(timeline_slots):
             start = bucket * len(values) // timeline_slots
             end = (bucket + 1) * len(values) // timeline_slots
             candidates = indexed_values[start:end]
-            selected_indices.add(
-                max(
-                    candidates,
-                    key=lambda item: (
-                        len(
-                            {
-                                token.casefold()
-                                for token in DESCRIPTION_TOKEN_RE.findall(item[1])
-                            }
-                        ),
-                        min(len(item[1]), 320),
-                    ),
-                )[0]
-            )
+            selected_indices.add(max(candidates, key=fallback_rank_key)[0])
         values = [values[index] for index in sorted(selected_indices)]
     lines = []
     used_chars = 0
