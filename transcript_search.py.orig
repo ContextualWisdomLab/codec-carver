@@ -243,9 +243,6 @@ class TranscriptIndex:
                 return []
             postings_lists.append(postings)
 
-        if not postings_lists:
-            return []
-
         # Avoid intermediate allocations by gathering sets and using C-optimized intersection
         candidates = set(postings_lists[0]).intersection(*postings_lists[1:])
         if not candidates:
