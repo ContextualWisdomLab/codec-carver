@@ -65,7 +65,3 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
-## 2026-09-14 - [Sentinel Fixes: Remove vulnerable unused httpx2 dependency]
-**Vulnerability:** httpx2 version 2.5.0 was flagged for multiple CVEs (e.g., CVE-2026-84382) in the trivy-fs scan.
-**Learning:** Extraneous dependencies increase the attack surface and can cause CI pipeline failures when vulnerabilities are disclosed for packages that aren't even actively used by the application.
-**Prevention:** Routinely audit `requirements.txt` and `pyproject.toml` to remove dependencies that are no longer imported or necessary. Ensure lock files are regenerated or manually synced to completely purge the unused packages from the environment.
