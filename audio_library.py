@@ -2861,7 +2861,7 @@ def decode_audio_for_mlx(
             # Input-side seeking avoids decoding every earlier chunk; ffmpeg's
             # default accurate_seek still discards samples before this boundary.
             command.extend(("-ss", f"{start_seconds:.6f}"))
-        command.extend(("-i", media_input))
+        command.extend(("-protocol_whitelist", "file,crypto,data", "-i", media_input))
         if duration_seconds is not None:
             command.extend(("-t", f"{duration_seconds:.6f}"))
         command.extend(
@@ -2941,6 +2941,8 @@ def detect_silence_intervals(
     command = [
         str(ffmpeg),
         "-nostdin",
+        "-protocol_whitelist",
+        "file,crypto,data",
         "-i",
         media_input,
         "-af",
