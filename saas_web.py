@@ -149,7 +149,7 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
         .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
-        button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
         button:hover:not(:disabled) { background-color: #004085; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
         button:focus-visible, input:focus-visible { outline: 2px solid #004085; outline-offset: 2px; }
@@ -160,13 +160,14 @@ HTML_TEMPLATE = """
         .box { transition: background-color 0.2s, border-color 0.2s; }
         .box.dragover { background-color: #f8f9fa; border-color: #0056b3; border-style: dashed; }
         .preset-container { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
-        .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
+        .preset-btn { padding: 4px 8px; font-size: 0.85em; background-color: #e9ecef; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; transition: all 0.2s; }
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
         .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; font-weight: bold; }
         input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
     </style>
 </head>
 <body>
+    <main>
     <div class="box" id="drop-zone">
         <h2>Shrink Media File</h2>
         <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
@@ -181,7 +182,7 @@ HTML_TEMPLATE = """
                 <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
-                <div id="preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes">
+                <div id="preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes" aria-controls="target_bytes">
                     <button type="button" class="preset-btn" data-bytes="26214400" aria-pressed="false">25 MiB</button>
                     <button type="button" class="preset-btn" data-bytes="104857600" aria-pressed="false">100 MiB</button>
                     <button type="button" class="preset-btn" data-bytes="524288000" aria-pressed="false">500 MiB</button>
@@ -252,7 +253,7 @@ HTML_TEMPLATE = """
                     const presetValue = Number.parseInt(btn.dataset.bytes, 10);
                     btn.setAttribute(
                         'aria-pressed',
-                        !e.isTrusted && presetValue === val ? 'true' : 'false'
+                        presetValue === val ? 'true' : 'false'
                     );
                 });
 
@@ -286,7 +287,7 @@ HTML_TEMPLATE = """
                     const presetValue = Number.parseInt(btn.dataset.bytes, 10);
                     btn.setAttribute(
                         'aria-pressed',
-                        !e.isTrusted && presetValue === val ? 'true' : 'false'
+                        presetValue === val ? 'true' : 'false'
                     );
                 });
 
@@ -419,7 +420,7 @@ HTML_TEMPLATE = """
                 <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="batch_target_bytes_help batch_target_bytes_preview" required>
                 <br><span id="batch_target_bytes_help" class="help-text">Maximum allowed size in bytes for each output file</span>
                 <br><span id="batch_target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
-                <div id="batch_preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes for batch">
+                <div id="batch_preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes for batch" aria-controls="batch_target_bytes">
                     <button type="button" class="preset-btn" data-bytes="26214400" aria-pressed="false">25 MiB</button>
                     <button type="button" class="preset-btn" data-bytes="104857600" aria-pressed="false">100 MiB</button>
                     <button type="button" class="preset-btn" data-bytes="524288000" aria-pressed="false">500 MiB</button>
@@ -429,6 +430,7 @@ HTML_TEMPLATE = """
             <button type="submit" id="batch-submit-btn">Upload and Shrink Batch</button>
         </form>
     </div>
+    </main>
 </body>
 </html>
 """
