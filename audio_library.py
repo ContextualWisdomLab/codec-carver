@@ -4699,6 +4699,7 @@ def preflight_mlx_vlm_import(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            shell=False,
             timeout=timeout_seconds,
             env=trusted_child_environment(),
             cwd=Path(sys.executable).resolve().parent,
