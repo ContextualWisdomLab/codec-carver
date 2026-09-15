@@ -1,0 +1,7 @@
+🛡️ Sentinel: [MEDIUM] Fix vulnerable httpx2 dependency
+
+🚨 Severity: MEDIUM
+💡 Vulnerability: `httpx2` 패키지(버전 2.5.0)에 알려진 취약점(예: CVE-2026-84382, CVE-2026-84378)이 있으며 CI의 Trivy 파일 시스템 스캔 중 발견되었습니다.
+🎯 Impact: `httpx2`를 사용할 경우 악의적인 사용자가 이 취약점을 악용하여 보안 침해를 일으킬 수 있습니다.
+🔧 Fix: `requirements.txt`와 `pyproject.toml`에서 `httpx2==2.5.0`을 제거하고, `requirements-lock.txt`에서 관련된 종속성 블록(예: `httpcore2`)을 조심스럽게 삭제했습니다.
+✅ Verification: 기능이 유지되는지 확인하기 위해 전체 테스트 스위트(`python3 -m unittest discover -s tests`)를 실행했습니다. 테스트가 성공적으로 통과했습니다.
