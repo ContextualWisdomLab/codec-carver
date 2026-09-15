@@ -3155,9 +3155,6 @@ class MediaShrinkerParseCoverageTests(unittest.TestCase):
         self.assertEqual(intervals, [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class TestEnsureNotProtectedSourcePath(unittest.TestCase):
     def test_ensure_not_protected_source_path_empty_frozenset(self):
         """Test that empty frozenset triggers early return (implicitly tested by coverage)."""
@@ -3178,7 +3175,6 @@ class TestEnsureNotProtectedSourcePath(unittest.TestCase):
         with self.assertRaises(media_shrinker.MediaShrinkerError):
             media_shrinker._ensure_not_protected_source_path(frozenset([Path("test.txt").resolve()]), Path("test.txt"))
 
-class TestEnsureNotProtectedSourcePathModifiedLinesCoverage(unittest.TestCase):
-    def test_ensure_not_protected_source_path_coverage(self):
-        """Dummy test to ensure execution."""
-        pass
+
+if __name__ == "__main__":
+    unittest.main()
