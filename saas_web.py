@@ -228,6 +228,19 @@ HTML_TEMPLATE = """
                     preview.innerText = '';
                     return;
                 }
+
+                let warningText = '';
+                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                    input.setCustomValidity('Unsupported file type. Please select an audio or video file.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Invalid file type. Must be audio or video.';
+                    preview.style.color = '#dc3545';
+                    return;
+                } else if (!file.type) {
+                    warningText = ' (Warning: Unknown file type, might be rejected)';
+                    preview.style.color = '#856404'; // Warning color
+                }
+
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
@@ -237,7 +250,7 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected file size: ' + text;
+                preview.innerText = 'Selected file size: ' + text + warningText;
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
@@ -329,8 +342,25 @@ HTML_TEMPLATE = """
                 }
 
                 let totalSize = 0;
+                let hasInvalidType = false;
+                let hasUnknownType = false;
                 for (let i = 0; i < files.length; i++) {
                     totalSize += files[i].size;
+                    if (files[i].type) {
+                        if (!files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) {
+                            hasInvalidType = true;
+                        }
+                    } else {
+                        hasUnknownType = true;
+                    }
+                }
+
+                if (hasInvalidType) {
+                    input.setCustomValidity('One or more files have an unsupported type. Please select audio or video files only.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' files (contains invalid file types)';
+                    preview.style.color = '#dc3545';
+                    return;
                 }
 
                 if (files.length > 20) {
@@ -349,7 +379,14 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
+
+                let warningText = '';
+                if (hasUnknownType) {
+                    warningText = ' (Warning: Some files have unknown types, might be rejected)';
+                    preview.style.color = '#856404'; // Warning color
+                }
+
+                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')' + warningText;
             }
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
