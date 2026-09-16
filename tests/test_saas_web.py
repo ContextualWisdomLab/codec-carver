@@ -47,6 +47,12 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
+    def test_get_ui_includes_main_landmark_and_heading(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"<main>", response.content)
+        self.assertIn(b"<h1", response.content)
+
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
