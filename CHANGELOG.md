@@ -3,10 +3,6 @@
 * `transcript_search.py`의 교집합 로직을 `intersection_update`로 변경하고, `sum()` 및 제너레이터 기반 반복을 for문으로 풀어서(inlined) 검색 성능 최적화
 * 취약점이 발견된 사용하지 않는 `httpx2` 의존성을 제거하여 CI(trivy-fs) 보안 점검 통과를 확보
 
-## 2024-05-20 - 성능 최적화 (Bolt)
-
-* `transcript_search.py`의 교집합 로직을 `intersection_update`로 변경하고, `sum()` 및 제너레이터 기반 반복을 for문으로 풀어서(inlined) 검색 성능 최적화
-
 # Changelog
 
 ## [Unreleased]
