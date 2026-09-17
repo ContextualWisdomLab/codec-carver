@@ -237,8 +237,14 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 } else if (!file.type) {
+                    input.setCustomValidity('');
+                    input.removeAttribute('aria-invalid');
                     warningText = ' (Warning: Unknown file type, might be rejected)';
                     preview.style.color = '#856404'; // Warning color
+                } else {
+                    input.setCustomValidity('');
+                    input.removeAttribute('aria-invalid');
+                    preview.style.color = '#0f6674';
                 }
 
                 const text = formatBinaryBytes(file.size);
@@ -361,6 +367,10 @@ HTML_TEMPLATE = """
                     preview.innerText = 'Selected ' + files.length + ' files (contains invalid file types)';
                     preview.style.color = '#dc3545';
                     return;
+                } else {
+                    input.setCustomValidity('');
+                    input.removeAttribute('aria-invalid');
+                    preview.style.color = '#0f6674';
                 }
 
                 if (files.length > 20) {
