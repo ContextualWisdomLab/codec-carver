@@ -237,7 +237,18 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
+                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                    input.setCustomValidity('Unsupported file type. Please select an audio or video file.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected file type ' + file.type + ' is not supported.';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
                 preview.innerText = 'Selected file size: ' + text;
+                if (!file.type) {
+                    preview.innerText += ' (Warning: Unknown file type, might be rejected)';
+                    preview.style.color = '#856404';
+                }
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
@@ -329,8 +340,20 @@ HTML_TEMPLATE = """
                 }
 
                 let totalSize = 0;
+                let hasUnknownType = false;
                 for (let i = 0; i < files.length; i++) {
-                    totalSize += files[i].size;
+                    const file = files[i];
+                    totalSize += file.size;
+                    if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                        input.setCustomValidity('Unsupported file type: ' + file.type);
+                        input.setAttribute('aria-invalid', 'true');
+                        preview.innerText = 'Unsupported file type: ' + file.type + ' (' + file.name + ')';
+                        preview.style.color = '#dc3545';
+                        return;
+                    }
+                    if (!file.type) {
+                        hasUnknownType = true;
+                    }
                 }
 
                 if (files.length > 20) {
@@ -350,6 +373,10 @@ HTML_TEMPLATE = """
                     return;
                 }
                 preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
+                if (hasUnknownType) {
+                    preview.innerText += ' (Warning: Some files have unknown types)';
+                    preview.style.color = '#856404';
+                }
             }
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
