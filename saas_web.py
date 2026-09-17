@@ -361,7 +361,6 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
-
                 let invalidCount = 0;
                 let unknownTypeCount = 0;
                 for (let i = 0; i < files.length; i++) {
