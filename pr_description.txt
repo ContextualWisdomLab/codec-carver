@@ -1,10 +1,11 @@
-**Severity**: High
+💡 What:
+`transcript_search.py`의 `TranscriptIndex.search` 메서드에서 여러 단어에 대한 postings 교집합을 구할 때 사용하던 `&` 연산자를 `.intersection_update()`로 변경했습니다.
 
-**Vulnerability**: Argument Injection via relative paths starting with a hyphen in command-line utilities.
+🎯 Why:
+기존의 `candidates & postings` 방식은 매번 새로운 set 객체를 할당하여 루프를 돌 때마다 불필요한 메모리 할당과 오버헤드가 발생했습니다. 이를 `.intersection_update()`를 통해 in-place로 변경함으로써 성능을 개선할 수 있습니다.
 
-**Impact**: Command-line utilities (like `ffprobe` and `ffmpeg` filters) interpret user input (like a file path) starting with a hyphen (e.g., `-version.wav`) as options when passed as a relative path. This could lead to a command injection when parsing maliciously crafted filenames.
-Even when `ffmpeg` inputs are protected by `-i`, the output paths, as well as arguments to other utilities like `brctl` and `SetFile`, can be maliciously crafted to start with `-` and be interpreted as options if relative paths are used.
+📊 Impact:
+검색어(query)에 여러 단어가 포함되어 있을 때 메모리 할당을 줄이고 검색(intersection) 속도를 향상시킵니다.
 
-**Fix**: The file paths passed to `subprocess.run` inside `media_shrinker.py` are resolved into absolute paths using `.resolve()`. However, to prevent Strix CI scanners from falsely reporting command injection on `subprocess.run`, `str()` path wrapping is being replaced with python's `f-string`. Replaced `str(path.resolve())` with `f"{path.resolve()}"`.
-
-**Verification**: Ran tests to ensure regressions weren't introduced by using python's `coverage`. 100% test coverage reported.
+🔬 Measurement:
+`PYTHONPATH=. python3 -m unittest discover -s tests` 테스트 스위트가 기존과 동일하게 모두 통과하는지 확인하여 정확성을 검증합니다.
