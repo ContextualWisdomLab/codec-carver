@@ -260,6 +260,7 @@ HTML_TEMPLATE = """
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
+                    buttons.forEach(btn => btn.setAttribute('aria-pressed', 'false'));
                     return;
                 }
 
@@ -294,6 +295,7 @@ HTML_TEMPLATE = """
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
+                    buttons.forEach(btn => btn.setAttribute('aria-pressed', 'false'));
                     return;
                 }
 
