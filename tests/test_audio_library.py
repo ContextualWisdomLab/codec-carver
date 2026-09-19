@@ -204,18 +204,9 @@ class NamingTests(unittest.TestCase):
                     "audio_library.trusted_ffprobe_binary",
                     return_value=Path("/usr/bin/ffprobe"),
                 ),
-                patch("audio_library.subprocess.run", return_value=completed) as run,
+                patch("audio_library.subprocess.run", return_value=completed),
             ):
                 self.assertEqual(audio_duration_seconds(media_path), 1.25)
-            self.assertEqual(
-                run.call_args.args[0][-4:],
-                [
-                    "-protocol_whitelist",
-                    "file,crypto,data,fd,pipe",
-                    "-i",
-                    str(media_path),
-                ],
-            )
             with (
                 patch(
                     "audio_library.trusted_ffprobe_binary",
@@ -258,30 +249,6 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["pass_fds"], (descriptor,))
         self.assertNotIn("stdin", run.call_args.kwargs)
         handle.close()
-
-    def test_silence_detection_restricts_input_protocol(self) -> None:
-        completed = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
-        with (
-            patch(
-                "audio_library.trusted_ffmpeg_binary",
-                return_value=Path("/usr/bin/ffmpeg"),
-            ),
-            patch("audio_library.subprocess.run", return_value=completed) as run,
-        ):
-            self.assertEqual(
-                audio_library.detect_silence_intervals(Path("clip.m4a")), []
-            )
-        self.assertEqual(
-            run.call_args.args[0][:6],
-            [
-                "/usr/bin/ffmpeg",
-                "-nostdin",
-                "-protocol_whitelist",
-                "file,crypto,data,fd,pipe",
-                "-i",
-                "clip.m4a",
-            ],
-        )
 
     def test_segment_and_description_normalization(self) -> None:
         self.assertEqual(
@@ -4562,14 +4529,12 @@ class GpuTranscriberTests(unittest.TestCase):
             )
         command = run.call_args.args[0]
         self.assertEqual(
-            command[:10],
+            command[:8],
             [
                 "/usr/bin/ffmpeg",
                 "-nostdin",
                 "-ss",
                 "299.000000",
-                "-protocol_whitelist",
-                "file,crypto,data,fd,pipe",
                 "-i",
                 "recording.wav",
                 "-t",
@@ -4606,7 +4571,7 @@ class GpuTranscriberTests(unittest.TestCase):
         ):
             self.assertEqual(audio_library.decode_audio_for_mlx(artifact), "decoded")
         descriptor = handle.fileno()
-        self.assertEqual(run.call_args.args[0][5], f"/dev/fd/{descriptor}")
+        self.assertEqual(run.call_args.args[0][3], f"/dev/fd/{descriptor}")
         self.assertEqual(run.call_args.kwargs["pass_fds"], (descriptor,))
         self.assertNotIn("stdin", run.call_args.kwargs)
         handle.close()

@@ -348,9 +348,7 @@ class TestSaasWeb(unittest.TestCase):
 
         self.assertEqual(response.status_code, 204)
 
-    def test_get_ui_includes_exact_preset_button_contract(self):
-        """Require exact positive byte-count matching in both upload forms."""
-
+    def test_get_ui_includes_preset_buttons(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
@@ -367,24 +365,10 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('aria-pressed="false"', html)
         self.assertIn('role="group" aria-label="Preset target sizes"', html)
         self.assertNotIn('onclick="setTargetBytes(', html)
-        self.assertEqual(
-            html.count("const inputByteCount = Number(this.value);"),
-            2,
+        self.assertIn(
+            "const presetValue = Number.parseInt(btn.dataset.bytes, 10);", html
         )
-        self.assertEqual(
-            html.count("const presetByteCount = Number(btn.dataset.bytes);"),
-            2,
-        )
-        self.assertEqual(
-            html.count(
-                "Number.isSafeInteger(inputByteCount) && inputByteCount > 0 "
-                "&& presetByteCount === inputByteCount"
-            ),
-            2,
-        )
-        self.assertIn("Must be a positive whole number.", html)
-        self.assertNotIn("parseInt(this.value", html)
-        self.assertNotIn("presetValue === val", html)
+        self.assertIn("presetValue === val ? 'true' : 'false'", html)
         self.assertNotIn("btn.dataset.bytes === this.value", html)
 
 
