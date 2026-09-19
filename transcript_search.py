@@ -241,16 +241,21 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            candidates = (
-                set(postings) if candidates is None else candidates & postings
-            )
+            # Use intersection_update to mutate set in-place avoiding new object instantiation
+            if candidates is None:
+                candidates = set(postings)
+            else:
+                candidates.intersection_update(postings)
             if not candidates:
                 return []
 
         matches = []
         for position in candidates or ():
             entry = self._entries[position]
-            score = sum(entry.counts[term] for term in unique_terms)
+            # Unroll generator expression to standard for-loop to avoid generator overhead in hot loop
+            score = 0
+            for term in unique_terms:
+                score += entry.counts[term]
             matches.append(
                 Match(
                     recording_id=entry.recording_id,
