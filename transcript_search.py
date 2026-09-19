@@ -236,21 +236,28 @@ class TranscriptIndex:
         unique_terms = sorted(
             set(terms), key=lambda t: len(self._postings.get(t, ()))
         )
-        postings_list = []
+        candidates: set[int] | None = None
         for term in unique_terms:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            postings_list.append(postings)
-
-        candidates = postings_list[0].intersection(*postings_list[1:])
-        if not candidates:
-            return []
+            if candidates is None:
+                candidates = set(postings)
+            else:
+                # OPTIMIZATION: In-place intersection update avoids creating new set objects
+                # during every loop iteration, saving memory and execution time.
+                candidates.intersection_update(postings)
+            if not candidates:
+                return []
 
         matches = []
-        for position in candidates:
+        for position in candidates or ():
             entry = self._entries[position]
-            score = sum(entry.counts[term] for term in unique_terms)
+            score = 0
+            # OPTIMIZATION: Inlined manual loop is measurably faster in inner loops than
+            # sum() with a generator comprehension, avoiding generator overhead.
+            for term in unique_terms:
+                score += entry.counts[term]
             matches.append(
                 Match(
                     recording_id=entry.recording_id,
