@@ -67,6 +67,3 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
-## 2026-09-15 - [Optimize transcript search intersection]
-**Learning:** A safe and standard way to optimize multiple set intersections in Python is to gather all the sets (e.g., in a list) and evaluate them at once using the C-optimized `base_set.intersection(*other_sets)`. This avoids intermediate allocations entirely and safely returns a new set, avoiding slow iterative bitwise AND (`&`) loops and intermediate defensive copies.
-**Action:** When implementing AND-semantics for search or multi-set intersections, collect the sets and use `intersection(*others)` for measurable performance gains.
