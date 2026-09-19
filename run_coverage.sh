@@ -1,4 +1,5 @@
 #!/bin/bash
-coverage run -m unittest discover tests
-coverage run -a --source=saas_web -m unittest tests.test_saas_web
+set -euo pipefail
+
+coverage run --source=saas_web -m unittest discover tests
 coverage report -m
