@@ -237,19 +237,7 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
-                let typeWarning = '';
-                if (file.type) {
-                    if (!file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
-                        input.setCustomValidity('Unsupported content type; upload an audio or video file.');
-                        input.setAttribute('aria-invalid', 'true');
-                        preview.innerText = 'Selected file type ' + file.type + ' is unsupported.';
-                        preview.style.color = '#dc3545';
-                        return;
-                    }
-                } else {
-                    typeWarning = ' (Warning: browser omitted MIME type, proceeding with caution)';
-                }
-                preview.innerText = 'Selected file size: ' + text + typeWarning;
+                preview.innerText = 'Selected file size: ' + text;
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
@@ -361,32 +349,7 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
-                let invalidCount = 0;
-                let unknownTypeCount = 0;
-                for (let i = 0; i < files.length; i++) {
-                    if (files[i].type) {
-                        if (!files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) {
-                            invalidCount++;
-                        }
-                    } else {
-                        unknownTypeCount++;
-                    }
-                }
-
-                if (invalidCount > 0) {
-                    input.setCustomValidity(invalidCount + ' file(s) have unsupported content types. Upload audio or video files.');
-                    input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = invalidCount + ' selected file(s) have unsupported types.';
-                    preview.style.color = '#dc3545';
-                    return;
-                }
-
-                let typeWarning = '';
-                if (unknownTypeCount > 0) {
-                    typeWarning = ' (Warning: ' + unknownTypeCount + ' file(s) missing MIME type)';
-                }
-
-                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')' + typeWarning;
+                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
             }
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
