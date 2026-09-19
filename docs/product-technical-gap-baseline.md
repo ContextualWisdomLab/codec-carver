@@ -56,3 +56,66 @@ Not applicable: PR #595 changes no persistent entity, relation, column, or migra
 ## Exact-head acceptance rule
 
 A source commit or stale approval is not completion. Merge readiness requires all required workflows and an independent approval on the same current PR head, plus current-head browser evidence for the applicable UI rows above. Queued, pending, skipped, or cancelled checks are not GREEN.
+
+## Live design-assurance addendum — semantic upload-page structure
+
+Evidence date: 2026-09-20. Product source remains single-writer-owned by Draft
+[#580](https://github.com/ContextualWisdomLab/codec-carver/pull/580) at evidence
+head `85dce5abe89df42b30b5307ee513da8e412d43c4`; this ledger branch does not
+copy its source.
+
+### PRD
+
+A user opening the upload page must encounter one clear page title and one main
+content landmark before either upload workflow. The visual title claim and the
+accessibility structure must be executable contracts, not prose-only evidence.
+
+### TRD
+
+- Render exactly one balanced `<main>` and one top-level
+  `<h1 class="page-title">`.
+- Keep visual title alignment in the owned `.page-title` component rule.
+- Run the full Python test suite once under `coverage --source=saas_web`.
+- Fail the coverage entrypoint immediately when tests or report generation fail.
+- Preserve #580's unrelated but valid removal of nonexistent `httpx2/httpcore2`
+  dependency entries.
+
+### UML interaction
+
+`Browser -> GET / -> UploadPage -> main landmark -> page-title -> single/batch
+upload forms`. Assistive technology derives document orientation from native
+HTML semantics; the presentation layer does not create domain upload truth.
+
+### ERD
+
+No persistent entity, relation, column, or migration changes. File selection
+remains browser presentation state until the existing upload API accepts it.
+
+### Context Map
+
+The Codec Carver Web UI owns HTML landmarks, heading hierarchy, focus and
+responsive presentation. Existing shrink endpoints own accepted upload commands;
+media conversion remains in the existing domain/runtime boundary.
+
+### Exact-head acceptance matrix
+
+| Dimension | Current evidence | Status / action |
+| --- | --- | --- |
+| Determinism / semantics | Focused tests require one balanced main and one owned page title | Source PASS at cited #580 head; hosted replay pending |
+| Test gate integrity | Contract requires `set -euo pipefail`, one coverage execution and `--source=saas_web` | Source PASS; hosted CI pending |
+| Accessibility | Native landmark/heading candidate exists | FAIL until current-head accessibility-tree and AT evidence |
+| Pointer/touch/keyboard | Upload controls and focus traversal unchanged but not replayed | FAIL — Chromium/Firefox/WebKit evidence required |
+| Responsive | No 320/768/desktop screenshots proving centered title and form layout | FAIL |
+| Locales | Static English title; no ko/en/ja/zh/vi/es/de/fr wrapping/font-fallback evidence | FAIL |
+| Loading/error/offline/permission/busy | Existing page behaviors are outside source-only landmark proof | FAIL for release evidence |
+| CTA → API / reload | Existing form actions retained; no current-head browser replay | FAIL |
+| Large-data performance | No realistic render/interaction median or p95 evidence | FAIL |
+| Import/export and recovery | Import is file selection; reload must not imply browser-cleared selection persisted | FAIL — browser E2E required |
+
+### Gap / action / status
+
+The source-level landmark, title-style and coverage-runner defects are repaired,
+but #580 remains **Draft / Proposed / UI Delivery FAIL** until unchanged-head
+hosted checks, qualifying independent review, current-browser/AT/responsive/
+eight-locale evidence and the live repository merge policy are satisfied.
+
