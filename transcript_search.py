@@ -241,16 +241,21 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            candidates = (
-                set(postings) if candidates is None else candidates & postings
-            )
+            if candidates is None:
+                candidates = set(postings)
+            else:
+                # 성능 개선: 새로운 set 객체를 생성하는 & 연산자 대신 제자리(in-place)에서 교집합을 수정하여 메모리 할당 감소
+                candidates.intersection_update(postings)
             if not candidates:
                 return []
 
         matches = []
         for position in candidates or ():
             entry = self._entries[position]
-            score = sum(entry.counts[term] for term in unique_terms)
+            score = 0
+            # 성능 개선: sum() 제너레이터 표현식 대신 일반 루프를 사용하여 제너레이터 인스턴스화 오버헤드 제거
+            for term in unique_terms:
+                score += entry.counts[term]
             matches.append(
                 Match(
                     recording_id=entry.recording_id,
