@@ -240,8 +240,8 @@ HTML_TEMPLATE = """
                 preview.innerText = 'Selected file size: ' + text;
             }
 
-            document.getElementById('target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
+            document.getElementById('target_bytes').addEventListener('input', function() {
+                const inputByteCount = Number(this.value);
                 const preview = document.getElementById('target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
@@ -249,10 +249,10 @@ HTML_TEMPLATE = """
 
                 const buttons = document.querySelectorAll('#preset_buttons_container .preset-btn');
                 buttons.forEach(btn => {
-                    const presetValue = Number.parseInt(btn.dataset.bytes, 10);
+                    const presetByteCount = Number(btn.dataset.bytes);
                     btn.setAttribute(
                         'aria-pressed',
-                        presetValue === val ? 'true' : 'false'
+                        Number.isSafeInteger(inputByteCount) && inputByteCount > 0 && presetByteCount === inputByteCount ? 'true' : 'false'
                     );
                 });
 
@@ -263,19 +263,19 @@ HTML_TEMPLATE = """
                     return;
                 }
 
-                if (isNaN(val) || val <= 0) {
-                    preview.innerText = 'Must be greater than 0.';
+                if (!Number.isSafeInteger(inputByteCount) || inputByteCount <= 0) {
+                    preview.innerText = 'Must be a positive whole number.';
                     preview.style.color = '#dc3545';
-                    this.setCustomValidity('Must be greater than 0.');
+                    this.setCustomValidity('Must be a positive whole number.');
                     this.setAttribute('aria-invalid', 'true');
                 } else {
-                    preview.innerText = formatBinaryBytes(val);
+                    preview.innerText = formatBinaryBytes(inputByteCount);
                 }
 
             });
 
-            document.getElementById('batch_target_bytes').addEventListener('input', function(e) {
-                const val = parseInt(this.value, 10);
+            document.getElementById('batch_target_bytes').addEventListener('input', function() {
+                const inputByteCount = Number(this.value);
                 const preview = document.getElementById('batch_target_bytes_preview');
                 this.setCustomValidity('');
                 this.removeAttribute('aria-invalid');
@@ -283,10 +283,10 @@ HTML_TEMPLATE = """
 
                 const buttons = document.querySelectorAll('#batch_preset_buttons_container .preset-btn');
                 buttons.forEach(btn => {
-                    const presetValue = Number.parseInt(btn.dataset.bytes, 10);
+                    const presetByteCount = Number(btn.dataset.bytes);
                     btn.setAttribute(
                         'aria-pressed',
-                        presetValue === val ? 'true' : 'false'
+                        Number.isSafeInteger(inputByteCount) && inputByteCount > 0 && presetByteCount === inputByteCount ? 'true' : 'false'
                     );
                 });
 
@@ -297,13 +297,13 @@ HTML_TEMPLATE = """
                     return;
                 }
 
-                if (isNaN(val) || val <= 0) {
-                    preview.innerText = 'Must be greater than 0.';
+                if (!Number.isSafeInteger(inputByteCount) || inputByteCount <= 0) {
+                    preview.innerText = 'Must be a positive whole number.';
                     preview.style.color = '#dc3545';
-                    this.setCustomValidity('Must be greater than 0.');
+                    this.setCustomValidity('Must be a positive whole number.');
                     this.setAttribute('aria-invalid', 'true');
                 } else {
-                    preview.innerText = formatBinaryBytes(val);
+                    preview.innerText = formatBinaryBytes(inputByteCount);
                 }
             });
 
