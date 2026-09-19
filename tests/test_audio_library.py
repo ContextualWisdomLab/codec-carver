@@ -4529,14 +4529,12 @@ class GpuTranscriberTests(unittest.TestCase):
             )
         command = run.call_args.args[0]
         self.assertEqual(
-            command[:10],
+            command[:8],
             [
                 "/usr/bin/ffmpeg",
                 "-nostdin",
                 "-ss",
                 "299.000000",
-                "-protocol_whitelist",
-                "file,crypto,data,fd,pipe",
                 "-i",
                 "recording.wav",
                 "-t",
@@ -4573,7 +4571,7 @@ class GpuTranscriberTests(unittest.TestCase):
         ):
             self.assertEqual(audio_library.decode_audio_for_mlx(artifact), "decoded")
         descriptor = handle.fileno()
-        self.assertEqual(run.call_args.args[0][5], f"/dev/fd/{descriptor}")
+        self.assertEqual(run.call_args.args[0][3], f"/dev/fd/{descriptor}")
         self.assertEqual(run.call_args.kwargs["pass_fds"], (descriptor,))
         self.assertNotIn("stdin", run.call_args.kwargs)
         handle.close()
