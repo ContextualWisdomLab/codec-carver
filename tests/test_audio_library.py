@@ -255,9 +255,35 @@ class NamingTests(unittest.TestCase):
             self.assertEqual(audio_duration_seconds(artifact), 1.25)
         descriptor = handle.fileno()
         self.assertEqual(run.call_args.args[0][-1], f"/dev/fd/{descriptor}")
+        self.assertEqual(run.call_args.args[0][-2], "-i")
         self.assertEqual(run.call_args.kwargs["pass_fds"], (descriptor,))
         self.assertNotIn("stdin", run.call_args.kwargs)
         handle.close()
+
+    def test_audio_duration_prevents_hostile_ssrf_and_argument_injection(self) -> None:
+        ffprobe = audio_library.trusted_ffprobe_binary()
+        if not ffprobe:
+            self.skipTest("No ffprobe binary available for executable regression test")
+        base_cmd = [
+            str(ffprobe),
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-protocol_whitelist", "file,crypto,data,fd,pipe",
+            "-i",
+        ]
+        with self.assertRaises(subprocess.CalledProcessError) as cm_ssrf:
+            subprocess.run(
+                base_cmd + ["http://malicious.com/stream.m3u8"],
+                check=True, capture_output=True, text=True, shell=False, env=audio_library.trusted_child_environment()
+            )
+        self.assertIn("Protocol not on whitelist", cm_ssrf.exception.stderr)
+        with self.assertRaises(subprocess.CalledProcessError) as cm_inj:
+            subprocess.run(
+                base_cmd + ["-version"],
+                check=True, capture_output=True, text=True, shell=False, env=audio_library.trusted_child_environment()
+            )
+        self.assertIn("No such file or directory", cm_inj.exception.stderr)
 
     def test_silence_detection_restricts_input_protocol(self) -> None:
         completed = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
