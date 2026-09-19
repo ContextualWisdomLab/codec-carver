@@ -2072,6 +2072,9 @@ def audio_duration_seconds(
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
+            "-protocol_whitelist",
+            "file,crypto,data,fd,pipe",
+            "-i",
             media_input,
         ]
         completed = subprocess.run(
