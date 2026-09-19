@@ -167,6 +167,8 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
+    <main>
+    <h1>Codec Carver SaaS</h1>
     <div class="box" id="drop-zone">
         <h2>Shrink Media File</h2>
         <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
@@ -429,6 +431,7 @@ HTML_TEMPLATE = """
             <button type="submit" id="batch-submit-btn">Upload and Shrink Batch</button>
         </form>
     </div>
+    </main>
 </body>
 </html>
 """
