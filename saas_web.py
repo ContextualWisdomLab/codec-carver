@@ -257,6 +257,13 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
+                    if (this.validity.badInput) {
+                        preview.innerText = 'Invalid number format.';
+                        preview.style.color = '#dc3545';
+                        this.setCustomValidity('Invalid number format.');
+                        this.setAttribute('aria-invalid', 'true');
+                        return;
+                    }
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
@@ -291,6 +298,13 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
+                    if (this.validity.badInput) {
+                        preview.innerText = 'Invalid number format.';
+                        preview.style.color = '#dc3545';
+                        this.setCustomValidity('Invalid number format.');
+                        this.setAttribute('aria-invalid', 'true');
+                        return;
+                    }
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
