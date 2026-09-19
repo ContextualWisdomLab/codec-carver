@@ -67,3 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2024-05-18 - [경로 필터링 병목 완화]
+**Learning:** 파일 시스템 작업을 포함하는 루프에서 불필요한 시스템 호출(`Path.resolve()`)을 방지하지 않으면 성능 저하를 초래할 수 있습니다.
+**Action:** 예외 집합이나 필터링 목록(`protected_sources` 등)을 다룰 때 항상 비어있는지 먼저 확인하는 조기 반환(early return)을 구현하여 비용이 많이 드는 작업을 생략합니다.
