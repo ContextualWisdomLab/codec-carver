@@ -1,8 +1,3 @@
-## 2024-05-20 - 성능 최적화 (Bolt)
-
-* `transcript_search.py`의 교집합 로직을 `intersection_update`로 변경하고, `sum()` 및 제너레이터 기반 반복을 for문으로 풀어서(inlined) 검색 성능 최적화
-* 취약점이 발견된 사용하지 않는 `httpx2` 의존성을 제거하여 CI(trivy-fs) 보안 점검 통과를 확보
-
 # Changelog
 
 ## [Unreleased]
@@ -12,6 +7,7 @@
 - 클라이언트 측 폼 검증 시 하드코딩된 '5 GiB' 텍스트를 동적으로 변환되도록 수정하고 일괄 업로드 폼에 최대 크기(MAX_UPLOAD_BYTES) 검증 피드백을 추가했습니다.
 
 ### Changed
+- `transcript_search.py`의 교집합 로직을 `intersection_update`로 변경하고, `sum()` 및 제너레이터 기반 반복을 for문으로 풀어서(inlined) 검색 성능 최적화
 - 순수 영숫자 토큰은 정규식 호출을 건너뛰되 다국어·문장부호 토큰화 결과는 기존 의미와 동일하게 유지합니다. 근거, 한계, APA 7 참고문헌은 [`docs/doctoring/token-fast-path-equivalence.md`](docs/doctoring/token-fast-path-equivalence.md)에 기록했습니다.
 
 ### Fixed
