@@ -2,8 +2,7 @@
 
 ## [Unreleased]
 ### Added
-- SaaS 업로드 페이지에 balanced `<main>` landmark와 단일 `<h1 class="page-title">`을 추가하고, 전용 component style로 제목 중앙 정렬을 명시했습니다. 회귀 계약은 landmark 개수·closing tag·heading hierarchy·style ownership을 검증합니다.
-- `run_coverage.sh`가 테스트 실패를 숨기지 않도록 fail-closed 처리하고 전체 suite를 `--source=saas_web`으로 한 번만 실행합니다.
+- HTML 템플릿의 문서 접근성 향상을 위해 `<h1>` 헤딩(타이틀)과 메인 영역 랜드마크 마크업(`<main>`) 추가
 - 다중 파일 업로드 선택 시 즉각적인 파일 개수 피드백 및 제한 초과 경고 메시지 추가
 - 일괄 업로드 폼에 대상 바이트 프리셋 버튼과 총 파일 크기 미리보기를 추가하여 사용성을 개선했습니다.
 - 클라이언트 측 폼 검증 시 하드코딩된 '5 GiB' 텍스트를 동적으로 변환되도록 수정하고 일괄 업로드 폼에 최대 크기(MAX_UPLOAD_BYTES) 검증 피드백을 추가했습니다.
