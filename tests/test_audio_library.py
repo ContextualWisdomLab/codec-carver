@@ -4500,6 +4500,8 @@ class GpuTranscriberTests(unittest.TestCase):
                 "audio_library.trusted_ffmpeg_binary",
                 return_value=Path("/usr/bin/ffmpeg"),
             ),
+            patch("os.open", return_value=3) as mock_open,
+            patch("os.close") as mock_close,
             patch("audio_library.subprocess.run", return_value=completed) as run,
         ):
             self.assertEqual(
@@ -4522,6 +4524,8 @@ class GpuTranscriberTests(unittest.TestCase):
                 "audio_library.trusted_ffmpeg_binary",
                 return_value=Path("/usr/bin/ffmpeg"),
             ),
+            patch("os.open", return_value=3) as mock_open,
+            patch("os.close") as mock_close,
             patch("audio_library.subprocess.run", return_value=completed) as run,
         ):
             audio_library.decode_audio_for_mlx(
@@ -4536,9 +4540,9 @@ class GpuTranscriberTests(unittest.TestCase):
                 "-ss",
                 "299.000000",
                 "-protocol_whitelist",
-                "file,crypto,data",
+                "crypto,data,fd,pipe",
                 "-i",
-                "recording.wav",
+                "fd:3",
                 "-t",
                 "302.000000",
             ],
@@ -4569,11 +4573,13 @@ class GpuTranscriberTests(unittest.TestCase):
                 "audio_library.trusted_ffmpeg_binary",
                 return_value=Path("/usr/bin/ffmpeg"),
             ),
+            patch("os.open", return_value=3) as mock_open,
+            patch("os.close") as mock_close,
             patch("audio_library.subprocess.run", return_value=completed) as run,
         ):
             self.assertEqual(audio_library.decode_audio_for_mlx(artifact), "decoded")
         descriptor = handle.fileno()
-        self.assertEqual(run.call_args.args[0][5], f"/dev/fd/{descriptor}")
+        self.assertEqual(run.call_args.args[0][5], f"fd:{descriptor}")
         self.assertEqual(run.call_args.kwargs["pass_fds"], (descriptor,))
         self.assertNotIn("stdin", run.call_args.kwargs)
         handle.close()
@@ -4600,6 +4606,8 @@ class GpuTranscriberTests(unittest.TestCase):
                 "audio_library.trusted_ffmpeg_binary",
                 return_value=Path("/usr/bin/ffmpeg"),
             ),
+            patch("os.open", return_value=3) as mock_open,
+            patch("os.close") as mock_close,
             patch("audio_library.subprocess.run", side_effect=failed),
             self.assertRaisesRegex(RuntimeError, "decode failed"),
         ):
@@ -4611,6 +4619,8 @@ class GpuTranscriberTests(unittest.TestCase):
                 "audio_library.trusted_ffmpeg_binary",
                 return_value=Path("/usr/bin/ffmpeg"),
             ),
+            patch("os.open", return_value=3) as mock_open,
+            patch("os.close") as mock_close,
             patch("audio_library.subprocess.run", return_value=empty),
             self.assertRaisesRegex(RuntimeError, "zero audio samples"),
         ):

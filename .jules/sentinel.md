@@ -65,7 +65,3 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
-## 2026-09-15 - [Sentinel: FFmpeg SSRF/LFI 취약점 해결]
-**Vulnerability:** FFmpeg 입력에 대한 프로토콜 제한이 없어 SSRF 및 Arbitrary File Read(CWE-918, CWE-73) 취약점 존재.
-**Learning:** FFmpeg는 기본적으로 HTTP, HLS 등의 원격 프로토콜을 지원하므로 사용자가 통제할 수 있는 입력을 아무 제한 없이 처리하면, 외부에 네트워크 요청을 보내거나(SSRF) 로컬 시스템의 파일을 읽어(LFI) 유출될 위험이 큽니다.
-**Prevention:** FFmpeg/FFprobe 실행 시 입력 파일 지정 옵션(`-i`) 직전에 반드시 `-protocol_whitelist file,crypto,data`(필요시 fd,pipe 추가)를 명시하여 로컬 및 안전한 프로토콜만 허용해야 합니다.
