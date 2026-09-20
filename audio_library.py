@@ -2068,10 +2068,13 @@ def audio_duration_seconds(
             str(ffprobe),
             "-v",
             "error",
+            "-protocol_whitelist",
+            "file,crypto,data,fd",
             "-show_entries",
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
+            "-i",
             media_input,
         ]
         completed = subprocess.run(
