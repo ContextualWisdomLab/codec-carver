@@ -1958,6 +1958,7 @@ def _ensure_not_protected_source_path(
     protected_sources: frozenset[Path], output: Path
 ) -> None:
     """Raise MediaShrinkerError if output would overwrite a protected source."""
+    # ⚡ Bolt: Skip expensive I/O if protected_sources is empty
     if not protected_sources:
         return
 
