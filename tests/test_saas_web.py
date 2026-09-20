@@ -50,8 +50,16 @@ class TestSaasWeb(unittest.TestCase):
     def test_get_ui_includes_main_landmark_and_heading(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"<main>", response.content)
-        self.assertIn(b"<h1", response.content)
+        html = response.text
+
+        self.assertEqual(html.count("<main>"), 1)
+        self.assertEqual(html.count("</main>"), 1)
+        self.assertEqual(html.count("<h1"), 1)
+        self.assertIn(
+            '<main>\n    <h1 class="page-title">Codec Carver SaaS</h1>',
+            html,
+        )
+        self.assertIn(".page-title { text-align: center; }", html)
 
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
