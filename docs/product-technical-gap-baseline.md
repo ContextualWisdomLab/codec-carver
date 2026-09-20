@@ -61,7 +61,7 @@ A source commit or stale approval is not completion. Merge readiness requires al
 
 Evidence date: 2026-09-20. Product source remains single-writer-owned by Draft
 [#580](https://github.com/ContextualWisdomLab/codec-carver/pull/580) at evidence
-head `2ad9c55b40945abf6b8068639d2ca338f2e604f2`; this ledger branch does not
+head `79d0b76a68b32b3712faf9c672ac9cb2636f0698`; this ledger branch does not
 copy its source.
 
 ### PRD
