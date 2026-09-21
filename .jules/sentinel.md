@@ -65,3 +65,8 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+
+## 2026-07-25 - [Sentinel: FFprobe SSRF and Argument Injection Prevention]
+**Vulnerability:** Argument injection via maliciously crafted filenames or SSRF via external protocols in `ffprobe`.
+**Learning:** `subprocess.run` calls invoking `ffprobe` to determine audio duration did not explicitly use the `-protocol_whitelist` parameter to prevent processing non-local protocols (e.g. `http`) or the `-i` flag to protect against malicious filenames starting with hyphens when executing `subprocess.run`.
+**Prevention:** Ensure that `-protocol_whitelist` specifying safe protocols (`file,crypto,data,fd`) and the `-i` parameter preceding the file path are always passed in `ffprobe` calls to restrict to safe protocols and prevent unintended argument parsing by command-line utilities.
