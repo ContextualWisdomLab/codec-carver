@@ -228,6 +228,13 @@ HTML_TEMPLATE = """
                     preview.innerText = '';
                     return;
                 }
+                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                    input.setCustomValidity('Unsupported file type. Please select an audio or video file.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Unsupported file type. Please select an audio or video file.';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
@@ -329,8 +336,20 @@ HTML_TEMPLATE = """
                 }
 
                 let totalSize = 0;
+                let invalidTypeFound = false;
                 for (let i = 0; i < files.length; i++) {
+                    if (files[i].type && !files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) {
+                        invalidTypeFound = true;
+                    }
                     totalSize += files[i].size;
+                }
+
+                if (invalidTypeFound) {
+                    input.setCustomValidity('Unsupported file type included. Please select only audio or video files.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Unsupported file type included. Please select only audio or video files.';
+                    preview.style.color = '#dc3545';
+                    return;
                 }
 
                 if (files.length > 20) {
