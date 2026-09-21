@@ -2849,19 +2849,21 @@ def decode_audio_for_mlx(
         not math.isfinite(duration_seconds) or duration_seconds <= 0.0
     ):
         raise ValueError("MLX decode duration must be a finite positive value")
+    fd_to_close = None
     try:
-        media_input = str(audio_path)
-        inherited_fds: tuple[int, ...] = ()
         if artifact is not None:
             descriptor = artifact.rewind().fileno()
-            media_input = f"/dev/fd/{descriptor}"
-            inherited_fds = (descriptor,)
+        else:
+            fd_to_close = os.open(str(audio_path), os.O_RDONLY)
+            descriptor = fd_to_close
+        media_input = f"fd:{descriptor}"
+        inherited_fds = (descriptor,)
         command = [str(ffmpeg), "-nostdin"]
         if start_seconds is not None:
             # Input-side seeking avoids decoding every earlier chunk; ffmpeg's
             # default accurate_seek still discards samples before this boundary.
             command.extend(("-ss", f"{start_seconds:.6f}"))
-        command.extend(("-i", media_input))
+        command.extend(("-protocol_whitelist", "crypto,data,fd,pipe", "-i", media_input))
         if duration_seconds is not None:
             command.extend(("-t", f"{duration_seconds:.6f}"))
         command.extend(
@@ -2891,6 +2893,10 @@ def decode_audio_for_mlx(
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"approved ffmpeg failed to decode audio: {detail}") from exc
+    finally:
+        if fd_to_close is not None:
+            os.close(fd_to_close)
+
     if not completed.stdout:
         raise RuntimeError("approved ffmpeg decoded zero audio samples")
     import mlx.core as mx  # type: ignore[import-not-found]
@@ -2932,32 +2938,40 @@ def detect_silence_intervals(
     artifact = (
         audio_source if isinstance(audio_source, VerifiedStagedArtifact) else None
     )
-    media_input = str(artifact.path if artifact is not None else audio_source)
-    inherited_fds: tuple[int, ...] = ()
-    if artifact is not None:
-        descriptor = artifact.rewind().fileno()
-        media_input = f"/dev/fd/{descriptor}"
+    fd_to_close = None
+    try:
+        if artifact is not None:
+            descriptor = artifact.rewind().fileno()
+        else:
+            fd_to_close = os.open(str(audio_source), os.O_RDONLY)
+            descriptor = fd_to_close
+        media_input = f"fd:{descriptor}"
         inherited_fds = (descriptor,)
-    command = [
-        str(ffmpeg),
-        "-nostdin",
-        "-i",
-        media_input,
-        "-af",
-        f"silencedetect=noise={float(noise_db):.2f}dB:d={float(min_silence_seconds):.3f}",
-        "-f",
-        "null",
-        "-",
-    ]
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        shell=False,
-        timeout=timeout_seconds,
-        env=trusted_child_environment(),
-        pass_fds=inherited_fds,
-    )
+        command = [
+            str(ffmpeg),
+            "-nostdin",
+            "-protocol_whitelist",
+            "crypto,data,fd,pipe",
+            "-i",
+            media_input,
+            "-af",
+            f"silencedetect=noise={float(noise_db):.2f}dB:d={float(min_silence_seconds):.3f}",
+            "-f",
+            "null",
+            "-",
+        ]
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            shell=False,
+            timeout=timeout_seconds,
+            env=trusted_child_environment(),
+            pass_fds=inherited_fds,
+        )
+    finally:
+        if fd_to_close is not None:
+            os.close(fd_to_close)
     if artifact is not None:
         artifact.verify_unchanged()
     stderr = completed.stderr.decode("utf-8", errors="replace")
