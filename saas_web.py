@@ -305,13 +305,6 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
-                    if (this.validity && this.validity.badInput) {
-                        preview.innerText = 'Must be a valid number.';
-                        preview.style.color = '#dc3545';
-                        this.setCustomValidity('Must be a valid number.');
-                        this.setAttribute('aria-invalid', 'true');
-                        return;
-                    }
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
