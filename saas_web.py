@@ -228,6 +228,13 @@ HTML_TEMPLATE = """
                     preview.innerText = '';
                     return;
                 }
+                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                    input.setCustomValidity('Unsupported file type.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected file is not an audio or video file.';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
@@ -257,6 +264,13 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
+                    if (this.validity && this.validity.badInput) {
+                        preview.innerText = 'Must be a valid number.';
+                        preview.style.color = '#dc3545';
+                        this.setCustomValidity('Must be a valid number.');
+                        this.setAttribute('aria-invalid', 'true');
+                        return;
+                    }
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
@@ -330,7 +344,15 @@ HTML_TEMPLATE = """
 
                 let totalSize = 0;
                 for (let i = 0; i < files.length; i++) {
-                    totalSize += files[i].size;
+                    const file = files[i];
+                    if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                        input.setCustomValidity('Unsupported file type found in batch.');
+                        input.setAttribute('aria-invalid', 'true');
+                        preview.innerText = 'One or more selected files are not audio or video files.';
+                        preview.style.color = '#dc3545';
+                        return;
+                    }
+                    totalSize += file.size;
                 }
 
                 if (files.length > 20) {
