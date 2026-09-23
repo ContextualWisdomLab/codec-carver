@@ -43,12 +43,12 @@ class EmptyTargetValidationTests(unittest.TestCase):
     def test_exactly_two_empty_target_branches_exist(self) -> None:
         """No unrelated input handler inherits the target-size special case."""
 
-        self.assertEqual(SOURCE_TEXT.count("if (this.value === '') {"), 2)
+        self.assertEqual(SOURCE_TEXT.count("if (this.value === '' && !this.validity.badInput) {"), 2)
 
     def _assert_empty_branch(self, handler: str) -> None:
         """Assert one handler clears stale state before numeric validation."""
 
-        empty_marker = "if (this.value === '') {"
+        empty_marker = "if (this.value === '' && !this.validity.badInput) {"
         invalid_marker = "if (isNaN(val) || val <= 0) {"
         self.assertIn(empty_marker, handler)
         self.assertIn("preview.innerText = '';", handler)

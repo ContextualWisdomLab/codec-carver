@@ -256,7 +256,7 @@ HTML_TEMPLATE = """
                     );
                 });
 
-                if (this.value === '') {
+                if (this.value === '' && !this.validity.badInput) {
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
@@ -290,7 +290,7 @@ HTML_TEMPLATE = """
                     );
                 });
 
-                if (this.value === '') {
+                if (this.value === '' && !this.validity.badInput) {
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
