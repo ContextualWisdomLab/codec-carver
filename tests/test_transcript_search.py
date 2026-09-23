@@ -167,6 +167,15 @@ class SearchTest(unittest.TestCase):
         idx.add("r", [Segment(0.0, 1.0, "alpha"), Segment(1.0, 2.0, "beta")])
         self.assertEqual(idx.search("alpha beta"), [])
 
+    def test_inconsistent_postings_do_not_silently_zero_missing_term_count(self):
+        """A broken postings/count invariant stays visible instead of changing score semantics."""
+        idx = TranscriptIndex()
+        idx.add("r", [Segment(0.0, 1.0, "alpha")])
+        idx._postings.setdefault("beta", set()).add(0)
+
+        with self.assertRaises(KeyError):
+            idx.search("alpha beta")
+
 
 class LoadTranscriptJsonTest(unittest.TestCase):
     """Reading the transcription sidecar JSON shape."""
