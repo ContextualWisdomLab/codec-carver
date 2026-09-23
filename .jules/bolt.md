@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2024-05-24 - Python 성능 최적화: intersection_update 및 인라인 for 루프 활용
+**Learning:** Python의 교집합 연산자를 루프 내에서 사용하는 것은 매번 새로운 객체를 할당하므로 `intersection_update()`를 통해 in-place로 업데이트하는 것이 성능에 유리하다. 또한 `sum()` 내에서 생성자(generator) 표현식을 사용하는 것은 생성자 인스턴스화의 오버헤드가 발생하므로 반복 횟수가 많은 루프 내에서는 단순 for 루프를 사용하는 것이 오히려 빠르다.
+**Action:** 자주 호출되는 반복문 내에서 집합의 교집합을 구할 때는 `intersection_update()`를 사용하고, 빠른 합산이 필요한 경우 인라인 for 루프를 활용하자.
