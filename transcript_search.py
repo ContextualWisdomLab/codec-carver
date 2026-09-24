@@ -236,20 +236,19 @@ class TranscriptIndex:
         unique_terms = sorted(
             set(terms), key=lambda t: len(self._postings.get(t, ()))
         )
-        postings_lists = []
+        candidates: set[int] | None = None
         for term in unique_terms:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            postings_lists.append(postings)
-
-        if not postings_lists:
-            return []
-
-        candidates = set(postings_lists[0]).intersection(*postings_lists[1:])
+            candidates = (
+                set(postings) if candidates is None else candidates & postings
+            )
+            if not candidates:
+                return []
 
         matches = []
-        for position in candidates:
+        for position in candidates or ():
             entry = self._entries[position]
             score = sum(entry.counts[term] for term in unique_terms)
             matches.append(
