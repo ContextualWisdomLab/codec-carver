@@ -256,10 +256,18 @@ HTML_TEMPLATE = """
                     );
                 });
 
-                if (this.value === '') {
+                if (this.value === '' && !this.validity.badInput) {
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
+                    return;
+                }
+
+                if (this.validity.badInput) {
+                    preview.innerText = 'Enter a valid number greater than 0.';
+                    preview.style.color = '#dc3545';
+                    this.setCustomValidity('Enter a valid number greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
                     return;
                 }
 
@@ -290,10 +298,18 @@ HTML_TEMPLATE = """
                     );
                 });
 
-                if (this.value === '') {
+                if (this.value === '' && !this.validity.badInput) {
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
+                    return;
+                }
+
+                if (this.validity.badInput) {
+                    preview.innerText = 'Enter a valid number greater than 0.';
+                    preview.style.color = '#dc3545';
+                    this.setCustomValidity('Enter a valid number greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
                     return;
                 }
 
