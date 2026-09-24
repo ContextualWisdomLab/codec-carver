@@ -67,6 +67,3 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
-## 2024-07-25 - [transcript_search 성능 최적화]
-**Learning:** 교집합을 구할 때 반복문 내에서 `&` 연산자를 사용하면 매번 새로운 set 객체를 할당하므로 메모리와 시간 측면에서 비효율적입니다. `intersection_update`를 사용하여 제자리에서 수정하는 것이 성능상 유리합니다. 또한 제너레이터 표현식과 함께 `sum()`을 호출하는 것은 인스턴스화 오버헤드를 발생시키므로, 내부 루프에서는 단순 inline for 루프를 사용하는 것이 훨씬 빠릅니다.
-**Action:** 다중 집합 교집합을 구할 때는 항상 `intersection_update`를 활용하고, 성능에 민감한 루프 내에서의 덧셈은 제너레이터를 피하고 표준 루프로 언롤링하여 사용해야 합니다.
