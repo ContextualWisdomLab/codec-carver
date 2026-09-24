@@ -263,6 +263,14 @@ HTML_TEMPLATE = """
                     return;
                 }
 
+                if (this.validity.badInput) {
+                    preview.innerText = 'Enter a valid number greater than 0.';
+                    preview.style.color = '#dc3545';
+                    this.setCustomValidity('Enter a valid number greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
+                    return;
+                }
+
                 if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
@@ -294,6 +302,14 @@ HTML_TEMPLATE = """
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
+                    return;
+                }
+
+                if (this.validity.badInput) {
+                    preview.innerText = 'Enter a valid number greater than 0.';
+                    preview.style.color = '#dc3545';
+                    this.setCustomValidity('Enter a valid number greater than 0.');
+                    this.setAttribute('aria-invalid', 'true');
                     return;
                 }
 
