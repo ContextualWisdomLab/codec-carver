@@ -241,10 +241,9 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            if candidates is None:
-                candidates = set(postings)
-            else:
-                candidates.intersection_update(postings)
+            candidates = (
+                set(postings) if candidates is None else candidates & postings
+            )
             if not candidates:
                 return []
 
