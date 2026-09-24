@@ -1,5 +1,7 @@
 # Codec Carver
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/ContextualWisdomLab/codec-carver?utm_source=badge)
+
 Python CLI for carving long recordings into metadata-preserved FLAC/Opus files.
 
 For the long-recording curation contract (TMK/VAD evidence precedence,
@@ -22,6 +24,17 @@ This installs the `codec-carver` console command:
 
 ```bash
 codec-carver /path/to/recordings --execute --output-dir under_2gb
+```
+
+## Benchmarks
+
+CPU-bound planning and transcript-processing paths are benchmarked with
+[`pytest-codspeed`](https://codspeed.io/docs/reference/pytest-codspeed) and
+tracked by CodSpeed on every pull request:
+
+```bash
+pip install --require-hashes -r benchmarks/requirements-bench.txt
+python -m pytest benchmarks --codspeed
 ```
 
 ## Web service (Docker)

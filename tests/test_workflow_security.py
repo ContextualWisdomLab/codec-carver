@@ -9,6 +9,7 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW_PATHS = (
     _REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml",
     _REPOSITORY_ROOT / ".github" / "workflows" / "fuzz.yml",
+    _REPOSITORY_ROOT / ".github" / "workflows" / "codspeed.yml",
 )
 _CHECKOUT_STEP = re.compile(
     r"(?m)^\s*-\s+uses:\s+actions/checkout@[^\n]+\n"
