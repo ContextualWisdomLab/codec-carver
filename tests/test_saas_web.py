@@ -787,6 +787,13 @@ class TestApiKeyAuth(unittest.TestCase):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
             self.assertEqual(saas_web.get_configured_api_keys(), [])
 
+    def test_non_ascii_header_does_not_crash(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = self._post_shrink(headers={b"X-API-Key": "non-ascii-😀".encode("utf-8")})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
 
 @unittest.skipUnless(
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
