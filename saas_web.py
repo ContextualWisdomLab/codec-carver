@@ -256,14 +256,14 @@ HTML_TEMPLATE = """
                     );
                 });
 
-                if (this.value === '' && !this.validity.badInput) {
+                if (this.value === '') {
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
                     return;
                 }
 
-                if (isNaN(val) || val <= 0 || this.validity.badInput) {
+                if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
@@ -290,14 +290,14 @@ HTML_TEMPLATE = """
                     );
                 });
 
-                if (this.value === '' && !this.validity.badInput) {
+                if (this.value === '') {
                     preview.innerText = '';
                     this.setCustomValidity('');
                     this.removeAttribute('aria-invalid');
                     return;
                 }
 
-                if (isNaN(val) || val <= 0 || this.validity.badInput) {
+                if (isNaN(val) || val <= 0) {
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
