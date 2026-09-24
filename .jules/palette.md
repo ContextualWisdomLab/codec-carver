@@ -85,3 +85,7 @@
 ## 2024-09-17 - Clear Preset Button Active State on Empty Input
 **Learning:** When a user clears the target bytes input field, any previously selected preset button remains visually active (aria-pressed="true") due to stale state, which is confusing and visually inconsistent.
 **Action:** Always ensure that when resetting an input field to an empty state, any associated toggle or preset buttons also have their `aria-pressed` state explicitly reset to `false` to match the empty state of the input.
+
+## 2026-09-24 - JS Script execution blocks ordering in DOM
+**Learning:** When using vanilla JS scripts embedded in HTML, the `<script>` tag execution order matters significantly. If the script attempts to attach event listeners to elements like `getElementById('batch_preset_buttons_container')` before those elements exist in the DOM, it will cause a `TypeError` and abort initialization.
+**Action:** Always ensure that inline scripts which query or attach events to DOM elements are placed *after* all corresponding HTML markup, typically right before the closing `</body>` tag, or use an equivalent ordering boundary to guarantee elements are parsed before the script executes.
