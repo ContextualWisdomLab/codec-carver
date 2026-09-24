@@ -67,3 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2024-06-25 - [최적화: 보호된 경로 확인 시 조기 반환을 통한 불필요한 I/O 방지]
+**Learning:** `_ensure_not_protected_source_path`와 같은 함수에서 빈 제외 목록(`protected_sources`)을 처리할 때, 매번 `Path.resolve()`를 호출하여 확인하는 것은 파일 시스템 I/O 오버헤드를 발생시킵니다.
+**Action:** 제외 컬렉션이 비어 있는지 확인하여, 비어 있다면 비용이 많이 드는 시스템 호출을 완전히 건너뛰도록 `early return`을 사용하십시오.
