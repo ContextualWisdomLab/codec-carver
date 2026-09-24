@@ -9,6 +9,19 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 from types import SimpleNamespace
 
+_MISSING_PYTHON_MULTIPART_ERROR = (
+    'Form data requires "python-multipart" to be installed. '
+    'You can install "python-multipart" with: '
+    "pip install python-multipart"
+)
+
+
+def _is_missing_python_multipart_error(exc: RuntimeError) -> bool:
+    """Return whether FastAPI reported its documented optional multipart dependency."""
+
+    return " ".join(str(exc).split()) == _MISSING_PYTHON_MULTIPART_ERROR
+
+
 try:
     from fastapi import BackgroundTasks
     from fastapi.testclient import TestClient
@@ -19,6 +32,10 @@ try:
 
     _HAS_FASTAPI = True
 except ImportError:
+    _HAS_FASTAPI = False
+except RuntimeError as exc:
+    if not _is_missing_python_multipart_error(exc):
+        raise
     _HAS_FASTAPI = False
 
 from media_shrinker import ConversionResult
