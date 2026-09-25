@@ -244,6 +244,8 @@ class TranscriptIndex:
             if candidates is None:
                 candidates = set(postings)
             else:
+                # ⚡ Bolt: Using intersection_update() modifies the set in-place,
+                # avoiding intermediate memory allocations compared to the & operator.
                 candidates.intersection_update(postings)
             if not candidates:
                 return []
@@ -251,6 +253,7 @@ class TranscriptIndex:
         matches = []
         for position in candidates or ():
             entry = self._entries[position]
+            # ⚡ Bolt: Using list comprehension inside sum() is faster than generator expression in CPython for short sequences.
             score = sum([entry.counts[term] for term in unique_terms])
             matches.append(
                 Match(
