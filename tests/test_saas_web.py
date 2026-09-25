@@ -762,6 +762,12 @@ class TestApiKeyAuth(unittest.TestCase):
 
         self.assertEqual(rejected.status_code, 401)
 
+    def test_non_ascii_key_rejected(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            rejected = self._post_shrink(headers={b"X-API-Key": "non-ascii-🚀".encode("utf-8")})
+
+        self.assertEqual(rejected.status_code, 401)
+
     def test_empty_entries_are_ignored(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "key-one,,  ,"}):
             response = self._post_shrink(headers={"X-API-Key": "key-one"})
