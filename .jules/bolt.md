@@ -75,3 +75,6 @@
 **Learning:** The CI check `noema-review` failed due to an external CI infrastructure issue with errors:
 `Noema approve requires adversarial_validation.status=passed` and `Noema gateway attempt outcome=failed phase=validating duration=170.1s served_model=google/gemma-4-31b-it`. This is not a code defect.
 **Action:** Communicate to the user that the PR is being re-submitted without code changes to allow the CI pipeline to proceed, and execute the pre-commit steps before submission.
+## 2026-09-25 - OpenCode Review infrastructure failure
+**Learning:** The CI check `opencode-review` failed due to an expected asynchronous CI workflow mechanism, not a code defect. The error `No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. The dispatch workflow will rerun this failed job after publishing an authenticated exact-head verdict` indicates that the agent is simply waiting for the review to finish.
+**Action:** Communicate to the user that the PR is being re-submitted without code changes to allow the CI pipeline to proceed, and execute the pre-commit steps before submission.
