@@ -12,3 +12,8 @@
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
 - 업로드 파일명의 경로 구분자를 정규화하여 POSIX에서도 Windows 형식의 클라이언트 경로가 일관된 basename으로 기록되도록 수정했습니다.
+
+## [Unreleased]
+### Performance
+* `transcript_search.py` 내의 `search` 함수에서 사용되는 `&` 연산자를 `.intersection_update()`로 변경하여 메모리 할당 오버헤드를 개선했습니다.
+* `transcript_search.py` 내의 검색 점수 계산 시 제너레이터 표현식(`sum(...)`)을 일반 `for` 루프로 전개(unroll)하여 반복문 내부의 성능 병목을 제거했습니다.
