@@ -688,6 +688,17 @@ class TestApiKeyAuth(unittest.TestCase):
             headers=headers or {},
         )
 
+    def test_non_ascii_api_key_handled_securely(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            # starlette testclient strictness requires raw bytes for non-ascii headers
+            response = self._post_shrink(headers={b"x-api-key": "secret-key-\u00e9".encode("utf-8")})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json(),
+            {"error": "Invalid or missing API key"},
+        )
+
     def test_no_env_var_leaves_endpoints_open(self):
         with patch.dict(os.environ):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
