@@ -26,3 +26,5 @@ under_2gb/
 
 # Rust build outputs
 rust-core/target/
+node_modules
+server.log

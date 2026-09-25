@@ -229,6 +229,19 @@ HTML_TEMPLATE = """
                     return;
                 }
                 const text = formatBinaryBytes(file.size);
+
+                let warningMsg = '';
+                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+                    input.setCustomValidity('Please select an audio or video file.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected file: ' + text + ' (Unsupported type: ' + file.type + ')';
+                    preview.style.color = '#dc3545';
+                    return;
+                } else if (!file.type) {
+                    warningMsg = ' (Warning: Unknown type)';
+                    preview.style.color = '#856404';
+                }
+
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
                     input.setCustomValidity('File exceeds ' + limitText + ' limit.');
@@ -237,7 +250,7 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected file size: ' + text;
+                preview.innerText = 'Selected file size: ' + text + warningMsg;
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
@@ -329,8 +342,25 @@ HTML_TEMPLATE = """
                 }
 
                 let totalSize = 0;
+                let hasInvalid = false;
+                let hasUnknown = false;
                 for (let i = 0; i < files.length; i++) {
                     totalSize += files[i].size;
+                    if (files[i].type && !files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) hasInvalid = true;
+                    else if (!files[i].type) hasUnknown = true;
+                }
+
+                if (hasInvalid) {
+                    input.setCustomValidity('Please select only audio or video files.');
+                    input.setAttribute('aria-invalid', 'true');
+                    preview.innerText = 'Selected ' + files.length + ' file(s) (Unsupported type included)';
+                    preview.style.color = '#dc3545';
+                    return;
+                }
+                let warningMsg = '';
+                if (hasUnknown) {
+                    warningMsg = ' (Warning: Unknown types)';
+                    preview.style.color = '#856404';
                 }
 
                 if (files.length > 20) {
@@ -349,7 +379,7 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
+                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')' + warningMsg;
             }
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
