@@ -78,3 +78,6 @@
 ## 2026-09-25 - OpenCode Review infrastructure failure
 **Learning:** The CI check `opencode-review` failed due to an expected asynchronous CI workflow mechanism, not a code defect. The error `No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. The dispatch workflow will rerun this failed job after publishing an authenticated exact-head verdict` indicates that the agent is simply waiting for the review to finish.
 **Action:** Communicate to the user that the PR is being re-submitted without code changes to allow the CI pipeline to proceed, and execute the pre-commit steps before submission.
+## 2026-09-25 - Security Vulnerability out-of-scope for Bolt
+**Learning:** The CI check `trivy-fs` failed due to pre-existing vulnerabilities in `requirements.txt` (CVE-2026-84382, CVE-2026-84378, etc. related to `httpx2`).
+**Action:** Since my persona is "Bolt" (performance-obsessed) and not security-focused, resolving dependency vulnerabilities is out of scope. Communicate the out-of-scope failure to the user and re-submit the PR without modifying dependencies.
