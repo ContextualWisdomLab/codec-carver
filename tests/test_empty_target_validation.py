@@ -54,6 +54,7 @@ class EmptyTargetValidationTests(unittest.TestCase):
         self.assertIn("preview.innerText = '';", handler)
         self.assertIn("this.setCustomValidity('');", handler)
         self.assertIn("this.removeAttribute('aria-invalid');", handler)
+        self.assertIn("buttons.forEach(btn => btn.setAttribute('aria-pressed', 'false'));", handler)
         self.assertIn(
             "return;",
             handler[handler.index(empty_marker) : handler.index(invalid_marker)],
