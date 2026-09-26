@@ -224,10 +224,45 @@ HTML_TEMPLATE = """
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
                 preview.style.color = '#0f6674';
+
+                // Clear existing format errors
+                const existingError = document.getElementById('file_format_error');
+                if (existingError) { existingError.remove(); }
+
                 if (!file) {
                     preview.innerText = '';
                     return;
                 }
+
+                if (file.type) {
+                    const isAudio = file.type.startsWith('audio/');
+                    const isVideo = file.type.startsWith('video/');
+                    if (!isAudio && !isVideo) {
+                        input.setCustomValidity('유효하지 않은 파일 형식입니다. 오디오 또는 비디오 파일만 지원됩니다.');
+                        input.setAttribute('aria-invalid', 'true');
+
+                        const errorDiv = document.createElement('div');
+                        errorDiv.id = 'file_format_error';
+                        errorDiv.className = 'error-message';
+                        errorDiv.style.color = '#dc3545';
+                        errorDiv.style.marginTop = '0.5rem';
+                        errorDiv.textContent = '유효하지 않은 파일 형식입니다. 오디오 또는 비디오 파일만 지원됩니다.';
+                        input.parentNode.insertBefore(errorDiv, input.nextSibling);
+
+                        preview.innerText = '';
+                        return;
+                    }
+                } else {
+                    // Non-blocking warning for empty/unknown types
+                    const warningDiv = document.createElement('div');
+                    warningDiv.id = 'file_format_error'; // Reuse ID for cleanup
+                    warningDiv.style.color = '#856404';
+                    warningDiv.style.marginTop = '0.5rem';
+                    warningDiv.style.fontSize = '0.875rem';
+                    warningDiv.textContent = '알 수 없는 파일 형식입니다. 업로드는 가능하지만 처리에 실패할 수 있습니다.';
+                    input.parentNode.insertBefore(warningDiv, input.nextSibling);
+                }
+
                 const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
@@ -322,6 +357,10 @@ HTML_TEMPLATE = """
                 input.removeAttribute('aria-invalid');
                 preview.style.color = '#0f6674';
 
+                // Clear existing format errors
+                const existingError = document.getElementById('batch_format_error');
+                if (existingError) { existingError.remove(); }
+
                 const files = input.files;
                 if (!files || files.length === 0) {
                     preview.innerText = '';
@@ -329,8 +368,45 @@ HTML_TEMPLATE = """
                 }
 
                 let totalSize = 0;
+                let hasInvalidType = false;
+                let hasUnknownType = false;
+
                 for (let i = 0; i < files.length; i++) {
                     totalSize += files[i].size;
+                    const ftype = files[i].type;
+                    if (ftype) {
+                        const isAudio = ftype.startsWith('audio/');
+                        const isVideo = ftype.startsWith('video/');
+                        if (!isAudio && !isVideo) {
+                            hasInvalidType = true;
+                        }
+                    } else {
+                        hasUnknownType = true;
+                    }
+                }
+
+                if (hasInvalidType) {
+                    input.setCustomValidity('하나 이상의 파일이 유효하지 않은 형식입니다. 오디오 또는 비디오 파일만 지원됩니다.');
+                    input.setAttribute('aria-invalid', 'true');
+
+                    const errorDiv = document.createElement('div');
+                    errorDiv.id = 'batch_format_error';
+                    errorDiv.className = 'error-message';
+                    errorDiv.style.color = '#dc3545';
+                    errorDiv.style.marginTop = '0.5rem';
+                    errorDiv.textContent = '하나 이상의 파일이 유효하지 않은 형식입니다. 오디오 또는 비디오 파일만 지원됩니다.';
+                    input.parentNode.insertBefore(errorDiv, input.nextSibling);
+
+                    preview.innerText = '';
+                    return;
+                } else if (hasUnknownType) {
+                    const warningDiv = document.createElement('div');
+                    warningDiv.id = 'batch_format_error';
+                    warningDiv.style.color = '#856404';
+                    warningDiv.style.marginTop = '0.5rem';
+                    warningDiv.style.fontSize = '0.875rem';
+                    warningDiv.textContent = '일부 파일의 형식을 알 수 없습니다. 업로드는 가능하지만 처리에 실패할 수 있습니다.';
+                    input.parentNode.insertBefore(warningDiv, input.nextSibling);
                 }
 
                 if (files.length > 20) {
