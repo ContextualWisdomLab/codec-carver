@@ -370,6 +370,8 @@ class TestSaasWeb(unittest.TestCase):
         )
         self.assertIn("!e.isTrusted && presetValue === val", html)
         self.assertNotIn("btn.dataset.bytes === this.value", html)
+        self.assertIn('<main id="main-content">', html)
+        self.assertIn('<a href="#main-content" class="skip-link">', html)
 
 
 @unittest.skipUnless(

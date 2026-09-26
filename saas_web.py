@@ -164,9 +164,13 @@ HTML_TEMPLATE = """
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
         .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; font-weight: bold; }
         input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
+        .skip-link { position: absolute; top: -40px; left: 0; background: #000; color: white; padding: 8px; z-index: 100; transition: top 0.2s; }
+        .skip-link:focus { top: 0; }
     </style>
 </head>
 <body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <main id="main-content">
     <div class="box" id="drop-zone">
         <h2>Shrink Media File</h2>
         <form action="/shrink" method="post" enctype="multipart/form-data" id="shrink-form">
@@ -429,6 +433,7 @@ HTML_TEMPLATE = """
             <button type="submit" id="batch-submit-btn">Upload and Shrink Batch</button>
         </form>
     </div>
+    </main>
 </body>
 </html>
 """
