@@ -60,6 +60,13 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.style.color = '#0f6674';", html)
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
 
+    @patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "validkey1,validkey2"})
+    def test_api_key_auth_rejects_non_ascii_header_without_crashing(self):
+        # When user provides non-ASCII characters, it should fail securely with 401, not 500
+        response = client.post("/api/v1/shrink", headers={b"x-api-key": "invalid🚀".encode("utf-8")})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
     def test_security_headers_present_without_plain_http_hsts(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
