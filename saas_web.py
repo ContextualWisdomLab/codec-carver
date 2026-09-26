@@ -224,24 +224,46 @@ HTML_TEMPLATE = """
                 input.setCustomValidity('');
                 input.removeAttribute('aria-invalid');
                 preview.style.color = '#0f6674';
+
+                // Clear existing format errors
+                const existingError = document.getElementById('file_format_error');
+                if (existingError) { existingError.remove(); }
+
                 if (!file) {
                     preview.innerText = '';
                     return;
                 }
-                const text = formatBinaryBytes(file.size);
 
-                let warningMsg = '';
-                if (file.type && !file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
-                    input.setCustomValidity('Please select an audio or video file.');
-                    input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected file: ' + text + ' (Unsupported type: ' + file.type + ')';
-                    preview.style.color = '#dc3545';
-                    return;
-                } else if (!file.type) {
-                    warningMsg = ' (Warning: Unknown type)';
-                    preview.style.color = '#856404';
+                if (file.type) {
+                    const isAudio = file.type.startsWith('audio/');
+                    const isVideo = file.type.startsWith('video/');
+                    if (!isAudio && !isVideo) {
+                        input.setCustomValidity('유효하지 않은 파일 형식입니다. 오디오 또는 비디오 파일만 지원됩니다.');
+                        input.setAttribute('aria-invalid', 'true');
+
+                        const errorDiv = document.createElement('div');
+                        errorDiv.id = 'file_format_error';
+                        errorDiv.className = 'error-message';
+                        errorDiv.style.color = '#dc3545';
+                        errorDiv.style.marginTop = '0.5rem';
+                        errorDiv.textContent = '유효하지 않은 파일 형식입니다. 오디오 또는 비디오 파일만 지원됩니다.';
+                        input.parentNode.insertBefore(errorDiv, input.nextSibling);
+
+                        preview.innerText = '';
+                        return;
+                    }
+                } else {
+                    // Non-blocking warning for empty/unknown types
+                    const warningDiv = document.createElement('div');
+                    warningDiv.id = 'file_format_error'; // Reuse ID for cleanup
+                    warningDiv.style.color = '#856404';
+                    warningDiv.style.marginTop = '0.5rem';
+                    warningDiv.style.fontSize = '0.875rem';
+                    warningDiv.textContent = '알 수 없는 파일 형식입니다. 업로드는 가능하지만 처리에 실패할 수 있습니다.';
+                    input.parentNode.insertBefore(warningDiv, input.nextSibling);
                 }
 
+                const text = formatBinaryBytes(file.size);
                 if (file.size > MAX_UPLOAD_BYTES) {
                     const limitText = formatBinaryBytes(MAX_UPLOAD_BYTES);
                     input.setCustomValidity('File exceeds ' + limitText + ' limit.');
@@ -250,7 +272,7 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected file size: ' + text + warningMsg;
+                preview.innerText = 'Selected file size: ' + text;
             }
 
             document.getElementById('target_bytes').addEventListener('input', function(e) {
@@ -335,6 +357,10 @@ HTML_TEMPLATE = """
                 input.removeAttribute('aria-invalid');
                 preview.style.color = '#0f6674';
 
+                // Clear existing format errors
+                const existingError = document.getElementById('batch_format_error');
+                if (existingError) { existingError.remove(); }
+
                 const files = input.files;
                 if (!files || files.length === 0) {
                     preview.innerText = '';
@@ -342,25 +368,45 @@ HTML_TEMPLATE = """
                 }
 
                 let totalSize = 0;
-                let hasInvalid = false;
-                let hasUnknown = false;
+                let hasInvalidType = false;
+                let hasUnknownType = false;
+
                 for (let i = 0; i < files.length; i++) {
                     totalSize += files[i].size;
-                    if (files[i].type && !files[i].type.startsWith('audio/') && !files[i].type.startsWith('video/')) hasInvalid = true;
-                    else if (!files[i].type) hasUnknown = true;
+                    const ftype = files[i].type;
+                    if (ftype) {
+                        const isAudio = ftype.startsWith('audio/');
+                        const isVideo = ftype.startsWith('video/');
+                        if (!isAudio && !isVideo) {
+                            hasInvalidType = true;
+                        }
+                    } else {
+                        hasUnknownType = true;
+                    }
                 }
 
-                if (hasInvalid) {
-                    input.setCustomValidity('Please select only audio or video files.');
+                if (hasInvalidType) {
+                    input.setCustomValidity('하나 이상의 파일이 유효하지 않은 형식입니다. 오디오 또는 비디오 파일만 지원됩니다.');
                     input.setAttribute('aria-invalid', 'true');
-                    preview.innerText = 'Selected ' + files.length + ' file(s) (Unsupported type included)';
-                    preview.style.color = '#dc3545';
+
+                    const errorDiv = document.createElement('div');
+                    errorDiv.id = 'batch_format_error';
+                    errorDiv.className = 'error-message';
+                    errorDiv.style.color = '#dc3545';
+                    errorDiv.style.marginTop = '0.5rem';
+                    errorDiv.textContent = '하나 이상의 파일이 유효하지 않은 형식입니다. 오디오 또는 비디오 파일만 지원됩니다.';
+                    input.parentNode.insertBefore(errorDiv, input.nextSibling);
+
+                    preview.innerText = '';
                     return;
-                }
-                let warningMsg = '';
-                if (hasUnknown) {
-                    warningMsg = ' (Warning: Unknown types)';
-                    preview.style.color = '#856404';
+                } else if (hasUnknownType) {
+                    const warningDiv = document.createElement('div');
+                    warningDiv.id = 'batch_format_error';
+                    warningDiv.style.color = '#856404';
+                    warningDiv.style.marginTop = '0.5rem';
+                    warningDiv.style.fontSize = '0.875rem';
+                    warningDiv.textContent = '일부 파일의 형식을 알 수 없습니다. 업로드는 가능하지만 처리에 실패할 수 있습니다.';
+                    input.parentNode.insertBefore(warningDiv, input.nextSibling);
                 }
 
                 if (files.length > 20) {
@@ -379,7 +425,7 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     return;
                 }
-                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')' + warningMsg;
+                preview.innerText = 'Selected ' + files.length + ' file(s) (' + formatBinaryBytes(totalSize) + ')';
             }
 
             document.getElementById('shrink-batch-form').addEventListener('submit', function() {
