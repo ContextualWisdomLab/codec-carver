@@ -12,3 +12,7 @@
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
 - 업로드 파일명의 경로 구분자를 정규화하여 POSIX에서도 Windows 형식의 클라이언트 경로가 일관된 basename으로 기록되도록 수정했습니다.
+
+## [Unreleased]
+### 성능 개선 (Performance)
+- `media_shrinker.py` 파일 내 `_ensure_not_protected_source_path` 함수에서 `protected_sources` 인자가 빈 집합일 때 조기 반환(early return)을 수행하도록 수정하여 수천 개의 파일 경로를 스캔하고 변환할 때 불필요하고 비용이 많이 드는 `Path.resolve()` I/O 시스템 호출을 회피하도록 최적화했습니다.

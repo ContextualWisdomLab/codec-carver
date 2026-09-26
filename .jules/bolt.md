@@ -67,3 +67,11 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2026-09-12 - [Rejected: os.stat vs Path.stat micro-optimization]
+**Learning:** Replacing `pathlib.Path(path).stat()` or `path.stat()` with `os.stat(path)` is an unmeasurable micro-optimization in this codebase. The execution time of the underlying filesystem I/O system call completely overshadows the nanosecond-level method resolution and object overhead in Python.
+**Action:** Do not propose or implement `os.stat()` replacements for existing `Path.stat()` calls, as it violates the core persona constraint against micro-optimizations that lack measurable, real-world impact.
+
+## 2026-09-12 - [Skip Path.resolve() overhead via early returns]
+**Learning:** `Path.resolve()` invokes costly underlying system calls (such as reading symlinks and stating directories). Calling it indiscriminately in tight loops (e.g., collision/exclusion path checks) significantly degrades performance, even when the exclusion set it's being compared against is completely empty.
+**Action:** When filtering or excluding paths, always check if the exclusion configurations (`exclude_paths`, `protected_sources`, etc.) are empty and employ fast-path early returns to bypass expensive `Path.resolve()` operations completely.
