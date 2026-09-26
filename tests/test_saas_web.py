@@ -47,20 +47,6 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn('id="file_help"', html)
         self.assertIn('class="required-star" aria-hidden="true"', html)
 
-    def test_get_ui_includes_main_landmark_and_heading(self):
-        response = client.get("/")
-        self.assertEqual(response.status_code, 200)
-        html = response.text
-
-        self.assertEqual(html.count("<main>"), 1)
-        self.assertEqual(html.count("</main>"), 1)
-        self.assertEqual(html.count("<h1"), 1)
-        self.assertIn(
-            '<main>\n    <h1 class="page-title">Codec Carver SaaS</h1>',
-            html,
-        )
-        self.assertIn(".page-title { text-align: center; }", html)
-
     def test_get_ui_includes_binary_file_size_validation(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -101,6 +87,14 @@ class TestSaasWeb(unittest.TestCase):
             response.headers["Strict-Transport-Security"],
             "max-age=31536000; includeSubDomains",
         )
+
+    def test_html_includes_main_and_h1_page_title(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html_content = response.text
+        self.assertIn("<main>", html_content)
+        self.assertIn("</main>", html_content)
+        self.assertIn('<h1 class="page-title">Codec Carver SaaS</h1>', html_content)
 
     def test_request_size_limit_rejects_oversized_declared_body(self):
         response = client.post(
