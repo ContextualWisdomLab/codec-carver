@@ -49,7 +49,7 @@ class EmptyTargetValidationTests(unittest.TestCase):
         """Assert one handler clears stale state before numeric validation."""
 
         empty_marker = "if (this.value === '') {"
-        invalid_marker = "if (isNaN(val) || val <= 0) {"
+        invalid_marker = "if (isNaN(val) || val <= 0 || !Number.isInteger(val)) {"
         self.assertIn(empty_marker, handler)
         self.assertIn("preview.innerText = '';", handler)
         self.assertIn("this.setCustomValidity('');", handler)
@@ -61,28 +61,21 @@ class EmptyTargetValidationTests(unittest.TestCase):
         self.assertLess(handler.index(empty_marker), handler.index(invalid_marker))
 
 
-    def test_script_runs_after_both_forms_exist(self) -> None:
-        """Both target-size controls exist before listener registration runs."""
 
-        batch_form = SOURCE_TEXT.index('id="shrink-batch-form"')
-        script = SOURCE_TEXT.index("<script>")
-        self.assertLess(batch_form, script)
 
-    def test_target_handlers_reject_fractional_bytes(self) -> None:
-        """Both target-size handlers validate the complete integer byte value."""
+    def test_dom_initialization_ordering(self) -> None:
+        """The inline script attaches listeners inside DOMContentLoaded."""
+        self.assertEqual(SOURCE_TEXT.count("document.addEventListener('DOMContentLoaded', () => {"), 5)
 
-        single = self._handler_between(
-            "document.getElementById('target_bytes').addEventListener('input'",
-            "document.getElementById('batch_target_bytes').addEventListener('input'",
-        )
-        batch = self._handler_between(
-            "document.getElementById('batch_target_bytes').addEventListener('input'",
-            "document.getElementById('shrink-form').addEventListener('submit'",
-        )
-        for handler in (single, batch):
-            self.assertIn("const val = Number(this.value);", handler)
-            self.assertIn("!Number.isInteger(val)", handler)
-            self.assertNotIn("parseInt(this.value", handler)
+    def test_fractional_rejection(self) -> None:
+        """The inline script rejects fractional bytes."""
+        self.assertEqual(SOURCE_TEXT.count("if (isNaN(val) || val <= 0 || !Number.isInteger(val)) {"), 2)
+        self.assertEqual(SOURCE_TEXT.count("const val = Number(this.value);"), 2)
+
+    def test_constant_bound_rendered_maxima(self) -> None:
+        """Derive rendered target-byte maxima from MAX_TARGET_BYTES instead of hardcoded."""
+        self.assertNotIn('max="5368709120"', SOURCE_TEXT)
+        self.assertEqual(SOURCE_TEXT.count('max="{MAX_TARGET_BYTES}"'), 2)
 
 
 if __name__ == "__main__":

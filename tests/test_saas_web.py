@@ -313,7 +313,7 @@ class TestSaasWeb(unittest.TestCase):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.text
-        self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
+        self.assertIn("preview.innerText = 'Must be a whole number greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
 
     def test_request_size_limit_rejects_streamed_body_over_limit(self):
