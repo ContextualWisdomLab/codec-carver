@@ -134,3 +134,10 @@ PR #564 exact `3ebdc1c73cf55bf6cd22d6bee2442d28c936d575` is Draft/Proposed. It a
 
 Do not return #564 to Ready until reduced-motion and touch contracts plus current-head browser, responsive, locale, check and independent-review evidence are attached.
 
+
+
+## Duplicate preset-state writer — codec-carver#643
+
+[codec-carver#643](https://github.com/ContextualWisdomLab/codec-carver/pull/643) is Draft/Proposed at exact head `a2525ba1179f6fb05259e40761710d50bbf06d97`. Its valid requirement—manual input must synchronize the matching preset independently of `Event.isTrusted`—is already owned by canonical #595 exact `ff97ecd656ea89f50b8058e8daac16d89fe42aef`.
+
+#643 is not a complete successor: it parses user input with `Number.parseInt`, has no positive-safe-integer guard, and its test asserts generated source text rather than pointer/keyboard/input behavior. Canonical #595 uses `Number(this.value)`, rejects fractional, non-finite, negative, zero and unsafe values, preserves exact comparison, and carries CHANGELOG plus this acceptance ledger. Do not merge or close #643 until protected integration proves complete blob and requirement carryover. Its exact-head CI, Security, Semgrep, CodeQL and fuzz runs are queued; browser/AT/responsive/eight-locale/recovery evidence and current independent approval remain absent.
