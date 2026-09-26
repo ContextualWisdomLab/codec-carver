@@ -118,4 +118,19 @@ The source-level landmark, title-style and coverage-runner defects are repaired,
 but #580 remains **Draft / Proposed / UI Delivery FAIL** until unchanged-head
 hosted checks, qualifying independent review, current-browser/AT/responsive/
 eight-locale evidence and the live repository merge policy are satisfied.
+## 2026-09-27 interaction-motion acceptance — #564
+
+PR #564 exact `3ebdc1c73cf55bf6cd22d6bee2442d28c936d575` is Draft/Proposed. It adds input/button hover, focus, transition, and active-scale styles in the product-owned HTML surface, but provides no before/after screenshots and no executable browser acceptance.
+
+| Concern | Required evidence | Status |
+|---|---|---|
+| Determinism / semantics | Input validation, preset selection, disabled and busy behavior unchanged | Source-only; browser pending |
+| Accessibility | Visible focus exists; reduced-motion behavior, 44×44 touch targets, AT names and contrast measurement | Partial / FAIL |
+| Interaction | Pointer, touch and keyboard replay for number/file input, submit and preset controls | FAIL |
+| Responsive / locales | 320/768/desktop plus intermediate widths; ko/en/ja/zh/vi/es/de/fr wrapping and font fallback | FAIL |
+| States / recovery | normal/loading/error/offline/permission/read-only/stale/conflict/retry/busy and reload recovery | FAIL |
+| Performance | Main-thread/style/layout/paint evidence for the new transitions at fixed workload | Pending |
+| Governance | Exact-head CI, Security, Semgrep, fuzz and CodeQL are queued; approvals predate current admission review | FAIL |
+
+Do not return #564 to Ready until reduced-motion and touch contracts plus current-head browser, responsive, locale, check and independent-review evidence are attached.
 
