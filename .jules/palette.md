@@ -81,6 +81,6 @@
 ## 2024-08-04 - 숫자 입력 필드 빈 문자열 상태 초기화 처리
 **학습:** 숫자 입력 필드에서 빈 문자열('')을 입력할 때 브라우저는 이전의 유효하지 않은 상태를 암시적으로 유지하므로, 사용자 정의 검증을 명시적으로 초기화하지 않으면 네이티브 HTML5 유효성 검사가 정상 작동하지 않을 수 있음을 확인했습니다.
 **실행:** 인라인 검증 스크립트 작성 시 빈 문자열 상태를 별도로 확인하여 this.setCustomValidity('') 및 this.removeAttribute('aria-invalid')를 명시적으로 호출하는 로직을 추가해야 합니다.
-## 2024-05-24 - Accessible Numeric Constraints
-**Learning:** When adding HTML5 `max` and `min` constraints to numeric inputs, native browser UI often fails to provide accessible inline feedback if users bypass the stepper. Programmatic inputs can bypass standard boundaries, leading to delayed errors.
-**Action:** Always complement HTML5 numeric boundaries (`max`/`min`) with custom JavaScript validation (`setCustomValidity`) and ARIA states (`aria-invalid`) to guarantee immediate and accessible error surfacing.
+## 2024-05-24 - 접근성 높은 숫자 제약 조건
+**Learning:** 숫자 입력 필드에 HTML5 `max` 및 `min` 제약 조건을 추가할 때, 사용자가 기본 스테퍼를 우회하면 네이티브 브라우저 UI가 접근성 높은 인라인 피드백을 제공하지 못하는 경우가 많습니다. 프로그래밍 방식의 입력은 표준 경계를 우회하여 오류 표시를 지연시킬 수 있습니다.
+**Action:** 항상 HTML5 숫자 경계(`max`/`min`)를 사용자 지정 JavaScript 유효성 검사(`setCustomValidity`) 및 ARIA 상태(`aria-invalid`)와 함께 사용하여 즉각적이고 접근성 높은 오류 표시를 보장하십시오.
