@@ -61,5 +61,29 @@ class EmptyTargetValidationTests(unittest.TestCase):
         self.assertLess(handler.index(empty_marker), handler.index(invalid_marker))
 
 
+    def test_script_runs_after_both_forms_exist(self) -> None:
+        """Both target-size controls exist before listener registration runs."""
+
+        batch_form = SOURCE_TEXT.index('id="shrink-batch-form"')
+        script = SOURCE_TEXT.index("<script>")
+        self.assertLess(batch_form, script)
+
+    def test_target_handlers_reject_fractional_bytes(self) -> None:
+        """Both target-size handlers validate the complete integer byte value."""
+
+        single = self._handler_between(
+            "document.getElementById('target_bytes').addEventListener('input'",
+            "document.getElementById('batch_target_bytes').addEventListener('input'",
+        )
+        batch = self._handler_between(
+            "document.getElementById('batch_target_bytes').addEventListener('input'",
+            "document.getElementById('shrink-form').addEventListener('submit'",
+        )
+        for handler in (single, batch):
+            self.assertIn("const val = Number(this.value);", handler)
+            self.assertIn("!Number.isInteger(val)", handler)
+            self.assertNotIn("parseInt(this.value", handler)
+
+
 if __name__ == "__main__":
     unittest.main()
