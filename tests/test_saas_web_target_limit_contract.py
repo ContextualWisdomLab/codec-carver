@@ -40,6 +40,20 @@ class TestTargetLimitContract(unittest.TestCase):
         self.assertEqual(html.count("const val = this.valueAsNumber;"), 2)
         self.assertNotIn("parseInt(this.value, 10)", html)
 
+    def test_listener_script_runs_after_batch_controls_exist(self):
+        """Keep synchronous listener registration after its batch DOM targets."""
+
+        html = asyncio.run(saas_web.get_ui())
+        script_position = html.index("<script>")
+
+        for control_id in (
+            "batch_preset_buttons_container",
+            "batch_target_bytes",
+            "shrink-batch-form",
+        ):
+            with self.subTest(control_id=control_id):
+                self.assertLess(html.index(f'id="{control_id}"'), script_position)
+
 
 if __name__ == "__main__":
     unittest.main()
