@@ -149,6 +149,7 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
         .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+        .page-title { text-align: center; }
         button { padding: 10px 20px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
         button:hover:not(:disabled) { background-color: #004085; }
         button:disabled { background-color: #6c757d; cursor: not-allowed; }
@@ -164,7 +165,6 @@ HTML_TEMPLATE = """
         .preset-btn:hover { background-color: #dde2e6; color: #212529; }
         .preset-btn[aria-pressed="true"] { background-color: #0056b3; color: white; border-color: #004085; font-weight: bold; }
         input[aria-invalid="true"] { border-color: #dc3545; outline: 2px solid #dc3545; }
-        .page-title { text-align: center; }
     </style>
 </head>
 <body>
