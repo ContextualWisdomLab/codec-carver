@@ -25,7 +25,22 @@ from media_shrinker import ConversionResult
 from job_store import JobStore
 
 if _HAS_FASTAPI:
+    import os
+    os.environ["CODEC_CARVER_API_KEYS"] = "test-key"
     client = TestClient(app)
+
+    # Patch client to always send X-API-Key for convenience in tests
+    _original_request = client.request
+    def _request(method, url, **kwargs):
+        if "headers" not in kwargs:
+            kwargs["headers"] = {}
+        if "x-api-key" not in [k.lower() for k in kwargs["headers"]]:
+            kwargs["headers"]["X-API-Key"] = "test-key"
+        return _original_request(method, url, **kwargs)
+    client.request = _request
+    client.get = lambda url, **kwargs: _request("GET", url, **kwargs)
+    client.post = lambda url, **kwargs: _request("POST", url, **kwargs)
+
 
 
 @unittest.skipUnless(
@@ -688,16 +703,13 @@ class TestApiKeyAuth(unittest.TestCase):
             headers=headers or {},
         )
 
-    def test_no_env_var_leaves_endpoints_open(self):
+    def test_no_env_var_fails_closed(self):
         with patch.dict(os.environ):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
             response = self._post_shrink()
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.json(),
-            {"error": "Invalid target_bytes value. Must be greater than 0."},
-        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
 
     def test_missing_header_rejected_when_keys_configured(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
@@ -770,15 +782,12 @@ class TestApiKeyAuth(unittest.TestCase):
 
         self.assertEqual(rejected.status_code, 401)
 
-    def test_only_empty_entries_leave_endpoints_open(self):
+    def test_only_empty_entries_fails_closed(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " , ,"}):
             response = self._post_shrink()
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.json(),
-            {"error": "Invalid target_bytes value. Must be greater than 0."},
-        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
 
     def test_get_configured_api_keys_parsing(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " a ,, b ,"}):
@@ -1172,6 +1181,31 @@ class JobModelTests(unittest.TestCase):
         saas_web._cleanup_job("c")
         self.assertFalse(temp_dir.exists())
         self.assertIsNone(saas_web.JOB_STORE.get("c"))
+
+    @patch("saas_web._cleanup_job")
+    @patch("saas_web._get_job_store")
+    def test_cleanup_expired_jobs(self, mock_get_store, mock_cleanup):
+        from datetime import datetime, timezone, timedelta
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+
+        now = datetime.now(timezone.utc)
+        past_time_1 = (now - timedelta(hours=25)).isoformat()
+        past_time_2 = (now - timedelta(hours=10)).isoformat()
+
+        mock_store.list_jobs.return_value = [
+            {"id": "job_1", "status": "done", "updated_at": past_time_1},
+            {"id": "job_2", "status": "done", "updated_at": past_time_2},
+            {"id": "job_3", "status": "processing", "updated_at": past_time_1},
+            {"id": "job_4", "status": "failed", "updated_at": past_time_1},
+            {"id": "job_5", "status": "failed", "updated_at": "invalid-time"},
+        ]
+
+        saas_web._cleanup_expired_jobs()
+
+        mock_cleanup.assert_any_call("job_1")
+        mock_cleanup.assert_any_call("job_4")
+        self.assertEqual(mock_cleanup.call_count, 2)
 
     def test_cleanup_job_tolerates_unknown_job(self):
         saas_web._cleanup_job("unknown-cleanup-job")
