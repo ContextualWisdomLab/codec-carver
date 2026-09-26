@@ -252,8 +252,7 @@ class TranscriptIndex:
         matches = []
         for position in candidates or ():
             entry = self._entries[position]
-            # Optimize: list comp inside sum() is faster than generator due to frame suspension overhead
-            score = sum([entry.counts[term] for term in unique_terms])
+            score = sum(entry.counts[term] for term in unique_terms)
             matches.append(
                 Match(
                     recording_id=entry.recording_id,
