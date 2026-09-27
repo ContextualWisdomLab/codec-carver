@@ -1222,10 +1222,6 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     def test_wrong_key_with_non_ascii_rejected(self):
         # We pass raw bytes because starlette TestClient (httpx underneath) enforces ASCII for str headers.
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
@@ -1237,3 +1233,7 @@ if __name__ == "__main__":
             )
             self.assertEqual(response.status_code, 401)
             self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
+
+if __name__ == "__main__":
+    unittest.main()
