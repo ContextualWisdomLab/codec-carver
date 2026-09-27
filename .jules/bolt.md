@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2024-05-24 - [Unrolling sum() in Tight Loops]
+**Learning:** Using `sum()` with a generator expression inside a tight inner loop incurs significant performance overhead due to generator instantiation. In Python, an explicitly unrolled `for` loop avoids this overhead, making inner loops measureably faster.
+**Action:** When a loop is expected to run heavily (like in search ranking), prefer unrolling `sum()` with standard accumulation loops for better raw Python execution speed.
