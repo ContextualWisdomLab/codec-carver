@@ -62,8 +62,8 @@
 **Action:** When implementing grouped option buttons, use `role="group"` with an `aria-label` on the container, implement `aria-pressed` for toggle states, and use event delegation combined with `data-*` attributes instead of inline `onclick` handlers.
 
 ## 2024-07-10 - Preset buttons active state with `aria-pressed`
-**Learning:** When implementing preset or toggle buttons in UI forms, using `aria-pressed` attributes dynamically managed by JavaScript is essential to track active states. This should always be paired with a corresponding CSS rule (e.g., `[aria-pressed="true"]`) to provide clear visual feedback, and the active state should be cleared when the user manually modifies the associated input field (distinguishable via `e.isTrusted` on the event).
-**Action:** Always implement `aria-pressed` with paired CSS for preset toggle buttons, and use `e.isTrusted` to properly reset states on manual user input.
+**Learning:** When implementing preset or toggle buttons in UI forms, using `aria-pressed` attributes dynamically managed by JavaScript is essential to track active states. This should always be paired with a corresponding CSS rule (e.g., `[aria-pressed="true"]`) to provide clear visual feedback. Event provenance does not determine selection truth; the validated input value does.
+**Action:** Always implement `aria-pressed` with paired CSS for preset toggle buttons, and derive its state from an exact, validated input value rather than `e.isTrusted`.
 
 ## 2024-05-24 - Visual Feedback for aria-invalid
 **Learning:** Screen readers announce `aria-invalid="true"`, but sighted users need visual cues when form validation fails dynamically on the client side.
@@ -81,3 +81,7 @@
 ## 2024-08-04 - 숫자 입력 필드 빈 문자열 상태 초기화 처리
 **학습:** 숫자 입력 필드에서 빈 문자열('')을 입력할 때 브라우저는 이전의 유효하지 않은 상태를 암시적으로 유지하므로, 사용자 정의 검증을 명시적으로 초기화하지 않으면 네이티브 HTML5 유효성 검사가 정상 작동하지 않을 수 있음을 확인했습니다.
 **실행:** 인라인 검증 스크립트 작성 시 빈 문자열 상태를 별도로 확인하여 this.setCustomValidity('') 및 this.removeAttribute('aria-invalid')를 명시적으로 호출하는 로직을 추가해야 합니다.
+
+## 2024-09-17 - 프리셋 버튼 상태 동기화 접근성 개선
+**학습:** 프론트엔드 UI 상태를 입력값과 동기화할 때 `!e.isTrusted`로 이벤트를 필터링하면 수동 입력을 누락하고, `parseInt`를 사용하면 `26214400.5` 같은 값을 `26214400` 프리셋으로 잘못 표시합니다. 선택 상태는 이벤트 출처가 아니라 검증된 exact value에서 도출해야 합니다.
+**실행:** `Number`로 입력값을 변환한 뒤 양의 safe integer일 때만 프리셋의 exact byte count와 비교합니다. 빈 값·소수·비정상 값은 어떤 프리셋도 선택하지 않으며, 단일·batch 양식에 동일한 계약을 적용합니다.
