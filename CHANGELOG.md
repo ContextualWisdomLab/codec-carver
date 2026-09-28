@@ -12,3 +12,4 @@
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
 - 업로드 파일명의 경로 구분자를 정규화하여 POSIX에서도 Windows 형식의 클라이언트 경로가 일관된 basename으로 기록되도록 수정했습니다.
+- 단기 SQLite 연결 시 매번 `PRAGMA journal_mode=WAL`이 실행되는 것을 방지하고, 초기화 단계로 설정 위치를 변경하여 성능 오버헤드를 최적화했습니다.
