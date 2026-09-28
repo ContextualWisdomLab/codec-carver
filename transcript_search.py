@@ -241,11 +241,8 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            # ⚡ Bolt: Avoid unnecessary O(N) defensive copy on the first iteration.
-            # The bitwise AND (&) operator on sets natively returns a new set,
-            # so mutating candidates down the line won't affect the index.
             candidates = (
-                postings if candidates is None else candidates & postings
+                set(postings) if candidates is None else candidates & postings
             )
             if not candidates:
                 return []
@@ -253,11 +250,7 @@ class TranscriptIndex:
         matches = []
         for position in candidates or ():
             entry = self._entries[position]
-            # ⚡ Bolt: Replace generator expression `sum(entry.counts[term] ...)`
-            # with explicit for loop to avoid generator overhead in tight inner loop
-            score = 0
-            for term in unique_terms:
-                score += entry.counts[term]
+            score = sum(entry.counts[term] for term in unique_terms)
             matches.append(
                 Match(
                     recording_id=entry.recording_id,
