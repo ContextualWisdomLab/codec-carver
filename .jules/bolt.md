@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2024-09-23 - [Python 성능 최적화: 제너레이터 표현식과 set 연산 최적화]
+**Learning:** `sum()` 내부에 제너레이터 표현식을 사용하면 호출 오버헤드가 발생하여 대량의 데이터 처리 시 성능 저하가 발생합니다. 또한 교집합을 구할 때 `&` 연산자보다 `intersection_update()`를 사용하는 것이 메모리 할당을 줄여 더 효율적입니다.
+**Action:** 성능이 중요한 루프에서는 `sum()`과 제너레이터 대신 일반 `for` 루프를 사용하여 오버헤드를 줄이고, 집합의 교집합 연산에는 `intersection_update()`를 사용하여 메모리와 시간을 절약합니다.
