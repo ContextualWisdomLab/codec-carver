@@ -6,6 +6,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+FUZZ_WORKFLOW = ROOT / ".github" / "workflows" / "fuzz.yml"
 
 
 class CiWorkflowTests(unittest.TestCase):
@@ -65,6 +66,27 @@ class CiWorkflowTests(unittest.TestCase):
         for step in checkout_steps:
             with self.subTest(step=step.splitlines()[0].strip()):
                 self.assertIn("persist-credentials: false", step)
+
+    def test_workflows_only_cancel_superseded_pull_request_heads(self) -> None:
+        """Keep non-PR runs isolated while grouping each workflow by PR."""
+
+        for workflow_path in (CI_WORKFLOW, FUZZ_WORKFLOW):
+            with self.subTest(workflow=workflow_path.name):
+                workflow = workflow_path.read_text(encoding="utf-8")
+                self.assertIn("${{ github.workflow }}-${{ github.repository }}", workflow)
+                self.assertIn("format('pr-{0}', github.event.pull_request.number)", workflow)
+                self.assertIn("format('run-{0}', github.run_id)", workflow)
+                self.assertIn(
+                    "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+                    workflow,
+                )
+                self.assertIn("max-parallel: 1", workflow)
+
+    def test_fuzz_does_not_repeat_the_ci_test_suite(self) -> None:
+        """Run the full unittest suite only in CI, not again in fuzz."""
+
+        workflow = FUZZ_WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("python -m unittest discover", workflow)
 
 
 if __name__ == "__main__":  # pragma: no cover
