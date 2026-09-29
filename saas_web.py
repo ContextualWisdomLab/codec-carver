@@ -178,7 +178,7 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="target_bytes">Target Bytes: <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" max="5368709120" aria-describedby="target_bytes_help target_bytes_preview" required>
+                <input type="number" id="target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="target_bytes_help target_bytes_preview" required>
                 <br><span id="target_bytes_help" class="help-text">Maximum allowed file size in bytes (e.g., 2000000000 for ~1.86 GiB)</span>
                 <br><span id="target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes">
@@ -268,12 +268,6 @@ HTML_TEMPLATE = """
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
                     this.setAttribute('aria-invalid', 'true');
-                } else if (val > 5368709120) {
-                    const limitText = formatBinaryBytes(5368709120);
-                    preview.innerText = 'Exceeds ' + limitText + ' limit.';
-                    preview.style.color = '#dc3545';
-                    this.setCustomValidity('Exceeds ' + limitText + ' limit.');
-                    this.setAttribute('aria-invalid', 'true');
                 } else {
                     preview.innerText = formatBinaryBytes(val);
                 }
@@ -307,12 +301,6 @@ HTML_TEMPLATE = """
                     preview.innerText = 'Must be greater than 0.';
                     preview.style.color = '#dc3545';
                     this.setCustomValidity('Must be greater than 0.');
-                    this.setAttribute('aria-invalid', 'true');
-                } else if (val > 5368709120) {
-                    const limitText = formatBinaryBytes(5368709120);
-                    preview.innerText = 'Exceeds ' + limitText + ' limit.';
-                    preview.style.color = '#dc3545';
-                    this.setCustomValidity('Exceeds ' + limitText + ' limit.');
                     this.setAttribute('aria-invalid', 'true');
                 } else {
                     preview.innerText = formatBinaryBytes(val);
@@ -384,7 +372,12 @@ HTML_TEMPLATE = """
                 zone.addEventListener(eventName, preventDefaults, false);
             });
             ['dragenter', 'dragover'].forEach(eventName => {
-                zone.addEventListener(eventName, () => zone.classList.add('dragover'), false);
+                zone.addEventListener(eventName, (e) => {
+                    zone.classList.add('dragover');
+                    if (e.dataTransfer) {
+                        e.dataTransfer.dropEffect = 'copy';
+                    }
+                }, false);
             });
             ['dragleave', 'drop'].forEach(eventName => {
                 zone.addEventListener(eventName, () => zone.classList.remove('dragover'), false);
@@ -428,7 +421,7 @@ HTML_TEMPLATE = """
             </p>
             <p>
                 <label for="batch_target_bytes">Target Bytes (per file): <span class="required-star" aria-hidden="true">*</span></label><br>
-                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" max="5368709120" aria-describedby="batch_target_bytes_help batch_target_bytes_preview" required>
+                <input type="number" id="batch_target_bytes" name="target_bytes" value="2000000000" min="1" aria-describedby="batch_target_bytes_help batch_target_bytes_preview" required>
                 <br><span id="batch_target_bytes_help" class="help-text">Maximum allowed size in bytes for each output file</span>
                 <br><span id="batch_target_bytes_preview" class="help-text" aria-live="polite" style="font-weight: bold; color: #1e7e34;">1.86 GiB</span>
                 <div id="batch_preset_buttons_container" class="preset-container" role="group" aria-label="Preset target sizes for batch">
