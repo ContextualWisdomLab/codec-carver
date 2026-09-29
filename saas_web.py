@@ -257,9 +257,16 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
-                    preview.innerText = '';
-                    this.setCustomValidity('');
-                    this.removeAttribute('aria-invalid');
+                    if (this.validity && this.validity.badInput) {
+                        preview.innerText = 'Please enter a valid number.';
+                        preview.style.color = '#dc3545';
+                        this.setCustomValidity('Please enter a valid number.');
+                        this.setAttribute('aria-invalid', 'true');
+                    } else {
+                        preview.innerText = '';
+                        this.setCustomValidity('');
+                        this.removeAttribute('aria-invalid');
+                    }
                     return;
                 }
 
@@ -291,9 +298,16 @@ HTML_TEMPLATE = """
                 });
 
                 if (this.value === '') {
-                    preview.innerText = '';
-                    this.setCustomValidity('');
-                    this.removeAttribute('aria-invalid');
+                    if (this.validity && this.validity.badInput) {
+                        preview.innerText = 'Please enter a valid number.';
+                        preview.style.color = '#dc3545';
+                        this.setCustomValidity('Please enter a valid number.');
+                        this.setAttribute('aria-invalid', 'true');
+                    } else {
+                        preview.innerText = '';
+                        this.setCustomValidity('');
+                        this.removeAttribute('aria-invalid');
+                    }
                     return;
                 }
 

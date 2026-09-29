@@ -65,3 +65,6 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2026-09-29 - Updating dependencies
+**Learning:** When resolving vulnerability scanner findings, DO NOT blindly remove the package from project configuration files. Instead, use package manager tools to update the dependencies safely.
+**Action:** Use `pip index versions <package_name>` to find available versions, modify `requirements.txt`, and recompile lock files with `pip-compile`.
