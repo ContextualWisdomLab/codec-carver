@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2026-09-29 - Set Intersection and Sum Comprehension Optimizations
+**Learning:** Using `.intersection_update()` avoids intermediate memory allocations compared to the `&` operator, and a list comprehension in `sum()` reduces frame suspension overhead in hot loops.
+**Action:** Prefer `.intersection_update()` for iterative set intersections and `sum([x for x in iter])` for short sequences in performance-critical code.
