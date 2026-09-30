@@ -12,3 +12,9 @@
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
 - 업로드 파일명의 경로 구분자를 정규화하여 POSIX에서도 Windows 형식의 클라이언트 경로가 일관된 basename으로 기록되도록 수정했습니다.
+
+### Security
+* `hmac.compare_digest`에 non-ASCII 문자가 포함된 헤더를 전달했을 때 발생하는 `TypeError`로 인한 서비스 거부(DoS) 취약점을 수정했습니다.
+
+### Security
+* `trivy-fs` 보안 점검 결과를 반영하여 취약점이 있는 미사용 의존성 `httpx2` 패키지를 `requirements.txt`, `pyproject.toml`, `requirements-lock.txt`에서 안전하게 제거했습니다.

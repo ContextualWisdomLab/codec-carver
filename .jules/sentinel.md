@@ -65,3 +65,11 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2026-07-16 - [Sentinel: DoS Vulnerability via hmac.compare_digest TypeError]
+**Vulnerability:** Unhandled `TypeError` (DoS vulnerability) triggered by `hmac.compare_digest` when provided with strings containing non-ASCII characters.
+**Learning:** In Python, `hmac.compare_digest` requires arguments to be strictly ASCII strings or bytes. Passing a string with Unicode characters (like an emoji) will crash the process rather than returning false, allowing attackers to perform a Denial of Service by supplying a non-ASCII `x-api-key`.
+**Prevention:** When comparing potentially untrusted strings (such as HTTP headers) using `hmac.compare_digest`, always encode both the provided value and the expected value into bytes (e.g., using `.encode("utf-8")`) beforehand.
+## 2026-09-30 - [Sentinel: Dependency Vulnerability Mitigation]
+**Vulnerability:** Vulnerable dependency `httpx2` flagged by CI scanner `trivy-fs` (e.g., CVE-2026-84382, CVE-2026-84378).
+**Learning:** Security scanners like Trivy flag dependencies listed in manifest files (`requirements.txt`) with known CVEs even if they are not actively imported or used in the application execution path.
+**Prevention:** Remove unused or vulnerable dependencies securely from all related manifest and lock files (`requirements.txt`, `pyproject.toml`, `requirements-lock.txt`) to maintain a clean bill of health on security scanners. When modifying lock files directly, `pip-compile` ensures transitive dependency hashes are managed correctly without breaking syntax.
