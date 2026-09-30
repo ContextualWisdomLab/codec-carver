@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2024-06-26 - [Optimize path exclusion resolution]
+**Learning:** Checking collections (like `protected_sources`) before executing expensive operations like `Path.resolve()` avoids unnecessary disk I/O when the collection is empty.
+**Action:** Always verify if a target collection is empty (`if not collection: return`) before performing expensive preprocessing on the items meant to be checked against it.
