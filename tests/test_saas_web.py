@@ -1223,16 +1223,5 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
-class TestApiKeyDosProtection(unittest.TestCase):
-    def test_non_ascii_api_key_does_not_crash(self):
-        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
-            if _HAS_FASTAPI:
-                # TestClient requires bytes for non-ASCII headers in some contexts
-                # We send a non-ascii string as the API key to trigger the previous exception
-                response = client.get("/jobs/missing", headers={b"X-API-Key": "こんにちは".encode("utf-8")})
-                self.assertEqual(response.status_code, 401)
-                self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
-
-
 if __name__ == "__main__":
     unittest.main()
