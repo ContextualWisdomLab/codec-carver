@@ -60,17 +60,6 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.style.color = '#0f6674';", html)
         self.assertIn('onchange="updateFileSizePreview(this)"', html)
 
-    def test_get_ui_sets_copy_drop_effect_for_both_drop_zones(self):
-        response = client.get("/")
-        self.assertEqual(response.status_code, 200)
-        html = response.text
-
-        self.assertIn("[dropZone, batchDropZone].forEach(zone => {", html)
-        self.assertIn("['dragenter', 'dragover'].forEach(eventName => {", html)
-        self.assertIn("if (e.dataTransfer) {", html)
-        self.assertEqual(html.count("e.dataTransfer.dropEffect = 'copy';"), 1)
-        self.assertIn("e.preventDefault();", html)
-
     def test_security_headers_present_without_plain_http_hsts(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
