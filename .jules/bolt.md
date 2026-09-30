@@ -87,3 +87,6 @@
 ## 2026-09-30 - Noema provider capacity unavailable
 **Learning:** The `noema-review` CI check failed due to an external infrastructure issue (HTTP Error 504: Gateway Timeout, outcome=provider_capacity_unavailable). This is a provider-side transient issue, not a code defect.
 **Action:** Communicate to the user that the PR is being re-submitted without code changes to allow the CI pipeline to retry, and execute the pre-commit steps before submission.
+## 2026-09-30 - OpenCode Review CHANGES_REQUESTED
+**Learning:** The PR was moved to Draft/Proposed because `opencode-agent` requested changes and there is an unresolved review thread. I need to read the specific review thread to see what changes are requested.
+**Action:** Use the provided PR comments tool to read the specific feedback from `opencode-agent` and implement the requested changes before re-submitting the PR.
