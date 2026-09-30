@@ -67,6 +67,6 @@
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
 
 ## 2026-07-11 - [Sentinel: FastAPI `hmac.compare_digest` DoS]
-**Vulnerability:** Unhandled `TypeError` in `hmac.compare_digest` when provided with strings containing non-ASCII characters, leading to Denial of Service (DoS) (CWE-400).
-**Learning:** Python's `hmac.compare_digest` does not support comparing strings that contain non-ASCII characters and will raise a `TypeError`. In a web application middleware, if an attacker provides a non-ASCII string (e.g., in an `X-API-Key` header), it can cause the request handling to crash without a graceful fallback, opening a DoS vector.
-**Prevention:** Always encode user-provided input strings (and the corresponding expected secret) to bytes (e.g., using `.encode('utf-8')`) before comparing them with `hmac.compare_digest`.
+**Vulnerability:** `hmac.compare_digest`에 비-ASCII 문자가 포함된 문자열이 제공될 때 발생하는 처리되지 않은 `TypeError`로 인한 서비스 거부(DoS) 취약점 (CWE-400).
+**Learning:** Python의 `hmac.compare_digest`는 비-ASCII 문자가 포함된 문자열을 비교하는 것을 지원하지 않으며 `TypeError`를 발생시킵니다. 웹 애플리케이션 미들웨어에서 공격자가 비-ASCII 문자열(예: `X-API-Key` 헤더)을 제공하면, 우아한 대체 처리 없이 요청 처리가 중단되어 DoS 공격 벡터가 열릴 수 있습니다.
+**Prevention:** `hmac.compare_digest`로 비교하기 전에 항상 사용자가 제공한 입력 문자열(및 해당하는 예상 비밀 값)을 바이트(예: `.encode('utf-8')` 사용)로 인코딩해야 합니다.
