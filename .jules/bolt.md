@@ -84,3 +84,6 @@
 ## 2026-09-27 - CodeQL Review asynchronous delay
 **Learning:** The CI check `CodeQL compatibility analysis` failed with `CodeQL scan dispatched. The dispatch workflow will rerun this exact failed CodeQL job after publishing its terminal verdict`. Similar to `opencode-review`, this is an expected asynchronous CI workflow mechanism, not a code defect.
 **Action:** Communicate to the user that the PR is being re-submitted without code changes to allow the CI pipeline to proceed, and execute the pre-commit steps before submission.
+## 2026-09-30 - Noema provider capacity unavailable
+**Learning:** The `noema-review` CI check failed due to an external infrastructure issue (HTTP Error 504: Gateway Timeout, outcome=provider_capacity_unavailable). This is a provider-side transient issue, not a code defect.
+**Action:** Communicate to the user that the PR is being re-submitted without code changes to allow the CI pipeline to retry, and execute the pre-commit steps before submission.
