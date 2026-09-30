@@ -1223,5 +1223,13 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+class TestApiKeyAuthEncoding(unittest.TestCase):
+    def test_unicode_in_hmac_rejected_without_exception(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = client.post("/shrink", headers={b"x-api-key": b"hacker\xe2\x98\x83"}, files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")}, data={"target_bytes": 100})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
+
 if __name__ == "__main__":
     unittest.main()
