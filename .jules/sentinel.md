@@ -69,3 +69,8 @@
 **Vulnerability:** HTTP Header를 통한 API Key 검증 로직(`require_api_key`)에서 `hmac.compare_digest()`가 Non-ASCII 문자열과 비교할 때 `TypeError`를 발생시키고 이를 처리하지 않아 서버가 다운될 수 있는 DoS 취약점.
 **Learning:** Python의 `hmac.compare_digest` 함수는 내부적으로 C 구현을 사용하며 문자열 인자가 ASCII 범위를 벗어날 경우 `TypeError`를 던진다. 따라서 외부에서 주입되는 HTTP 헤더값 등 신뢰할 수 없는 문자열과 비교 시 예외 처리가 필수적이거나 사전에 bytes로 인코딩해야 한다.
 **Prevention:** `hmac.compare_digest`를 사용하여 문자열을 비교할 때는 항상 두 인자를 `.encode("utf-8")` 등을 통해 `bytes` 타입으로 변환한 뒤에 비교해야 한다.
+
+## 2024-10-24 - Trivy Vulnerability (CVE-2026-84382, etc.) in httpx2
+**Vulnerability:** Dependency `httpx2` (version 2.5.0) in `requirements.txt` contains multiple vulnerabilities including a HIGH severity one.
+**Learning:** Legacy dependencies like `httpx2` introduced into requirements for transient testing or workaround purposes can become stale and introduce known vulnerabilities into the product's attack surface.
+**Prevention:** Regularly scan dependencies and prune unused ones. Completely remove vulnerable legacy packages from `requirements.txt` and regenerate lockfiles.
