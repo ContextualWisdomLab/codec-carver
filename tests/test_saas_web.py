@@ -88,6 +88,21 @@ class TestSaasWeb(unittest.TestCase):
             "max-age=31536000; includeSubDomains",
         )
 
+    def test_target_byte_listeners_register_after_batch_form_markup(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        batch_controls = html.index('id="batch_preset_buttons_container"')
+        batch_listener = html.index(
+            "document.getElementById('batch_preset_buttons_container').addEventListener"
+        )
+        batch_input = html.index('id="batch_target_bytes"')
+        batch_input_listener = html.index(
+            "document.getElementById('batch_target_bytes').addEventListener"
+        )
+        self.assertLess(batch_controls, batch_listener)
+        self.assertLess(batch_input, batch_input_listener)
+
     def test_request_size_limit_rejects_oversized_declared_body(self):
         response = client.post(
             "/shrink",
@@ -315,6 +330,8 @@ class TestSaasWeb(unittest.TestCase):
         html = response.text
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
+        self.assertIn("Exceeds maximum allowed size", html)
+        self.assertIn('max="5368709120"', html)
 
     def test_request_size_limit_rejects_streamed_body_over_limit(self):
         async def receive():

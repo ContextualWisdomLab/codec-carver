@@ -81,3 +81,11 @@
 ## 2024-08-04 - 숫자 입력 필드 빈 문자열 상태 초기화 처리
 **학습:** 숫자 입력 필드에서 빈 문자열('')을 입력할 때 브라우저는 이전의 유효하지 않은 상태를 암시적으로 유지하므로, 사용자 정의 검증을 명시적으로 초기화하지 않으면 네이티브 HTML5 유효성 검사가 정상 작동하지 않을 수 있음을 확인했습니다.
 **실행:** 인라인 검증 스크립트 작성 시 빈 문자열 상태를 별도로 확인하여 this.setCustomValidity('') 및 this.removeAttribute('aria-invalid')를 명시적으로 호출하는 로직을 추가해야 합니다.
+
+## 2024-08-08 - Client-side validation for maximum target size
+**Learning:** While the backend correctly rejects target sizes that exceed the maximum allowed size, users only discover this after a page reload and lose their form state. In a form dealing with large files, failing early on the client-side prevents wasted bandwidth and user frustration.
+**Action:** Always complement server-side constraints (like maximum target bytes) with inline client-side validation using `setCustomValidity` and `max` attributes on numeric inputs to provide immediate feedback before submission.
+
+## 2024-08-08 - 최대 대상 용량(target_bytes) 클라이언트 측 검증
+**학습:** 서버 측에서는 최대 허용 용량을 초과하는 `target_bytes`를 적절하게 거부하고 있지만, 사용자는 폼 제출 후 페이지가 새로고침되어야만 이를 인지하고 이전에 입력한 폼 상태를 잃게 됩니다. 대용량 파일을 다루는 폼에서 클라이언트 측 초기에 오류를 알려주면 대역폭 낭비와 사용자 불만을 방지할 수 있습니다.
+**실행:** 숫자 입력 필드에 `max` 속성을 추가하고 `setCustomValidity`를 사용하여 인라인 클라이언트 측 검증을 적용함으로써 서버 측 제약을 보완하고 제출 전 즉각적인 피드백을 제공하십시오.
