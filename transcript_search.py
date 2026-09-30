@@ -253,10 +253,7 @@ class TranscriptIndex:
         matches = []
         for position in candidates or ():
             entry = self._entries[position]
-            # [Bolt Optimization] Use list comprehension inside sum() rather than
-            # a generator expression to avoid frame suspension overhead in hot loop.
-            # Local benchmarks show ~20% faster execution for this summation.
-            score = sum([entry.counts[term] for term in unique_terms])
+            score = sum(entry.counts[term] for term in unique_terms)
             matches.append(
                 Match(
                     recording_id=entry.recording_id,
