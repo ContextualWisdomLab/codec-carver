@@ -1,17 +1,23 @@
 """FastAPI upload UI for shrinking one media file through Codec Carver."""
 
 import json
-import hmac
 import logging
 import os
 import shutil
 import tempfile
 import uuid
 import zipfile
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from credential_registry import (
+    MAX_KEY_BYTES,
+    CredentialRegistry,
+    bootstrap_registry_from_mapping,
+)
 from job_store import JobStore
 import media_shrinker
 
@@ -83,42 +89,132 @@ async def limit_request_size(request: Request, call_next):
     except RequestTooLarge:
         return JSONResponse(status_code=413, content={"error": "Payload Too Large"})
 
-def get_configured_api_keys():
-    """Return the API keys configured via the CODEC_CARVER_API_KEYS env var.
+_credential_registry: CredentialRegistry | None = None
 
-    The variable holds a comma-separated list of keys. Whitespace around each
-    key is stripped and empty entries are ignored. Keys are read from the
-    environment at request time (not import time) so tests can patch the
-    environment easily and key rotation needs no server restart. Returns an
-    empty list when the variable is unset or contains no usable keys, which
-    leaves the service open (today's default behaviour).
+
+def configure_credential_registry(registry: CredentialRegistry | None) -> None:
+    """Install or clear the process-wide request-time credential registry.
+
+    Args:
+        registry: Store used by :func:`require_api_key`, or ``None`` to
+            restore the unconfigured fail-open default.
     """
 
+    global _credential_registry
+    _credential_registry = registry
+
+
+def get_credential_registry() -> CredentialRegistry | None:
+    """Return the registry installed for this process, if any.
+
+    Returns:
+        The configured :class:`CredentialRegistry`, or ``None``.
+    """
+
+    return _credential_registry
+
+
+def bootstrap_web_credentials(
+    transport: Mapping[str, str],
+    *,
+    now: datetime,
+    db_path: str,
+) -> CredentialRegistry:
+    """Named startup hook: copy transport keys into the registry once.
+
+    Args:
+        transport: Bootstrap mapping (pass ``os.environ`` only from this
+            hook). Request handlers must not read it.
+        now: Bootstrap timestamp.
+        db_path: SQLite file for ``api_credentials``.
+
+    Returns:
+        The installed registry.
+    """
+
+    registry = bootstrap_registry_from_mapping(transport, now=now, db_path=db_path)
+    configure_credential_registry(registry)
+    return registry
+
+
+def get_configured_api_keys() -> list[str]:
+    """Return public key labels from the registry, never plaintext secrets.
+
+    An empty list means authentication is fail-open. Labels are the first
+    eight hex characters of each stored digest so operators can count keys
+    without recovering them.
+    """
+
+    registry = get_credential_registry()
+    if registry is None:
+        return []
+    return [
+        str(row["key_label"])
+        for row in registry.list_public_records()
+        if row["lifecycle_state"] in {"active", "rotated"}
+    ]
+
+
+def bootstrap_credentials_from_environ() -> None:
+    """Load ``CODEC_CARVER_API_KEYS`` into the registry at process start.
+
+    This is the only approved environment read for API keys. Tests that
+    already called :func:`configure_credential_registry` are left unchanged.
+    """
+
+    if get_credential_registry() is not None:
+        return
     raw = os.environ.get("CODEC_CARVER_API_KEYS", "")
-    return [key.strip() for key in raw.split(",") if key.strip()]
+    if not raw.strip():
+        return
+    db_path = os.environ.get(
+        "CODEC_CARVER_CREDENTIAL_DB",
+        str(Path(tempfile.gettempdir()) / "codec-carver-api-credentials.db"),
+    )
+    bootstrap_web_credentials(
+        os.environ,
+        now=datetime.now(timezone.utc),
+        db_path=db_path,
+    )
+
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Copy bootstrap transport into the registry once per process."""
+
+    bootstrap_credentials_from_environ()
+    yield
+
+
+app.router.lifespan_context = _app_lifespan
 
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    """Enforce opt-in API-key authentication on all endpoints except GET /.
+    """Enforce registry authentication on all endpoints except GET /.
 
-    When one or more keys are configured via CODEC_CARVER_API_KEYS, every
+    When the process registry has at least one usable credential, every
     request other than GET / (the upload UI page) must carry an X-API-Key
-    header matching a configured key; comparison uses hmac.compare_digest to
-    stay constant-time. Requests failing the check receive a 401 JSON error
-    without echoing any key material. When no keys are configured, all
-    requests pass through unchanged.
+    header that verifies against stored digests. Failures return 401 JSON
+    without echoing key material. An unconfigured or empty registry leaves
+    the service open so local CLI-adjacent use still works.
     """
 
-    configured_keys = get_configured_api_keys()
-    if configured_keys and not (request.method == "GET" and request.url.path == "/"):
+    registry = get_credential_registry()
+    now = datetime.now(timezone.utc)
+    if (
+        registry is not None
+        and registry.has_active_credentials(now=now)
+        and not (request.method == "GET" and request.url.path == "/")
+    ):
         provided_key = request.headers.get("x-api-key", "")
-        if not any(
-            hmac.compare_digest(provided_key, key) for key in configured_keys
-        ):
+        if len(provided_key.encode("utf-8")) > MAX_KEY_BYTES or registry.verify_api_key(
+            provided_key, now=now
+        ) is None:
             return JSONResponse(
                 status_code=401,
                 content={"error": "Invalid or missing API key"},
+                headers={"Cache-Control": "no-store"},
             )
     return await call_next(request)
 

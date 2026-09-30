@@ -78,6 +78,7 @@ codec-carver-library = "audio_library:main"
 py-modules = [
     "chapters",
     "config_file",
+    "credential_registry",
     "diarize",
     "job_store",
     "mcp_driver",
