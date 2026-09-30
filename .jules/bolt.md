@@ -67,3 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+## 2025-02-13 - [Transcript 검색 집합 교집합 최적화]
+**Learning:** 파이썬에서 집합 교집합 연산자(`&`)를 루프 내에서 사용하면 매번 새로운 집합 객체를 할당하여 메모리 및 시간 오버헤드가 발생합니다. 제자리에서 집합을 수정하는 `.intersection_update()`를 사용하면 객체 할당 오버헤드 없이 훨씬 효율적으로 교집합을 갱신할 수 있습니다.
+**Action:** 다수의 집합 교집합을 반복적으로 계산할 때는 객체 재할당을 피하기 위해 항상 `.intersection_update()`를 우선적으로 고려하고 사용합니다.
