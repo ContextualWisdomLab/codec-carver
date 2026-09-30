@@ -67,3 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2024-05-31 - [Optimize set intersection in TranscriptSearch]
+**Learning:** Using the `&` operator for set intersection (e.g. `candidates & postings`) creates a new set object on every iteration, causing measurable memory and CPU overhead in tight hot loops.
+**Action:** Use `candidates.intersection_update(postings)` to modify the set in-place and avoid intermediate memory allocations during hot-path set intersections.
