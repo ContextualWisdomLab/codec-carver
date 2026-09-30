@@ -1223,5 +1223,21 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+
+class TestHMACDoS(unittest.TestCase):
+    @patch("saas_web.get_configured_api_keys")
+    def test_hmac_dos_non_ascii_header(self, mock_get_keys):
+        mock_get_keys.return_value = ["secret-key"]
+        from fastapi.testclient import TestClient
+        from saas_web import app
+
+        test_client = TestClient(app)
+        response = test_client.get(
+            "/jobs/fake",
+            headers={b"X-API-Key": "non-ascii-🦄".encode("utf-8")},
+        )
+        self.assertEqual(response.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
