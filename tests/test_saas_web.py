@@ -779,6 +779,13 @@ class TestApiKeyAuth(unittest.TestCase):
             response.json(),
             {"error": "Invalid target_bytes value. Must be greater than 0."},
         )
+    def test_non_ascii_header_does_not_crash(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            # Starlette requires raw bytes for non-ASCII header values.
+            response = self._post_shrink(headers={b"X-API-Key": "bad😊key".encode("utf-8")})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
 
     def test_get_configured_api_keys_parsing(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " a ,, b ,"}):
