@@ -671,6 +671,22 @@ class TestShrinkBatch(unittest.TestCase):
         self.assertIn('id="batch_files_preview"', html)
         self.assertIn("function updateBatchFilePreview(input)", html)
 
+    def test_get_ui_defers_batch_preset_listener_until_dom_ready(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        dom_ready_listener = "document.addEventListener('DOMContentLoaded', () => {"
+        batch_preset_listener = (
+            "document.getElementById('batch_preset_buttons_container')"
+            ".addEventListener"
+        )
+        self.assertIn(dom_ready_listener, html)
+        self.assertLess(
+            html.index(dom_ready_listener),
+            html.index(batch_preset_listener),
+        )
+        self.assertIn("e.dataTransfer.dropEffect = 'copy';", html)
+
 
 @unittest.skipUnless(
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
