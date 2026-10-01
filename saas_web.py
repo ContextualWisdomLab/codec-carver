@@ -372,12 +372,7 @@ HTML_TEMPLATE = """
                 zone.addEventListener(eventName, preventDefaults, false);
             });
             ['dragenter', 'dragover'].forEach(eventName => {
-                zone.addEventListener(eventName, (e) => {
-                    zone.classList.add('dragover');
-                    if (e.dataTransfer) {
-                        e.dataTransfer.dropEffect = 'copy';
-                    }
-                }, false);
+                zone.addEventListener(eventName, () => zone.classList.add('dragover'), false);
             });
             ['dragleave', 'drop'].forEach(eventName => {
                 zone.addEventListener(eventName, () => zone.classList.remove('dragover'), false);
