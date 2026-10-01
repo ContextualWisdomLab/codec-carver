@@ -1223,5 +1223,15 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+class TargetBytesClientValidationTests(unittest.TestCase):
+    def test_get_ui_includes_target_bytes_max_validation(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn('max="5368709120"', html)
+        self.assertIn("} else if (val > MAX_UPLOAD_BYTES) {", html)
+        self.assertIn("this.setCustomValidity('Must not exceed ' + limitText + '.');", html)
+
+
 if __name__ == "__main__":
     unittest.main()
