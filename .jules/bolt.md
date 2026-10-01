@@ -67,6 +67,6 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
-## 2024-06-25 - [Optimize Python Set Intersections and sum() Comprehensions]
-**Learning:** Using the `&` operator for set intersections creates a new set object in memory for each operation, which becomes a bottleneck in hot loops. Using `.intersection_update()` mutates the set in-place, eliminating these allocations. Additionally, using a generator expression inside `sum()` in CPython carries a small overhead due to generator frame suspension. For small iterables, constructing a list first via comprehension `sum([x for x in ...])` is measurably faster.
-**Action:** When calculating intersections iteratively in performance-critical code paths, initialize an initial set and use `.intersection_update()` for subsequent items. Replace generator expressions in `sum()` with list comprehensions when the number of elements is relatively small and iteration speed is prioritized over memory lazyness.
+## 2024-06-25 - [Optimize Python Set Intersections]
+**Learning:** Using the `&` operator for set intersections creates a new set object in memory for each operation. Using `.intersection_update()` mutates the set in-place, eliminating these allocations.
+**Action:** Use `.intersection_update()` iteratively.
