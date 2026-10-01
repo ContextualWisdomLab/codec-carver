@@ -241,16 +241,21 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            candidates = (
-                set(postings) if candidates is None else candidates & postings
-            )
+            if candidates is None:
+                candidates = set(postings)
+            else:
+                # Performance optimization: Use intersection_update for in-place
+                # set mutation to avoid repeated memory allocations in the hot loop.
+                candidates.intersection_update(postings)
             if not candidates:
                 return []
 
         matches = []
         for position in candidates or ():
             entry = self._entries[position]
-            score = sum(entry.counts[term] for term in unique_terms)
+            # Performance optimization: Use list comprehension inside sum()
+            # to reduce generator frame suspension overhead in CPython.
+            score = sum([entry.counts[term] for term in unique_terms])
             matches.append(
                 Match(
                     recording_id=entry.recording_id,
