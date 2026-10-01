@@ -210,12 +210,14 @@ HTML_TEMPLATE = """
                 }
             });
 
-            document.getElementById('batch_preset_buttons_container').addEventListener('click', function(e) {
-                if (e.target.classList.contains('preset-btn')) {
-                    const input = document.getElementById('batch_target_bytes');
-                    input.value = e.target.dataset.bytes;
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                }
+            document.addEventListener('DOMContentLoaded', () => {
+                document.getElementById('batch_preset_buttons_container').addEventListener('click', function(e) {
+                    if (e.target.classList.contains('preset-btn')) {
+                        const input = document.getElementById('batch_target_bytes');
+                        input.value = e.target.dataset.bytes;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                });
             });
 
             function updateFileSizePreview(input) {
