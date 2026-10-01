@@ -65,6 +65,3 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
-## 2026-10-01 - Sentinel Fix for `httpx2` vulnerability
-**Learning:** `httpx2` versions prior to 2.13.1 have vulnerabilities (e.g. CVE-2026-84380).
-**Action:** When asked to fix `httpx2` vulnerabilities, use version 2.13.1 and regenerate the lock files, ensuring all python version-specific locks are handled carefully if required.
