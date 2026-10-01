@@ -7,8 +7,16 @@
 - 클라이언트 측 폼 검증 시 하드코딩된 '5 GiB' 텍스트를 동적으로 변환되도록 수정하고 일괄 업로드 폼에 최대 크기(MAX_UPLOAD_BYTES) 검증 피드백을 추가했습니다.
 
 ### Changed
+- Preserved the #651 transcript-search optimization while ordinary-merging
+  canonical dependency owner #668, including its additional score-loop
+  optimization and security evidence.
+- `transcript_search.py`의 `search` 메서드에서 교집합 연산 시 `intersection_update`를 사용하고 점수 계산 시 `sum` 제너레이터를 인라인 루프로 풀어(unrolling) 검색 성능을 개선했습니다.
 - 순수 영숫자 토큰은 정규식 호출을 건너뛰되 다국어·문장부호 토큰화 결과는 기존 의미와 동일하게 유지합니다. 근거, 한계, APA 7 참고문헌은 [`docs/doctoring/token-fast-path-equivalence.md`](docs/doctoring/token-fast-path-equivalence.md)에 기록했습니다.
 
 ### Fixed
+- Removed the unused `httpx2` compatibility fork and its transitive lock entries
+  after exact-head Trivy reported CVE-2026-84382, CVE-2026-84378,
+  CVE-2026-84379, and CVE-2026-84380. A manifest contract prevents the
+  vulnerable dependency family from returning.
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
 - 업로드 파일명의 경로 구분자를 정규화하여 POSIX에서도 Windows 형식의 클라이언트 경로가 일관된 basename으로 기록되도록 수정했습니다.

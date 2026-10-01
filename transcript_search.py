@@ -252,7 +252,9 @@ class TranscriptIndex:
         matches = []
         for position in candidates or ():
             entry = self._entries[position]
-            score = sum(entry.counts[term] for term in unique_terms)
+            score = 0
+            for term in unique_terms:
+                score += entry.counts[term]
             matches.append(
                 Match(
                     recording_id=entry.recording_id,
