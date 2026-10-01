@@ -241,9 +241,12 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            candidates = (
-                set(postings) if candidates is None else candidates & postings
-            )
+            if candidates is None:
+                candidates = set(postings)
+            else:
+                # Performance optimization: Use intersection_update for in-place
+                # set mutation to avoid repeated memory allocations in the hot loop.
+                candidates.intersection_update(postings)
             if not candidates:
                 return []
 
