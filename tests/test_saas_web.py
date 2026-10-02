@@ -1222,6 +1222,21 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
+class TestSaaSWebApiKeyDoS(unittest.TestCase):
+    def test_non_ascii_api_key_dos(self):
+        import os
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        client = TestClient(saas_web.app)
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "valid_key"}):
+            response = client.post(
+                "/shrink",
+                headers=[(b"x-api-key", "한글키".encode("utf-8"))],
+                files={"file": ("test.mp4", io.BytesIO(b"data"), "video/mp4")},
+                data={"target_bytes": 10000},
+            )
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
 
 if __name__ == "__main__":
     unittest.main()
