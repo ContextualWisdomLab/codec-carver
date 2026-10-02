@@ -65,3 +65,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2026-10-03 - [Sentinel: FastAPI x-api-key DoS Vulnerability Fix]
+**Vulnerability:** Unhandled TypeError in hmac.compare_digest via non-ASCII characters in X-API-Key header (CWE-400 Denial of Service).
+**Learning:** Python의 `hmac.compare_digest` 함수에 non-ASCII 문자열을 직접 전달할 경우 TypeError가 발생합니다. X-API-Key 헤더에 악의적으로 non-ASCII 문자를 포함시켜 보내면 FastAPI 애플리케이션이 크래시되어 Denial of Service (DoS) 공격을 유발할 수 있습니다.
+**Prevention:** `hmac.compare_digest`에 사용자 입력을 전달하기 전에 항상 양쪽 문자열을 bytes로 인코딩(`.encode('utf-8')`)하여 비교해야 합니다.
