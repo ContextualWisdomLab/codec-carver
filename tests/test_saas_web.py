@@ -741,6 +741,14 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertEqual(allowed.status_code, 404)
 
+    def test_job_api_non_ascii_header_does_not_crash(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            # Pass header as raw bytes to bypass string encoding validation in test client
+            response = client.get("/jobs/missing", headers={b"X-API-Key": b"secret\xe9"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
     def test_multiple_comma_separated_keys_all_valid(self):
         with patch.dict(
             os.environ, {"CODEC_CARVER_API_KEYS": "key-one,key-two,key-three"}
