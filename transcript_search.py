@@ -241,9 +241,13 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            candidates = (
-                set(postings) if candidates is None else candidates & postings
-            )
+            if candidates is None:
+                candidates = set(postings)
+            else:
+                # ⚡ Bolt Optimization: Use in-place intersection_update instead of the & operator
+                # This avoids allocating a new set object on every loop iteration, significantly
+                # improving memory efficiency and speed during multi-word query evaluation.
+                candidates.intersection_update(postings)
             if not candidates:
                 return []
 
