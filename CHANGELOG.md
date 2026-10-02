@@ -7,6 +7,7 @@
 - 클라이언트 측 폼 검증 시 하드코딩된 '5 GiB' 텍스트를 동적으로 변환되도록 수정하고 일괄 업로드 폼에 최대 크기(MAX_UPLOAD_BYTES) 검증 피드백을 추가했습니다.
 
 ### Changed
+- `transcript_search.py`의 검색 속도 향상을 위해 집합 교집합 연산에 `intersection_update`를 적용하고 `sum()` 내부의 제너레이터를 일반 루프로 전개(unroll)했습니다.
 - 순수 영숫자 토큰은 정규식 호출을 건너뛰되 다국어·문장부호 토큰화 결과는 기존 의미와 동일하게 유지합니다. 근거, 한계, APA 7 참고문헌은 [`docs/doctoring/token-fast-path-equivalence.md`](docs/doctoring/token-fast-path-equivalence.md)에 기록했습니다.
 
 ### Fixed
