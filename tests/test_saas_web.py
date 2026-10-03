@@ -688,6 +688,16 @@ class TestApiKeyAuth(unittest.TestCase):
             headers=headers or {},
         )
 
+    def test_non_ascii_api_key_does_not_crash(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret"}):
+            response = client.post(
+                "/shrink",
+                files={"file": ("input.wav", io.BytesIO(b"dummy wav data"), "audio/wav")},
+                data={"target_bytes": 0},
+                headers={b"x-api-key": b"secret\xe9"}
+            )
+        self.assertEqual(response.status_code, 401)
+
     def test_no_env_var_leaves_endpoints_open(self):
         with patch.dict(os.environ):
             os.environ.pop("CODEC_CARVER_API_KEYS", None)
