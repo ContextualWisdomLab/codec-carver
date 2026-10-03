@@ -1223,5 +1223,19 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+class TestSaasWebAPIKeyDos(unittest.TestCase):
+    @patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "test_key"}, clear=True)
+    def test_api_key_with_non_ascii_chars_returns_401(self):
+        # We must pass the raw bytes for headers if they contain non-ASCII
+        # to simulate how Starlette parses headers and to reach the API key check logic
+        response = client.post(
+            "/jobs",
+            headers=[(b"x-api-key", "한글키".encode("utf-8"))],
+            files={"file": ("test.wav", io.BytesIO(b"data"), "audio/wav")},
+            data={"target_bytes": 1000},
+        )
+        self.assertEqual(response.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
