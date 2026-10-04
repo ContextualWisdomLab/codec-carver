@@ -715,6 +715,17 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
         self.assertNotIn("secret-key", response.text)
 
+    def test_non_ascii_key_does_not_crash(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = client.post(
+                "/shrink",
+                files={"file": ("input.wav", io.BytesIO(b"dummy wav data"), "audio/wav")},
+                data={"target_bytes": 0},
+                headers=[(b"x-api-key", "한글키".encode("utf-8"))],
+            )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
     def test_correct_key_reaches_handler(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
             response = self._post_shrink(headers={"X-API-Key": "secret-key"})
