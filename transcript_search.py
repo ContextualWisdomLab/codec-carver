@@ -241,9 +241,11 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            candidates = (
-                set(postings) if candidates is None else candidates & postings
-            )
+            if candidates is None:
+                candidates = set(postings)
+            else:
+                # ⚡ 성능 최적화: 루프 내에서 세트 교집합을 구할 때 중간 메모리 할당을 방지하고 실행 속도를 높이기 위해 '&' 연산자 대신 제자리(in-place) 수정 메서드인 '.intersection_update()'를 사용합니다.
+                candidates.intersection_update(postings)
             if not candidates:
                 return []
 
