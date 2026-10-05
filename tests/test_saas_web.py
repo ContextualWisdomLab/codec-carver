@@ -1223,5 +1223,18 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+    @patch("saas_web.get_configured_api_keys", return_value=["secret-key"])
+    def test_hmac_compare_digest_handles_non_ascii_keys_safely(self, _mock_keys):
+        """Test that non-ASCII characters in API key headers don't cause unhandled TypeError."""
+        response = client.post(
+            "/shrink",
+            headers=[(b"x-api-key", "한글키".encode("utf-8"))],
+            files={"file": ("in.wav", io.BytesIO(b"wav data"), "audio/wav")},
+            data={"target_bytes": 10000},
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
+
 if __name__ == "__main__":
     unittest.main()
