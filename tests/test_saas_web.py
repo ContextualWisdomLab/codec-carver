@@ -32,6 +32,14 @@ if _HAS_FASTAPI:
     _HAS_FASTAPI, "fastapi not installed (optional integration dependency)"
 )
 class TestSaasWeb(unittest.TestCase):
+    @patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"})
+    def test_require_api_key_handles_non_ascii_gracefully(self):
+        # A non-ASCII payload like \xe9 would raise a TypeError in hmac.compare_digest
+        # if not explicitly encoded as utf-8 bytes before comparison.
+        response = client.post("/jobs", headers={b"X-API-Key": b"secret\xe9"})
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Invalid or missing API key", response.json()["error"])
+
     def test_get_ui(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
