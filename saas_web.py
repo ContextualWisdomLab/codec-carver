@@ -372,7 +372,12 @@ HTML_TEMPLATE = """
                 zone.addEventListener(eventName, preventDefaults, false);
             });
             ['dragenter', 'dragover'].forEach(eventName => {
-                zone.addEventListener(eventName, () => zone.classList.add('dragover'), false);
+                zone.addEventListener(eventName, (e) => {
+                    zone.classList.add('dragover');
+                    if (e.type === 'dragover' && e.dataTransfer) {
+                        e.dataTransfer.dropEffect = 'copy';
+                    }
+                }, false);
             });
             ['dragleave', 'drop'].forEach(eventName => {
                 zone.addEventListener(eventName, () => zone.classList.remove('dragover'), false);
