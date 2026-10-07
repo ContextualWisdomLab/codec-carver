@@ -1223,5 +1223,19 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+class SecurityHmacDosTest(unittest.TestCase):
+    def test_hmac_dos_with_non_ascii_header(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            with TestClient(app) as local_client:
+                headers = [(b"x-api-key", "한글키".encode("utf-8"))]
+                response = local_client.post(
+                    "/jobs",
+                    data={"target_bytes": 1000},
+                    files={"file": ("test.wav", io.BytesIO(b"data"), "audio/wav")},
+                    headers=headers
+                )
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
 if __name__ == "__main__":
     unittest.main()
