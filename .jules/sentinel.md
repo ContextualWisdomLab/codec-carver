@@ -65,3 +65,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2024-10-07 - Subprocess Protocol Allowlist
+**Vulnerability:** Subprocesses that execute external tools on untrusted inputs (e.g. ffmpeg/ffprobe) without protocol restrictions can be exploited via Server-Side Request Forgery (SSRF) and Local File Inclusion (LFI).
+**Learning:** External media processing tools (like FFmpeg) have built-in support for various network protocols (e.g., http, ftp, tcp, rtp) which attackers can leverage to leak local files or access internal network resources if the input is malicious.
+**Prevention:** Always enforce protocol restrictions by explicitly including `"-protocol_whitelist", "file,crypto,data,fd,pipe"` (or similar appropriate restrictions) before the input flag in the subprocess command list when calling such tools.
