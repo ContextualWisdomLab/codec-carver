@@ -1225,3 +1225,11 @@ class UploadValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_get_ui_includes_max_validation(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+
+        self.assertIn('max="5368709120"', html)
+        self.assertIn("Exceeds the maximum allowed size.", html)
