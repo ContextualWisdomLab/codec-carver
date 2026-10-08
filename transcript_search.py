@@ -241,9 +241,11 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            candidates = (
-                set(postings) if candidates is None else candidates & postings
-            )
+            if candidates is None:
+                candidates = set(postings)
+            else:
+                # 성능 최적화: & 연산자 대신 in-place 업데이트를 사용하여 메모리 할당을 줄임
+                candidates.intersection_update(postings)
             if not candidates:
                 return []
 
