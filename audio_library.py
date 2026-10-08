@@ -2072,6 +2072,8 @@ def audio_duration_seconds(
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
+            "-protocol_whitelist",
+            "file,crypto,data",
             media_input,
         ]
         completed = subprocess.run(
@@ -2856,7 +2858,7 @@ def decode_audio_for_mlx(
             descriptor = artifact.rewind().fileno()
             media_input = f"/dev/fd/{descriptor}"
             inherited_fds = (descriptor,)
-        command = [str(ffmpeg), "-nostdin"]
+        command = [str(ffmpeg), "-nostdin", "-protocol_whitelist", "file,crypto,data"]
         if start_seconds is not None:
             # Input-side seeking avoids decoding every earlier chunk; ffmpeg's
             # default accurate_seek still discards samples before this boundary.
@@ -2941,6 +2943,8 @@ def detect_silence_intervals(
     command = [
         str(ffmpeg),
         "-nostdin",
+        "-protocol_whitelist",
+        "file,crypto,data",
         "-i",
         media_input,
         "-af",
