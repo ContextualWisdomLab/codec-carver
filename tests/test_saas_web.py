@@ -1222,6 +1222,22 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
+class TestUnicodeAPIKeys(unittest.TestCase):
+    @patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "한글키"})
+    def test_unicode_api_key_handles_safely(self):
+        from fastapi.testclient import TestClient
+        import saas_web
+        client = TestClient(saas_web.app)
+
+        # Test valid unicode key
+        response = client.get("/jobs/missing", headers=[(b"X-API-Key", "한글키".encode("utf-8"))])
+        self.assertNotEqual(response.status_code, 500)
+        self.assertNotEqual(response.status_code, 401)
+
+        # Test invalid unicode key
+        response = client.get("/jobs/missing", headers=[(b"X-API-Key", "틀린키".encode("utf-8"))])
+        self.assertEqual(response.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()
