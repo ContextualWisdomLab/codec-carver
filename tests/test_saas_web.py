@@ -770,6 +770,12 @@ class TestApiKeyAuth(unittest.TestCase):
 
         self.assertEqual(rejected.status_code, 401)
 
+    def test_dos_with_non_ascii_headers(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret"}):
+            response = self._post_shrink(headers={b"X-API-Key": b"secret\xe9"})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
     def test_only_empty_entries_leave_endpoints_open(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": " , ,"}):
             response = self._post_shrink()
