@@ -65,3 +65,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2026-07-15 - [Sentinel: FastAPI HMAC 비 ASCII 문자 예외 처리 취약점]
+**Vulnerability:** HMAC 비교 함수(hmac.compare_digest)에 비 ASCII 문자열 전달 시 발생하는 TypeError로 인한 서비스 거부(DoS) 취약점.
+**Learning:** `hmac.compare_digest`는 비 ASCII 문자가 포함된 문자열을 비교할 때 `TypeError`를 발생시킵니다. 사용자가 제공하는 헤더 값(`x-api-key` 등)에 비 ASCII 문자가 포함될 수 있으며, 이를 처리하지 않고 직접 비교할 경우 처리되지 않은 예외가 발생하여 서버 프로세스가 종료되거나 서비스 거부 상태에 빠질 수 있습니다.
+**Prevention:** 사용자 제공 문자열과 비교 대상 문자열을 `hmac.compare_digest`에 전달하기 전에 항상 바이트(bytes)로 명시적으로 인코딩해야 합니다. 특히 FastAPI/Starlette는 헤더를 `latin1`으로 디코딩하므로, 제공된 키는 `.encode('latin1', errors='replace')`를 통해 다시 인코딩하여 비교하는 것이 안전합니다.
