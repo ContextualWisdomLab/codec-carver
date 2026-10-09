@@ -241,9 +241,11 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
-            candidates = (
-                set(postings) if candidates is None else candidates & postings
-            )
+            if candidates is None:
+                candidates = set(postings)
+            else:
+                # 불필요한 중간 집합(set) 생성을 방지하기 위해 in-place 교집합 업데이트 사용
+                candidates.intersection_update(postings)
             if not candidates:
                 return []
 
