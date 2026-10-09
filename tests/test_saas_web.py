@@ -1223,5 +1223,16 @@ class UploadValidationTests(unittest.TestCase):
         )
 
 
+class TestHMACUnicodeDoS(unittest.TestCase):
+    def test_unicode_hmac_dos(self):
+        from unittest import mock
+        with mock.patch.dict("os.environ", {"CODEC_CARVER_API_KEYS": "my-secret-key"}):
+            from saas_web import app
+            from fastapi.testclient import TestClient
+            c = TestClient(app)
+            response = c.post("/jobs", headers=[(b"x-api-key", "한글키".encode("utf-8"))])
+            self.assertEqual(response.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
