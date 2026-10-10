@@ -186,6 +186,17 @@ class TestSaasWeb(unittest.TestCase):
             {"error": "Invalid target_bytes value. Must be greater than 0."},
         )
 
+    def test_non_ascii_api_key_does_not_crash(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = client.post(
+                "/shrink",
+                files={"file": ("input.wav", io.BytesIO(b"dummy wav data"), "audio/wav")},
+                data={"target_bytes": 0},
+                headers=[(b"x-api-key", "한글".encode("utf-8"))],
+            )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
+
     def test_shrink_media_rejects_missing_filename(self):
         response = saas_web.shrink_media(
             BackgroundTasks(),
@@ -698,6 +709,17 @@ class TestApiKeyAuth(unittest.TestCase):
             response.json(),
             {"error": "Invalid target_bytes value. Must be greater than 0."},
         )
+
+    def test_non_ascii_api_key_does_not_crash(self):
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
+            response = client.post(
+                "/shrink",
+                files={"file": ("input.wav", io.BytesIO(b"dummy wav data"), "audio/wav")},
+                data={"target_bytes": 0},
+                headers=[(b"x-api-key", "한글".encode("utf-8"))],
+            )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
 
     def test_missing_header_rejected_when_keys_configured(self):
         with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret-key"}):
