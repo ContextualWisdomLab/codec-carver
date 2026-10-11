@@ -1222,6 +1222,25 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
+class TestSaaSHmacSecurity(unittest.TestCase):
+    def test_hmac_compare_digest_non_ascii(self):
+        from unittest import mock
+        from fastapi.testclient import TestClient
+        import saas_web
+
+        with mock.patch.dict("os.environ", {"CODEC_CARVER_API_KEYS": "test-key-1, test-key-2"}):
+            client = TestClient(saas_web.app)
+
+            # Test valid request (to ensure endpoint logic doesn't block it initially)
+            response = client.get("/jobs/123", headers={"X-API-Key": "test-key-1"})
+            self.assertNotEqual(response.status_code, 401)
+
+            # Test request with non-ASCII header
+            # Using raw bytes tuples to prevent client string decoding errors
+            headers = [(b"x-api-key", "한글키".encode("utf-8"))]
+            response = client.get("/jobs/123", headers=headers)
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.json(), {"error": "Invalid or missing API key"})
 
 if __name__ == "__main__":
     unittest.main()
