@@ -372,14 +372,26 @@ HTML_TEMPLATE = """
                 zone.addEventListener(eventName, preventDefaults, false);
             });
             ['dragenter', 'dragover'].forEach(eventName => {
-                zone.addEventListener(eventName, () => zone.classList.add('dragover'), false);
+                zone.addEventListener(eventName, (e) => {
+                    zone.classList.add('dragover');
+                    if (e.dataTransfer) {
+                        e.dataTransfer.dropEffect = 'copy';
+                    }
+                }, false);
             });
             ['dragleave', 'drop'].forEach(eventName => {
                 zone.addEventListener(eventName, () => zone.classList.remove('dragover'), false);
             });
         });
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            document.body.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, (e) => {
+                preventDefaults(e);
+                if (eventName === 'dragenter' || eventName === 'dragover') {
+                    if (e.dataTransfer) {
+                        e.dataTransfer.dropEffect = 'none';
+                    }
+                }
+            }, false);
         });
         function preventDefaults (e) {
             e.preventDefault();
