@@ -1222,6 +1222,19 @@ class UploadValidationTests(unittest.TestCase):
             )
         )
 
+class HMACTest(unittest.TestCase):
+    def test_non_ascii_header_does_not_crash(self):
+        import os
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        import saas_web
+
+        client = TestClient(saas_web.app)
+        with patch.dict(os.environ, {"CODEC_CARVER_API_KEYS": "secret"}):
+            # Pass header as raw bytes to prevent test client decoding errors
+            response = client.get("/jobs/missing", headers=[(b'x-api-key', '한글키'.encode('utf-8'))])
+            self.assertEqual(response.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()

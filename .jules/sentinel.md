@@ -65,3 +65,8 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+
+## 2024-10-13 - [DoS Risk via hmac.compare_digest with Non-ASCII Strings]
+**Vulnerability:** Sending non-ASCII characters in an HTTP header compared via `hmac.compare_digest` raises an unhandled `TypeError` ("comparing strings with non-ASCII characters is not supported"). This allows a malicious user to crash the worker process or trigger 500 errors by repeatedly sending payloads with non-ASCII characters, resulting in a Denial of Service (DoS).
+**Learning:** `hmac.compare_digest` safely compares standard ASCII strings, but strictly rejects Python strings containing non-ASCII characters.
+**Prevention:** Always encode user-provided strings (e.g., `.encode('utf-8')`) before comparing them using `hmac.compare_digest` to ensure safe byte-level comparison and prevent exception-based DoS.
