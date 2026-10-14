@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -167,7 +167,7 @@ class TranscriptIndex:
     def __init__(self) -> None:
         """Create an empty index."""
         # token -> set of entry positions in self._entries
-        self._postings: dict[str, set[int]] = {}
+        self._postings: dict[str, set[int]] = defaultdict(set)
         self._entries: list[_Entry] = []
 
     def __len__(self) -> int:
@@ -203,7 +203,8 @@ class TranscriptIndex:
             position = len(self._entries)
             self._entries.append(entry)
             for token in entry.counts:
-                self._postings.setdefault(token, set()).add(position)
+                # 성능 최적화: dict.setdefault 대신 defaultdict를 사용하여 불필요한 set() 객체 생성을 방지합니다.
+                self._postings[token].add(position)
             added += 1
         return added
 
