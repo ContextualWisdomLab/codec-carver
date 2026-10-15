@@ -241,8 +241,13 @@ class TranscriptIndex:
             postings = self._postings.get(term)
             if not postings:
                 return []
+            # Performance optimization:
+            # We avoid creating a shallow copy via set(postings) for the first term.
+            # This is safe because python's `&` operator returns a new set on subsequent
+            # iterations, and the returned `candidates` reference is only used locally
+            # to generate Match objects, never mutated or exposed to the caller.
             candidates = (
-                set(postings) if candidates is None else candidates & postings
+                postings if candidates is None else candidates & postings
             )
             if not candidates:
                 return []

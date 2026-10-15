@@ -233,3 +233,13 @@ class LoadTranscriptJsonTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_search_performance_no_mutation():
+    """Verify that search does not mutate the internal index when skipping set copies."""
+    from transcript_search import TranscriptIndex, Segment
+    idx = TranscriptIndex()
+    idx.add("rec", [Segment(0, 1, "hello world")])
+    postings_before = len(idx._postings["hello"])
+    matches = idx.search("hello")
+    assert len(matches) == 1
+    assert len(idx._postings["hello"]) == postings_before
