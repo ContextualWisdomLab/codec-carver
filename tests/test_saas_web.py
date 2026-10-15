@@ -316,6 +316,13 @@ class TestSaasWeb(unittest.TestCase):
         self.assertIn("preview.innerText = 'Must be greater than 0.';", html)
         self.assertIn("preview.style.color = '#dc3545';", html)
 
+    def test_get_ui_includes_target_bytes_max_validation(self):
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn('max="5368709120"', html)
+        self.assertIn("preview.innerText = 'Exceeds the maximum allowed size.';", html)
+
     def test_request_size_limit_rejects_streamed_body_over_limit(self):
         async def receive():
             return {"type": "http.request", "body": b"1234"}
