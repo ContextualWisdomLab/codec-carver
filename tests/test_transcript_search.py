@@ -161,6 +161,15 @@ class SearchTest(unittest.TestCase):
             idx.add("bad", [MissingText()])
         self.assertIn("attribute", str(ctx.exception))
 
+    def test_search_performance_no_mutation(self):
+        """Verify that search does not mutate the internal index when skipping set copies."""
+        idx = TranscriptIndex()
+        idx.add("rec", [Segment(0, 1, "hello world")])
+        postings_before = len(idx._postings["hello"])
+        matches = idx.search("hello")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(len(idx._postings["hello"]), postings_before)
+
     def test_search_returns_empty_when_postings_intersection_is_empty(self):
         """Known terms with disjoint postings produce no matches."""
         idx = TranscriptIndex()
@@ -233,13 +242,3 @@ class LoadTranscriptJsonTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-def test_search_performance_no_mutation():
-    """Verify that search does not mutate the internal index when skipping set copies."""
-    from transcript_search import TranscriptIndex, Segment
-    idx = TranscriptIndex()
-    idx.add("rec", [Segment(0, 1, "hello world")])
-    postings_before = len(idx._postings["hello"])
-    matches = idx.search("hello")
-    assert len(matches) == 1
-    assert len(idx._postings["hello"]) == postings_before
