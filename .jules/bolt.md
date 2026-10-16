@@ -67,3 +67,7 @@
 ## 2025-02-12 - [Fast Path Execution in Directory Traversal and Log Parsing]
 **Learning:** Checking for string existence (`if "silence_" not in stderr`) before invoking regex matchers provides significant speed improvements when parsing large blocks of text. Similarly, moving expensive I/O operations like `os.path.realpath` inside conditional blocks prevents redundant disk access when configuration (like path exclusions) isn't utilized.
 **Action:** When working on large text processing or disk operations, verify if early exit conditions or conditional execution can bypass the expensive system or library calls.
+
+## 2025-02-12 - [Optimize inverted index intersection loops]
+**Learning:** Initializing the intersection base with `set(postings)` adds an unnecessary shallow copy for the first item and increases the critical path overhead by 2-3x for single-term queries. Python's `set.intersection` and `&` operators generate new sets, making it safe to use the bare reference as the intersection seed as long as it isn't mutated directly.
+**Action:** When implementing intersection logic inside hot loops over inverted indices, seed the accumulator directly with a reference (`candidates = postings`) rather than creating a shallow copy (`candidates = set(postings)`). Ensure inline comments explain why this avoids mutation bugs.

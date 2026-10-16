@@ -12,3 +12,6 @@
 ### Fixed
 - 단일·일괄 대상 크기 입력을 비웠을 때 이전 custom validity와 `aria-invalid` 상태를 즉시 초기화해 현재 필수 입력 상태를 정확히 전달합니다.
 - 업로드 파일명의 경로 구분자를 정규화하여 POSIX에서도 Windows 형식의 클라이언트 경로가 일관된 basename으로 기록되도록 수정했습니다.
+
+### Performance (최적화)
+- `transcript_search.py`에서 불필요한 set 객체 생성 및 복사를 제거하여 검색 속도를 최적화했습니다.
