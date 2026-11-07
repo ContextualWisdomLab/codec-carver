@@ -65,3 +65,7 @@
 **Vulnerability:** Path traversal in `media_shrinker.py` via unresolved `..` segments or symlink escapes before deriving conversion output paths.
 **Learning:** `Path.relative_to()` is only a lexical containment check unless both the source and root have first been resolved into canonical absolute paths. Relative paths and symlinks can otherwise bypass root-boundary assumptions.
 **Prevention:** Resolve both source and root once, reject sources outside the resolved root with a sanitized `MediaShrinkerError`, and derive `rel_source` from the resolved paths before planning outputs.
+## 2026-07-15 - FFmpeg/FFprobe Local File Inclusion and SSRF Fix in audio_library.py
+**Vulnerability:** Local File Inclusion (LFI) and Server-Side Request Forgery (SSRF) via unrestricted FFmpeg/FFprobe protocols in `audio_library.py`.
+**Learning:** `subprocess.run` calls executing `ffmpeg` and `ffprobe` in `audio_library.py` lacked strict protocol restrictions for user-supplied media processing. Malicious input files (like HLS playlists or crafted `.wav` wrappers) could exploit protocols like `http`, `tcp`, or `file` arbitrarily to exfiltrate data or interact with internal services.
+**Prevention:** Always explicitly prepend `"-protocol_whitelist", "file,crypto,data,fd,pipe"` immediately before the `-i` (input) flag for all `ffmpeg` and `ffprobe` command invocations processing external media to lock down available protocols, and ensure mock-based unit tests strictly enforce these modified positional arguments.
