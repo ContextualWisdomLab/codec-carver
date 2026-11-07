@@ -448,7 +448,7 @@ def build_audio_plan(
         args.extend(
             [
                 "-protocol_whitelist",
-                "file,crypto,data",
+                "file,crypto,data,fd,pipe",
                 "-i",
                 str(source_path),
                 "-map",
@@ -525,7 +525,7 @@ def build_opus_plan(
     args.extend(
         [
             "-protocol_whitelist",
-            "file,crypto,data",
+            "file,crypto,data,fd,pipe",
             "-i",
             str(source_path),
             "-map",
@@ -597,7 +597,7 @@ def _build_lossy_plan(
     args.extend(
         [
             "-protocol_whitelist",
-            "file,crypto,data",
+            "file,crypto,data,fd,pipe",
             "-i",
             str(source_path),
             "-map",
@@ -692,7 +692,7 @@ def probe_media(
         "-show_format",
         "-show_streams",
         "-protocol_whitelist",
-        "file,crypto,data",
+        "file,crypto,data,fd,pipe",
         "-i",
         f"{Path(source_path).resolve()}",
     ]
@@ -734,7 +734,7 @@ def build_silencedetect_command(
         "-nostdin",
         "-hide_banner",
         "-protocol_whitelist",
-        "file,crypto,data",
+        "file,crypto,data,fd,pipe",
         "-i",
         f"{Path(source_path).resolve()}",
         "-af",
